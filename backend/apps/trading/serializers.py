@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import Order, Strategy, LiveSession
+from .session_stats import money
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -70,6 +71,10 @@ class LiveSessionSerializer(serializers.ModelSerializer):
     exchange_account_name = serializers.CharField(
         source="exchange_account.label", read_only=True, allow_null=True
     )
+    # 会话归因已实现盈亏（词条见 CONTEXT.md）：列表接口靠 `live_session_list` 的 queryset
+    # 注解带出（一次聚合查询算完 50 条），详情接口把同一个数取自 `session_stats_for`。
+    # **两处不许各算一遍**：有一条测试钉着两个接口对同一条会话给出同一个值。
+    realized_pnl = serializers.SerializerMethodField()
 
     class Meta:
         model = LiveSession
@@ -87,6 +92,7 @@ class LiveSessionSerializer(serializers.ModelSerializer):
             "exchange_account_name",
             "initial_capital",
             "current_equity",
+            "realized_pnl",
             "config",
             "started_at",
             "stopped_at",
@@ -100,3 +106,7 @@ class LiveSessionSerializer(serializers.ModelSerializer):
             "started_at",
             "stopped_at",
         ]
+
+    def get_realized_pnl(self, obj) -> str | None:
+        """未注解时返回 None（不是 0）——「没算」与「算出来是零」是两件事。"""
+        return money(getattr(obj, "realized_pnl", None))

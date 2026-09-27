@@ -237,23 +237,75 @@ def account_list(request):
     return Response(account_data)
 
 
+#: 会话详情里内嵌的订单条数上限。**必须连同 `orders_total` 一起回**，否则这张表看起来
+#: 像全部——那正是「订单接口硬截断 100 条」这个坑的同一个形状（`order_list`）。
+SESSION_DETAIL_ORDERS = 50
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def live_session_list(request):
-    sessions = LiveSession.objects.filter(user=request.user).order_by("-created_at")[
-        :50
-    ]
+    from .session_stats import annotate_realized_pnl
+
+    sessions = annotate_realized_pnl(
+        LiveSession.objects.filter(user=request.user)
+    ).order_by("-created_at")[:50]
     return Response(LiveSessionSerializer(sessions, many=True).data)
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def live_session_detail(request, pk):
+    """一条会话的详情：会话本身 + 收益统计 + 生效参数 + 在拦的层 + 最近订单。
+
+    这几块**只在详情算**。挂到列表上就是 50 条会话各算一次统计（50 次查询），而列表
+    本来只需要一个 `realized_pnl`（`annotate_realized_pnl` 一次聚合算完）。
+    """
+    from apps.regime import halt
+
+    from .session_params import effective_params
+    from .session_stats import session_stats_for
+
     try:
         session = LiveSession.objects.get(pk=pk, user=request.user)
     except LiveSession.DoesNotExist:
         return Response({"error": "Live session not found"}, status=404)
-    return Response(LiveSessionSerializer(session).data)
+
+    stats = session_stats_for(session)
+    # 与下单通路同一个入口、同一张声明表（`start_notice` 也是这么调的），且
+    # `halt_layers` 自己就按作用域裁剪——不命中该会话的层不会出现在这里。
+    verdict = halt.halt_layers(
+        session.symbol,
+        str(session.strategy_id) if session.strategy_id else None,
+    )
+    session_orders = Order.objects.filter(live_session=session)
+
+    payload = LiveSessionSerializer(session).data
+    payload["realized_pnl"] = stats["realized_pnl_total"]
+    payload["stats"] = stats
+    payload["params"] = effective_params(session.strategy, session.config)
+    payload["halt_layers"] = [
+        {
+            # `text` 是「行 → 层」的唯一换算口（`halt.HaltLayer.text`）。前端原样显示，
+            # 不许自己按 label/trigger/scope 再拼一遍——拼法一旦分叉，同一层在两处就
+            # 有两种说法。
+            "text": layer.text,
+            "reason": layer.reason,
+            "opened_at": layer.opened_at.isoformat(),
+            "expires_at": (
+                layer.expires_at.isoformat() if layer.expires_at is not None else None
+            ),
+        }
+        for layer in verdict.layers
+    ]
+    payload["orders_total"] = session_orders.count()
+    payload["orders"] = OrderSerializer(
+        session_orders.select_related(
+            "exchange_account", "live_session__strategy"
+        ).order_by("-created_at")[:SESSION_DETAIL_ORDERS],
+        many=True,
+    ).data
+    return Response(payload)
 
 
 async def _fetch_usdt_balance(exchange_account) -> Decimal:
