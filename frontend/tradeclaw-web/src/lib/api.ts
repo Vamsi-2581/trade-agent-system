@@ -406,11 +406,70 @@ export interface LiveSession {
   exchange_account_name: string | null;
   initial_capital: string;
   current_equity: string | null;
+  /** 会话归因已实现盈亏（见 CONTEXT.md 词条）：按会话外键汇总订单的 realized_pnl。
+   * 列表接口由 SQL 聚合一次算出，与详情里的统计同源同值。
+   * **null 表示「没有这个数」（未注解），不是 0**——卡片对 null 显示「—」，
+   * 绝不退回 `current_equity - initial_capital` 自己算一个。 */
+  realized_pnl: string | null;
   config: Record<string, unknown>;
   started_at: string | null;
   stopped_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** 会话收益统计。由后端算好，前端只显示——**门槛与口径都在后端**
+ * （`sample_sufficient` 由后端按 `sample_threshold` 判定，前端不许自己比大小）。 */
+export interface LiveSessionStats {
+  realized_pnl_total: string;
+  closed_orders: number;
+  winning_orders: number;
+  /** n=0 时是 null（不是 0）：还没成交 ≠ 一笔没赢过。 */
+  win_rate: number | null;
+  sample_threshold: number;
+  sample_sufficient: boolean;
+  avg_pnl: string | null;
+  best_pnl: string | null;
+  worst_pnl: string | null;
+  /** 「这个数没覆盖什么」的边界文案，由后端随数字一起给，前端原样显示。 */
+  caveats: string[];
+}
+
+/** 一行生效参数：策略声明了什么 / 本会话覆盖了什么 / 实际传下去的是什么。 */
+export interface SessionParamRow {
+  key: string;
+  /** false = 不在策略 `params_schema` 里，但会随 config 传到策略手上（runner 无白名单）。 */
+  declared: boolean;
+  default: unknown;
+  override: unknown;
+  effective: unknown;
+}
+
+export interface SessionParams {
+  /** false = 解析不到策略实现类，`rows` 必为空、只有 `config` 原文。 */
+  resolved: boolean;
+  strategy_name: string | null;
+  rows: SessionParamRow[];
+  config: Record<string, unknown>;
+}
+
+/** 正在拦这条会话的熔断层。`text` 由后端逐字取自 `halt.HaltLayer.text`。 */
+export interface SessionHaltLayer {
+  text: string;
+  reason: string;
+  opened_at: string;
+  expires_at: string | null;
+}
+
+/** 详情响应 = 会话本身 + 统计 + 生效参数 + 熔断层 + 订单流水。 */
+export interface LiveSessionDetail extends LiveSession {
+  stats: LiveSessionStats;
+  params: SessionParams;
+  /** 只含命中该会话的层；没有层时是空数组（不是缺字段）。 */
+  halt_layers: SessionHaltLayer[];
+  /** 订单表是截断的（最近 N 条），`orders_total` 是总数——不显示总数，这张表就像全部。 */
+  orders_total: number;
+  orders: Order[];
 }
 
 export interface CreateSessionPayload {
@@ -422,7 +481,10 @@ export interface CreateSessionPayload {
 
 export const liveSessionApi = {
   list: () => request<LiveSession[]>("/api/trading/sessions/"),
+  /** 会话本身的形状。详情弹窗要的统计/参数/熔断层/订单在 `getDetail` 里（同一个 URL，
+   * 只是响应更宽）——两个名字并存是提醒：别拿着会话形状去找统计字段。 */
   get: (id: string) => request<LiveSession>(`/api/trading/sessions/${id}/`),
+  getDetail: (id: string) => request<LiveSessionDetail>(`/api/trading/sessions/${id}/`),
   create: (data: CreateSessionPayload) =>
     request<{ id: string; status: string; mode: string; message: string }>(
       "/api/trading/sessions/create/",

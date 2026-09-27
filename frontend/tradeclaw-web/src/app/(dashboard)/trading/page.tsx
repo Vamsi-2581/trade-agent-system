@@ -7,6 +7,7 @@ import { useAccounts } from "@/hooks/useAccounts";
 import { useFrameControl } from "@/hooks/useFrameControl";
 import { useLiveSessions } from "@/hooks/useLiveSessions";
 import TradeRecords from "@/components/trading/TradeRecords";
+import SessionDetailModal from "@/components/trading/SessionDetailModal";
 import type { Order, ExchangeAccountWithBalance, LiveSession } from "@/lib/api";
 import { formatNumber, formatPnl } from "@/lib/format";
 import { useState } from "react";
@@ -317,6 +318,7 @@ function SessionMiniCard({
   onStop,
   onPromote,
   onDelete,
+  onDetail,
   actionLoading,
 }: {
   session: LiveSession;
@@ -326,15 +328,17 @@ function SessionMiniCard({
   onStop: () => void;
   onPromote: () => void;
   onDelete: () => void;
+  onDetail: () => void;
   actionLoading: boolean;
 }) {
   const statusInfo = sessionStatusBadge(session.status);
   const equity = session.current_equity ? formatNumber(session.current_equity) : "—";
   const initial = formatNumber(session.initial_capital);
-  const pnl =
-    session.current_equity && session.initial_capital
-      ? formatPnl(parseFloat(session.current_equity) - parseFloat(session.initial_capital))
-      : null;
+  // 与详情弹窗的「已实现盈亏合计」同一个数（同一个接口字段、后端两种取数有测试钉着相等）。
+  // **不再用 `current_equity - initial_capital` 现算**：那个差是账户权益口径，
+  // 一次写库失败（`_bump_session_equity` 吞异常只记 warning）就会与订单汇总分家，
+  // 同屏两个「盈亏」都看着正常、却不一样。字段为 null 时显示「—」，不退回现算。
+  const pnl = session.realized_pnl !== null ? formatPnl(session.realized_pnl) : null;
 
   return (
     <div className="bg-bg1 border border-[rgba(255,255,255,0.07)] rounded-xl overflow-hidden">
@@ -348,7 +352,16 @@ function SessionMiniCard({
             {statusInfo.text}
           </span>
         </div>
-        <span className="text-[10px] font-mono text-text3">{session.symbol}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-mono text-text3">{session.symbol}</span>
+          <button
+            onClick={onDetail}
+            aria-label="会话详情"
+            className="px-2 py-0.5 rounded text-[9px] font-semibold cursor-pointer transition-all border border-[rgba(255,255,255,0.07)] bg-bg2 text-text3 hover:text-text"
+          >
+            详情
+          </button>
+        </div>
       </div>
       <div className="p-3">
         <div className="grid grid-cols-4 gap-3 mb-2.5">
@@ -361,7 +374,9 @@ function SessionMiniCard({
             <div className="font-mono text-xs font-bold text-text mt-0.5">${equity}</div>
           </div>
           <div>
-            <div className="text-[9px] text-text3 uppercase tracking-wider font-semibold">盈亏</div>
+            {/* 与弹窗同一口径（会话归因已实现盈亏），所以标签也叫同一个名字：
+                它不含未实现部分，而「盈亏」二字容易被读成「权益变化了多少」 */}
+            <div className="text-[9px] text-text3 uppercase tracking-wider font-semibold">已实现盈亏</div>
             <div className={`font-mono text-xs font-bold mt-0.5 ${pnl?.color ?? "text-text3"}`}>
               {pnl ? pnl.text : "—"}
             </div>
@@ -459,6 +474,12 @@ export default function TradingPage() {
   } = useLiveSessions();
 
   const [activeSection, setActiveSection] = useState<"all" | "live" | "paper">("all");
+  // 只存 id，会话对象每轮渲染从 `sessions` 里现取——列表 10s 一轮，
+  // 弹窗拿到的一直是当前那份；会话从列表消失（别处删了）时弹窗也跟着关。
+  const [detailSessionId, setDetailSessionId] = useState<string | null>(null);
+  const detailSession = detailSessionId
+    ? sessions.find((s) => s.id === detailSessionId) ?? null
+    : null;
 
   const isLoading = accLoading || posLoading || ordersLoading;
   const hasExecutor = frameStatus.order_executor === "running";
@@ -585,6 +606,7 @@ export default function TradingPage() {
                   onStop={() => stopSession(session.id)}
                   onPromote={() => promoteSession(session.id)}
                   onDelete={() => removeSession(session.id)}
+                  onDetail={() => setDetailSessionId(session.id)}
                   actionLoading={sessionActionLoading}
                 />
               ))}
@@ -681,6 +703,14 @@ export default function TradingPage() {
 
       {/* Trade Records (history + detail) */}
       <TradeRecords orders={orders} accounts={accounts} loading={ordersLoading} />
+
+      {/* 会话详情（收益统计 / 生效参数 / 熔断层 / 该会话订单流水） */}
+      {detailSession && (
+        <SessionDetailModal
+          session={detailSession}
+          onClose={() => setDetailSessionId(null)}
+        />
+      )}
     </DashboardShell>
   );
 }
