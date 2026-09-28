@@ -458,8 +458,10 @@ class AddSignalMonitorTool(BaseTool):
             elif indicator_type == "rsi":
                 indicator_params = {"period": 14}
 
-            # 计算过期时间
+            # 计算过期时间（降级 DSML 路径可能把 expires_hours 传成字符串，转 float）
             expires_at = None
+            if expires_hours is not None:
+                expires_hours = float(expires_hours)
             if expires_hours and expires_hours > 0:
                 expires_at = datetime.now(timezone.utc) + timedelta(hours=expires_hours)
 

@@ -65,8 +65,9 @@ def _query_backtests(user_id: str, filters: dict) -> tuple[list[dict], int]:
     # 计算总数
     total = queryset.count()
 
-    # 应用 limit
-    limit = min(filters.get("limit", 20), 100)
+    # 应用 limit（降级 DSML 路径可能把 limit 传成字符串，转 int 再取上界，
+    # 与 box_range 对数字参数的处理一致）
+    limit = min(int(filters.get("limit", 20)), 100)
     queryset = queryset[:limit]
 
     # 转换为字典列表（字段转换）

@@ -91,7 +91,8 @@ class WebSearchTool(BaseTool):
             .strip()
             .lower()
         )
-        n = min(max(count or self._max_results(), 1), 10)
+        # 降级 DSML 路径可能把 count 传成字符串，转 int 再参与 min/max（与 box_range 一致）
+        n = min(max(int(count or self._max_results()), 1), 10)
         try:
             if provider == "brave":
                 text = await self._search_brave(query, n)

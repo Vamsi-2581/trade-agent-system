@@ -46,6 +46,18 @@ class TestGenerateCombinations:
         combos = generate_combinations(config, base_params={})
         assert len(combos) == 50
 
+    def test_max_combinations_string_limit(self):
+        """字符串 max_combinations（降级 DSML 路径形态）也应正确截断，而非抛 TypeError"""
+        config = {
+            "parameters": {
+                "a": {"min": 1, "max": 20, "step": 1},
+                "b": {"min": 1, "max": 20, "step": 1},
+            },
+            "max_combinations": "50",
+        }
+        combos = generate_combinations(config, base_params={})
+        assert len(combos) == 50
+
     def test_invalid_range_raises(self):
         """min >= max 应抛出异常"""
         config = {"parameters": {"ma": {"min": 10, "max": 5, "step": 1}}}

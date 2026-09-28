@@ -32,7 +32,8 @@ def generate_combinations(
     """
     base_params = base_params or {}
     param_ranges = search_config.get("parameters", {})
-    max_combinations = search_config.get("max_combinations", 100)
+    # 降级 DSML 路径可能把 max_combinations 传成字符串，转 int 再用于比较/切片
+    max_combinations = int(search_config.get("max_combinations", 100))
 
     range_values: dict[str, list] = {}
     for param_name, range_def in param_ranges.items():

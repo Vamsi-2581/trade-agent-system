@@ -51,8 +51,9 @@ def _query_exchange_accounts(user_id: str, filters: dict) -> tuple[list[dict], i
     # 计算总数
     total = queryset.count()
 
-    # 应用 limit
-    limit = min(filters.get("limit", 10), 50)
+    # 应用 limit（降级 DSML 路径可能把 limit 传成字符串，转 int 再取上界，
+    # 与 box_range 对数字参数的处理一致）
+    limit = min(int(filters.get("limit", 10)), 50)
     queryset = queryset[:limit]
 
     # 转换为字典列表（脱敏：不返回 api_key_enc/api_secret_enc）
