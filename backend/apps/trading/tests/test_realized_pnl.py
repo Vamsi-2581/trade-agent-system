@@ -120,6 +120,40 @@ class TestComputeRealizedPnl(unittest.TestCase):
         )
         self.assertEqual(pnl, Decimal("31.14751"))
 
+    def test_short_position_buy_reopens_not_first_buy(self):
+        """卖超仓位 = 反手开空，其后的买入是「回补」而不是「空仓下的首笔买入」。
+
+        实盘真实数据（账户 1fbff916 / DOGE/USDT）：2026-09-20 事故把 donchian
+        会话卖成 -17718 空头，9/21 用 13119@0.09134 + 4599@0.09182 回补并反手
+        做多，9/27 再买 10130@0.09861，9/28 卖 10130@0.09619。
+
+        修复前这里算出 +21.53831957（亏损显示为收益）：`max(0, pos - q)` 把空头
+        截断成 0 仓位，于是 9/21 两笔买入被当成空仓下的首笔买入直接取价，成本
+        基准被拉到 0.094064，低于平仓价 0.09619，符号翻正。
+        """
+        history = [
+            _sell("17718", "0.08654"),  # 事故：卖成空头
+            _buy("13119", "0.09134"),  # 回补 + 反手做多
+            _buy("4599", "0.09182"),
+            _buy("10130", "0.09861"),  # 真正被平掉的那批
+        ]
+        pnl = compute_realized_pnl(
+            history, "sell", Decimal("10130"), Decimal("0.09619")
+        )
+        self.assertEqual(pnl, Decimal("-24.51460"))
+
+    def test_short_cover_keeps_remaining_short_cost(self):
+        """空头未回补满时继续买入，剩余空头的成本不应被后来的买入价改写。"""
+        history = [
+            _sell("10", "0.20"),
+            _buy("4", "0.10"),  # 回补 4，仍空 6，成本仍是 0.20
+            _buy("10", "0.30"),  # 回补 6 + 反手做多 4，做多成本 = 0.30
+        ]
+        pnl = compute_realized_pnl(
+            history, "sell", Decimal("4"), Decimal("0.40")
+        )
+        self.assertEqual(pnl, Decimal("0.4"))
+
 
 class _ExecutorTestCase(unittest.TestCase):
     """共享 setUp/tearDown：构造未运行单例 + 影子 _bump_session_equity。"""

@@ -59,9 +59,17 @@ def compute_realized_pnl(
 ) -> Decimal | None:
     """用移动平均成本法计算平仓单的已实现盈亏（纯函数，便于单测）。
 
-    按时间序回放同账户+同品种的成交历史（不含本单），维护移动平均成本：
-    买入 → 成本加权平均；卖出 → 仓位减少、成本不变。
-    平仓盈亏 = (平仓价 - 平均成本) × 平仓量。仅支持多头（买入开仓、卖出平仓）。
+    按时间序回放同账户+同品种的成交历史（不含本单），维护**带符号**持仓与移动
+    平均成本：同向加仓 → 成本加权平均；减仓 → 成本不变；**穿越零仓 → 按成交价
+    反手开新仓**。平仓盈亏 = (平仓价 - 平均成本) × 平仓量。
+
+    仓位必须带符号：`max(0, pos - q)` 把卖超截断成空仓，会让事故后（空头状态）
+    的买入被当成空仓下的首笔买入直接取价，成本基准被拉低到平仓价之下，**亏损
+    显示为收益**（2026-09-28 实盘：-24.51 被算成 +21.54）。空头的「回补」部分
+    不产生多头成本，只有穿越零仓后的剩余量才成为新多头成本。
+
+    仅支持平多（卖出且历史上有多头成本）与无成本基础（返回 None）两种结论：
+    不做空头的盈亏归因——那需要交易所的已实现盈亏字段，本地推不出来。
 
     Args:
         history: 成交历史，每项 {side, filled_quantity, avg_fill_price}，按 created_at 升序
@@ -70,7 +78,7 @@ def compute_realized_pnl(
         avg_fill_price: 当前订单成交均价
 
     Returns:
-        已实现盈亏；非卖出单、无成交均价、或无成本基础（无历史买入/开空单）时返回 None
+        已实现盈亏；非卖出单、无成交均价、或回放结束仍无多头仓位时返回 None
     """
     if side != "sell" or filled_quantity is None or filled_quantity <= 0:
         return None
@@ -85,16 +93,34 @@ def compute_realized_pnl(
         if q <= 0 or p is None:
             continue
         if row.get("side") == "buy":
-            if pos > 0:
-                avg_cost = (avg_cost * pos + p * q) / (pos + q)
+            if pos >= 0:
+                # 多头加仓：加权平均（空仓下首笔直接取价）
+                avg_cost = (avg_cost * pos + p * q) / (pos + q) if pos > 0 else p
+                pos += q
             else:
-                avg_cost = p
-            pos += q
+                # 回补空头：回补部分不产生多头成本，穿零后的剩余量按 p 开新多头
+                pos += q
+                if pos > 0:
+                    avg_cost = p
+                elif pos == 0:
+                    avg_cost = Decimal("0")
         else:
-            pos = max(Decimal("0"), pos - q)
+            if pos > 0:
+                # 平多：成本不变；卖超则穿零，剩余量按成交价开新空头
+                pos -= q
+                if pos < 0:
+                    avg_cost = p
+                elif pos == 0:
+                    avg_cost = Decimal("0")
+            else:
+                # 空头加仓：加权平均
+                avg_cost = (
+                    (avg_cost * (-pos) + p * q) / (-pos + q) if pos < 0 else p
+                )
+                pos -= q
 
     if pos <= 0:
-        # 无成本基础：无历史买入（如开空单），无法归因已实现盈亏
+        # 无成本基础：无历史买入（如开空单）、或历史买入已被同量卖出抵消
         return None
     return (avg_fill_price - avg_cost) * min(filled_quantity, pos)
 
