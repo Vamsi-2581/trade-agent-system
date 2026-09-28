@@ -94,9 +94,9 @@ class MySkill(BaseSkill):
 ### 3. LLM 降级链
 
 ```
-OpenAI GPT-4o → (超时/429/错误) → Anthropic Claude Opus → (失败) → FALLBACK_MARKER
+OpenAI gpt-4o → (超时/429/错误) → DeepSeek (deepseek-chat) → (失败) → FALLBACK_MARKER
 ```
-实现在 `apps/agent/llm_client.py`，Skill 内检测 `FALLBACK_MARKER` 走规则引擎兜底。
+实现在 `apps/agent/llm_client.py`（`chat()` / `chat_with_tools()`），第二跳由 `DEEPSEEK_MODEL_FALLBACK` 等设置决定；Skill 内检测 `FALLBACK_MARKER` 走规则引擎兜底。
 
 ### 4. Redis Stream 消息总线
 
