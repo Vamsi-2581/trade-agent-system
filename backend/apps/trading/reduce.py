@@ -32,18 +32,44 @@
 
 ## ``unfinished`` 是唯一会让人停下来的一种结果
 
-一张子单发满了允许的次数仍然**没有结论**（可能有一张活单挂在交易所），这时剩下的
-分片一律**不再发**：那张活单可能已经成交了一部分，继续发就是减过头。宁可少减（事后
-有人看到告警去补），不可多减（没有任何自动路径能补回来，CONTEXT.md:124 没有「补回」）。
+一张子单**没有结论**（发满了允许的次数仍无结论，或已受理但追问不到终态——后者可能有一张
+活单挂在交易所），这时剩下的分片一律**不再发**：那张活单可能已经成交了一部分，继续发就是
+减过头。宁可少减（事后有人看到告警去补），不可多减（没有任何自动路径能补回来，
+CONTEXT.md:124 没有「补回」）。
+
+## 「已受理」不是「有结论」
+
+下单应答是**受理时刻的快照**，不是成交结果：币安对市价单返回的是 ``status=NEW``、
+``executedQty=0``、``avgPrice=0``（那个 ``avgPrice="0"`` 占位符在 ``_price`` 的
+docstring 里早就写着了，只是当时没把同一件事推广到 ``status``）。所以一张子单在拿到应答
+之后还要**追问终态**（``SETTLE_MAX_QUERIES``）：只有**终态**才配得上 ``filled`` /
+``partial`` / ``rejected`` 这三种「有结论」的形态，追问不到就是 ``unfinished``。
+
+把受理当结论的代价不是记录难看，是**账本上那句假话**。2026-09-26 实测即为此形：testnet 上
+AVAXUSDT 减 21 张**全额成交** @10.9150，而这一层给出的结论是 ``rejected``（「确定没成交」）。
+原先那条路径只有一个判据 ``filled <= 0``，而受理应答恒为 0。
+
+假 ``rejected`` 顺着唯一调用方（``reduce_run._execute_symbol``）流下去是一串**都写着「没成交」
+的动作**：``:1276`` 的 ``break`` 让剩余分片不再发（它信了「确定没成交」）、``filled`` 求和为 0、
+记录落 ``ReduceStatus.FAILED`` =「减仓失败（确定未成交）」；而 ``qty_after`` 照读（``unfinished``
+才跳过），于是账本里「确定没成交」与「余量确实变小了」并排躺着，一次**真的减了**的减仓被记成
+一次失败。更要紧的是 ``ShardResult.settled`` 的语义就是「可以继续发下一片」——``rejected`` 属于
+这一档，任何**将来**按它判断要不要接着发的调用方都会减过头，而减过头没有任何自动路径能补回来。
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 
-from .adapters import BaseExchangeAdapter, OrderRequest
+from .adapters import (
+    BaseExchangeAdapter,
+    OrderFill,
+    OrderRequest,
+    OrderResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +79,40 @@ SHARD_MAX_SENDS = 3
 
 #: 子单结果的四种形态。前三种是**有结论**的，第四种不是。
 SHARD_STATUS_FILLED = "filled"  # 全部成交
-SHARD_STATUS_PARTIAL = "partial"  # 部分成交（市单罕见，但交易所可以有）
-SHARD_STATUS_REJECTED = "rejected"  # 参数被交易所拒绝，**确定没成交**
-SHARD_STATUS_UNFINISHED = "unfinished"  # 发满了仍没结论：**可能有一张活单**
+SHARD_STATUS_PARTIAL = "partial"  # 部分成交且**已了结**（余量已被交易所撤掉，不会再成交）
+SHARD_STATUS_REJECTED = "rejected"  # **确定**没成交（终态 + 成交量为 0）
+SHARD_STATUS_UNFINISHED = "unfinished"  # 没有结论：**可能有一张活单**
 
-#: 「有结论」的两种（可以继续发下一片）。
+#: 「有结论」的三种（可以继续发下一片）。
 _SETTLED_STATUSES = (SHARD_STATUS_FILLED, SHARD_STATUS_PARTIAL, SHARD_STATUS_REJECTED)
+
+#: 一张子单**已受理**之后，向交易所追问终态的**次数**与**间隔**（秒）。
+#:
+#: 为什么非追问不可，见模块 docstring「已受理不是有结论」。市价单在交易所侧是毫秒级撮合完
+#: 的，而应答是受理时刻的快照，所以追问一两次就能拿到终态；追问不到就是 ``unfinished``。
+SETTLE_MAX_QUERIES = 3
+SETTLE_QUERY_INTERVAL_SECONDS = 0.4
+
+#: 交易所报出的**终态**。不在这里的一律读成「还没结束」——**包括空字符串与没见过的状态**。
+#: fail-closed 的方向是「追问」而不是「挑一个结论」：猜成 ``rejected`` 会让调用方以为这一片
+#: 没发出去、继续往下发，而那张单可能正在成交。
+#:
+#: 两套拼写都要认，因为这一层会拿到两种应答：下单与对账给的是**交易所原始状态**
+#: （``_order_response_from_raw``），而 ``fetch_order`` 给的是适配器 ``_STATUS_MAP``
+#: **映射后的本地状态**（``OrderFill``）。
+_TERMINAL_STATUSES = frozenset(
+    {
+        # 交易所原始状态
+        "filled",
+        "canceled",
+        "cancelled",
+        "expired",
+        "expired_in_match",
+        "rejected",
+        # fetch_order 映射后的本地状态（REJECTED → failed，见 binance._STATUS_MAP）
+        "failed",
+    }
+)
 
 
 def normalize_symbol(symbol: str) -> str:
@@ -116,7 +170,9 @@ class ShardResult:
 
     ``status == "unfinished"`` 时 ``exchange_order_id`` 可能为空（从没拿到过单号），
     ``filled_qty`` 反映**已知**的成交量——它不是「没成交」，是「不知道成交了多少」。
-    这两种在文字上必须分开，所以这一层不把 ``unfinished`` 转成任何一种确定状态。
+    这两种在文字上必须分开，所以这一层不把 ``unfinished`` 转成任何一种确定状态。已受理但
+    追问不到终态也走这一档，此时 ``filled_qty`` 与 ``avg_price`` 可能都是**真的**（受理应答
+    说 0 只是「此刻为止」），而 ``status`` 仍然是「不知道」——两者不矛盾。
     """
 
     client_order_id: str
@@ -168,6 +224,10 @@ async def place_reduce_shard(adapter: BaseExchangeAdapter, order: ShardOrder) ->
 
     市价单：滑点上限（CONTEXT.md:129）管的是「这一轮减仓整体的加权成交价」，不是单张
     子单的限价，所以子单不需要价格——挂限价反而会给「窗口里减不掉」造一个新的失败模式。
+
+    拿到应答**不等于**拿到结论：应答是受理时刻的快照，所以成功分支还要追问终态
+    （``_settle_order``）。追问与重发是两条路：一张子单可能走三次**发送**，但那只发生在
+    下单应答**不明**（抛异常）时；追问走的是查询，不占发送次数。
     """
     last_error = ""
     sends = 0
@@ -209,18 +269,19 @@ async def place_reduce_shard(adapter: BaseExchangeAdapter, order: ShardOrder) ->
                 )
             continue
 
-        filled = _decimal(response.filled_qty)
-        status = _shard_status(getattr(response, "status", ""), filled, order.quantity)
+        # 「已受理」不是「有结论」：先把它追到终态，追不到就如实说不知道。
+        status, known, error = await _settle_order(adapter, response, order)
         return ShardResult(
             client_order_id=order.client_order_id,
             symbol=order.symbol,
             side=order.side,
             requested_qty=order.quantity,
-            filled_qty=filled,
-            avg_price=_price(getattr(response, "avg_price", None)),
+            filled_qty=known.filled_qty,
+            avg_price=known.avg_price,
             status=status,
             sends=sends,
-            exchange_order_id=str(getattr(response, "exchange_order_id", "") or ""),
+            exchange_order_id=known.exchange_order_id,
+            error=error,
         )
 
     # 发满了还没结论。**绝不降级成 rejected**：rejected 的语义是「确定没成交」，
@@ -262,19 +323,188 @@ def _price(value) -> Decimal | None:
     return price if price > 0 else None
 
 
-def _shard_status(raw_status: str, filled: Decimal, requested: Decimal) -> str:
-    """适配器返回的状态 → 本模块的四种形态之一。
+def _is_terminal(raw_status: str) -> bool:
+    """这个状态是不是**终态**（订单已经不会再动了）。
 
-    适配器说 ``failed`` / ``cancelled`` / 空字符串：这一层**只能**当作 ``rejected``，
-    因为 ``place_order`` 只有拿到交易所的应答才会走到这里——**没成交是确定的**，
-    与「不知道」不同（后者走 ``unfinished``，且只由异常路径产生）。
+    不认得的（含空字符串）一律**不是**终态。这条 fail-closed 的代价只是一次追问，而猜错的
+    代价是给出一句假的「有结论」——见 ``_TERMINAL_STATUSES``。
     """
+    return (raw_status or "").strip().lower() in _TERMINAL_STATUSES
+
+
+def _conclude(
+    raw_status: str, filled: Decimal | None, requested: Decimal
+) -> str | None:
+    """**终态** + 一份**读得通**的成交量 → 三种有结论的形态之一；否则 ``None``。
+
+    ``None`` 的意思是「这份应答不配当结论」，两条来路，都是「宁可说不知道，也不说一句自己
+    都不信的话」：
+
+    * **成交量为 ``None``**（这个应答形状里根本没有成交量这个字段）。它与「成交量为 0」必须
+      分开——``0`` 的含义是「确定没成交」，而 ``None`` 只是**没读到数**。``_decimal`` 会把
+      ``None`` 兜成 0，所以这个区分只能在**进** ``_decimal`` 之前做：放过去，就等于让一次
+      字段改名/换形状重演 2026-09-26 那个 bug（终态 + 读成 0 → ``rejected``）。
+    * **状态与数量互相矛盾**：终态写着 ``filled``、成交量却是 0。两个字段里可疑的通常是数量
+      ——``_order_response_from_raw`` 里那句 ``Decimal(data.get("executedQty", "0"))`` 正是
+      「字段不在就落 0」。拿它去坐实「确定没成交」，会把一次适配器映射 bug 洗成一条静默的假账。
+    """
+    if filled is None:
+        return None
     status = (raw_status or "").strip().lower()
+    if status == "filled" and filled <= 0:
+        return None
     if filled <= 0:
         return SHARD_STATUS_REJECTED
     if status == "filled" or filled >= requested:
         return SHARD_STATUS_FILLED
     return SHARD_STATUS_PARTIAL
+
+
+@dataclass(frozen=True)
+class _Known:
+    """「最后一份已知的交易所应答」的公共投影，只留 ``ShardResult`` 要用的四个字段。
+
+    两种应答形状都要能读：下单与对账给 ``OrderResponse``（``status`` 是**交易所原始状态**，
+    成交字段叫 ``filled_qty`` / ``avg_price``），``fetch_order`` 给 ``OrderFill``
+    （``status`` 已**映射成本地状态**，字段叫 ``filled_quantity`` / ``avg_fill_price``）。
+    两套名字在这里收口一次，别的地方就不必知道这件事。
+
+    ``filled_qty`` 是可空的，**这不是为了省事**：``None`` 表示「这份应答里没有成交量这个
+    字段」，与 ``Decimal("0")``（「成交了 0 张」）是两件事。``_decimal`` 的默认值会把前者
+    变成后者，所以那一步必须由 ``of`` 拦在这里——见 ``_conclude``。
+    """
+
+    status: str
+    filled_qty: Decimal | None
+    avg_price: Decimal | None
+    exchange_order_id: str
+
+    @classmethod
+    def of(
+        cls, response: OrderResponse | OrderFill, *, fallback_order_id: str = ""
+    ) -> "_Known":
+        filled = getattr(response, "filled_qty", None)
+        if filled is None:
+            filled = getattr(response, "filled_quantity", None)
+        avg = getattr(response, "avg_price", None)
+        if avg is None:
+            avg = getattr(response, "avg_fill_price", None)
+        return cls(
+            status=str(getattr(response, "status", "") or ""),
+            filled_qty=None if filled is None else _decimal(filled),
+            avg_price=_price(avg),
+            # ``OrderFill`` 上没有单号，追问时得把原来的单号带下来。
+            exchange_order_id=(
+                str(getattr(response, "exchange_order_id", "") or "")
+                or fallback_order_id
+            ),
+        )
+
+
+def _merged(known: _Known, newer: _Known) -> _Known:
+    """把追问回来的应答并进已知：**只增不减**。
+
+    一张单的累计成交量是单调不减的，所以「后看到的比先看到的少」只可能是两个字段里有一个
+    读错了，不是一次回撤。丢掉已经观测到的那个数，就可能让一份读坏的 0 反过来坐实「确定没
+    成交」；反之取大的那个，最坏也只是把一次成交算进去（方向保守，正是本模块要的那一侧）。
+    成交均价与单号同理：新应答没给不代表先前那个事实不算数了。
+    """
+    if known.filled_qty is None:
+        filled = newer.filled_qty
+    elif newer.filled_qty is None:
+        filled = known.filled_qty
+    else:
+        filled = max(known.filled_qty, newer.filled_qty)
+    return replace(
+        newer,
+        filled_qty=filled,
+        avg_price=(
+            newer.avg_price if newer.avg_price is not None else known.avg_price
+        ),
+        exchange_order_id=newer.exchange_order_id or known.exchange_order_id,
+    )
+
+
+def _conclude_or_untrusted(known: _Known, order: ShardOrder) -> tuple[str, _Known, str]:
+    """**终态**的应答 → ``(结论, known, "")``；**终态但读不通** → ``(unfinished, known, 说明)``。
+
+    读不通只有一种（见 ``_conclude``）。它**不该再追问**：交易所给的已经是终态，再问一次拿到
+    的是同一份；但它也不配当结论。所以走 ``unfinished``，并把「为什么」写进 ``error``——
+    ``ShardResult.as_dict`` 落进幂等记录后，那一列是事后唯一能看出「这次不是没问到，是问到了
+    一份读不通的」的地方。
+    """
+    status = _conclude(known.status, known.filled_qty, order.quantity)
+    if status is not None:
+        return status, known, ""
+    detail = f"终态 {known.status!r} 与成交量 {known.filled_qty!r} 读不通，不予采信"
+    logger.error("[Reduce] 子单%s client_order_id=%s", detail, order.client_order_id)
+    return SHARD_STATUS_UNFINISHED, known, detail
+
+
+async def _settle_order(
+    adapter: BaseExchangeAdapter,
+    response: OrderResponse,
+    order: ShardOrder,
+) -> tuple[str, _Known, str]:
+    """把「已受理」追到「有结论」；追不到就如实说 ``unfinished``。
+
+    这是本模块**唯一**一处不把下单应答当结论的地方（理由见 ``SETTLE_MAX_QUERIES``）。
+    追问走 ``fetch_order``（按交易所单号查），**不是重发**：重发会多开一张单，而这里要问的
+    恰恰是「刚才那张单怎么了」。
+
+    全程**不会抛**：``_Known.of`` / ``_merged`` / ``_conclude`` 都是全函数，``fetch_order``
+    的异常就地收成「没问到」。这是必要的——``place_reduce_shard`` 承诺「每张子单都有下场」，
+    而从这里漏出去的异常会被调用方 ``reduce_run`` 落成 ``ReduceStatus.FAILED`` =
+    「减仓失败（确定未成交）」，那正是本次要消灭的那句假话，只不过从异常的边门进来。
+
+    Returns:
+        ``(status, known, error)``。``known`` 是最后一份已知应答，``ShardResult`` 的成交量与
+        成交价都从它取——追问不到时它是受理应答，那时的 0 是**已知的事实**（「此刻为止没有
+        成交」），而**不是**「确定没成交」：后者只有终态才配得上。
+    """
+    known = _Known.of(response)
+
+    if _is_terminal(known.status):
+        return _conclude_or_untrusted(known, order)
+
+    if not known.exchange_order_id:
+        # 受理了却没有单号 = 无从追问。不猜，如实说不知道。
+        detail = "已受理但应答里没有单号，无法追问终态"
+        logger.error(
+            "[Reduce] 子单%s client_order_id=%s 状态=%r",
+            detail,
+            order.client_order_id,
+            known.status,
+        )
+        return SHARD_STATUS_UNFINISHED, known, detail
+
+    last_error = ""
+    for _ in range(SETTLE_MAX_QUERIES):
+        await asyncio.sleep(SETTLE_QUERY_INTERVAL_SECONDS)
+        try:
+            fill = await adapter.fetch_order(known.exchange_order_id, order.symbol)
+        except Exception as exc:  # noqa: BLE001 — 追问不到就是「没结论」，不是「没成交」
+            last_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "[Reduce] 追问子单终态失败 client_order_id=%s order_id=%s：%s",
+                order.client_order_id,
+                known.exchange_order_id,
+                last_error,
+            )
+            continue
+        known = _merged(known, _Known.of(fill, fallback_order_id=known.exchange_order_id))
+        if _is_terminal(known.status):
+            return _conclude_or_untrusted(known, order)
+
+    logger.error(
+        "[Reduce] 子单追问 %s 次仍无终态 client_order_id=%s order_id=%s 状态=%r：%s",
+        SETTLE_MAX_QUERIES,
+        order.client_order_id,
+        known.exchange_order_id,
+        known.status,
+        last_error,
+    )
+    return SHARD_STATUS_UNFINISHED, known, last_error
 
 
 def _decimal(value) -> Decimal:

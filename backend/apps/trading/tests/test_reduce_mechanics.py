@@ -8,18 +8,25 @@
 钉住的都是「错了不会报错、只会静默变成另一个意思」的地方：``unfinished`` 被读成
 ``rejected``（「不知道」→「确定没成交」）、枚举失败被读成「没有挂单」、取价失败被
 读成「滑点完美」、撤单失败被读成「撤干净了」。
+
+第一条真的漏过一次，而且是**在实盘上漏的**（2026-09-26）：下单应答是受理时刻的快照
+（市价单恒为 ``status=NEW`` / ``executedQty=0``），当时却只有一个判据 ``filled <= 0``，
+于是一张**全额成交**的子单被记成 ``rejected``。现在「已受理」要追问到终态才算结论——
+``TestPlaceReduceShard`` 里那几条 ``*_chased_*`` / ``*_unsettleable_*`` 钉的就是它。
 """
 
 from __future__ import annotations
 
 import asyncio
 from decimal import Decimal
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from django.test import SimpleTestCase
 
 from apps.trading.adapters.base import (
     BaseExchangeAdapter,
+    OrderFill,
     OrderResponse,
     Position,
 )
@@ -61,13 +68,39 @@ def _order(qty: str = "100", side: str = "sell", cid: str = "cid-1") -> ShardOrd
     return ShardOrder(client_order_id=cid, symbol=_SYMBOL, side=side, quantity=Decimal(qty))
 
 
+def _order_fill(
+    *, status: str = "filled", filled: str = "100", avg: str | None = "1"
+) -> OrderFill:
+    """``fetch_order`` 的应答（追问终态那条路）。
+
+    ``status`` 用的是**映射后的本地状态**（``OrderFill`` 的口径），别和 ``_resp`` 的
+    交易所原始状态混起来——``binance.fetch_order`` 出口就是这一套。
+    名字不能叫 ``_fill``：本文件下面已经有一个同名的（给 ``volume_weighted_price`` 造
+    ``ShardResult``），后定义的会盖掉先定义的。
+    """
+    return OrderFill(
+        status=status,
+        filled_quantity=Decimal(filled),
+        avg_fill_price=Decimal(avg) if avg is not None else None,
+    )
+
+
 class _FakeAdapter(BaseExchangeAdapter):
-    """照脚本回答的适配器：``place_script`` 里每项要么是异常（抛），要么是响应（返回）。"""
+    """照脚本回答的适配器：``place_script`` / ``fill_script`` 里每项要么是异常（抛），
+    要么是响应（返回）。
+
+    ``fill_script`` 喂的是 ``fetch_order``（追问终态那条路），形状是 ``OrderFill``——
+    注意它的 ``status`` 是**适配器映射后的本地状态**（``filled`` / ``cancelled`` / ...），
+    与 ``place_script`` 里那份**交易所原始状态**（``NEW`` / ``EXPIRED`` / ...）是两套拼写，
+    这一层两套都要认。
+    ``fill_script`` 用完后就一直抛 ``NotImplementedError``（默认行为），模拟「交易所问不出来」。
+    """
 
     def __init__(
         self,
         *,
         place_script=None,
+        fill_script=None,
         positions=None,
         open_orders=None,
         enum_error=None,
@@ -78,6 +111,7 @@ class _FakeAdapter(BaseExchangeAdapter):
     ):
         super().__init__("key", "secret")
         self.place_script = list(place_script or [])
+        self.fill_script = list(fill_script or [])
         self.positions = list(positions or [])
         self.open_orders = dict(open_orders or {})
         self.enum_error = dict(enum_error or {})
@@ -88,6 +122,7 @@ class _FakeAdapter(BaseExchangeAdapter):
         self.placed = []
         self.cancelled = []
         self.enumerated = []
+        self.queried = []
 
     async def connect(self) -> None:  # pragma: no cover - 不参与本层
         return None
@@ -98,8 +133,14 @@ class _FakeAdapter(BaseExchangeAdapter):
     async def get_balance(self):
         return {}
 
-    async def fetch_order(self, exchange_order_id, symbol):  # pragma: no cover
-        raise NotImplementedError
+    async def fetch_order(self, exchange_order_id, symbol):
+        self.queried.append((exchange_order_id, symbol))
+        if not self.fill_script:
+            raise NotImplementedError("这一层没给 fill_script：交易所问不出来")
+        item = self.fill_script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
 
     async def place_order(self, request):
         self.placed.append(request)
@@ -232,25 +273,189 @@ class TestPlaceReduceShard(SimpleTestCase):
 
         self.assertEqual(len(adapter.placed), 3)
 
-    def test_partial_fill_is_a_settled_result(self):
+    def test_accepted_market_order_is_chased_to_its_fill(self):
+        """**受理不是结论**：市价单的应答是受理快照，成交得追问回来。
+
+        形状照 2026-09-26 实盘那一单写：testnet 上 AVAXUSDT 减 21 张**全额成交** @10.9150，
+        而下单应答是 ``NEW`` / ``executedQty=0`` / ``avgPrice=0``。原先这一层拿
+        ``filled <= 0`` 当唯一判据，于是把它记成 ``rejected``（「确定没成交」）——一张已经
+        把仓位减掉的单被记成没减，而 ``rejected`` 是**有结论**，调用方会接着发下一片。
+        """
         adapter = _FakeAdapter(
-            place_script=[_resp(status="PARTIALLY_FILLED", filled="40", avg="1")]
+            place_script=[_resp(status="NEW", filled="0", avg="0")],
+            fill_script=[_order_fill(status="filled", filled="100", avg="1.05")],
         )
 
+        with patch("apps.trading.reduce.SETTLE_QUERY_INTERVAL_SECONDS", 0):
+            result = asyncio.run(place_reduce_shard(adapter, _order()))
+
+        self.assertEqual(result.status, SHARD_STATUS_FILLED)
+        self.assertTrue(result.settled)
+        self.assertEqual(result.filled_qty, Decimal("100"))
+        self.assertEqual(result.avg_price, Decimal("1.05"))
+        # 追问**不是重发**：整段只有下单那一次，发送次数也不该被追问吃掉。
+        self.assertEqual(len(adapter.placed), 1)
+        self.assertEqual(result.sends, 1)
+        self.assertEqual(adapter.queried, [("77", _SYMBOL)])
+
+    def test_accepted_but_unsettleable_is_unfinished_never_rejected(self):
+        """追问不到终态 = 不知道，**不是**「确定没成交」。"""
+        adapter = _FakeAdapter(place_script=[_resp(status="NEW", filled="0")])
+
+        with patch("apps.trading.reduce.SETTLE_QUERY_INTERVAL_SECONDS", 0):
+            result = asyncio.run(place_reduce_shard(adapter, _order()))
+
+        self.assertEqual(result.status, SHARD_STATUS_UNFINISHED)
+        self.assertFalse(result.settled)
+        self.assertEqual(len(adapter.queried), 3)
+        self.assertEqual(len(adapter.placed), 1)
+        self.assertEqual(result.sends, 1)
+        # 单号是人唯一能顺着去交易所找活单的线索，追问失败也不许把它弄丢。
+        self.assertEqual(result.exchange_order_id, "77")
+        # `error` 是账本里唯一的「为什么」列，这一档必须写明白。
+        self.assertIn("NotImplementedError", result.error)
+
+    def test_one_transient_query_failure_does_not_lose_the_conclusion(self):
+        """追问抖一次不该把结论吞掉：第二次拿到终态就照常收口。"""
+        adapter = _FakeAdapter(
+            place_script=[_resp(status="NEW", filled="0")],
+            fill_script=[RuntimeError("read timeout"), _order_fill(filled="100")],
+        )
+
+        with patch("apps.trading.reduce.SETTLE_QUERY_INTERVAL_SECONDS", 0):
+            result = asyncio.run(place_reduce_shard(adapter, _order()))
+
+        self.assertEqual(result.status, SHARD_STATUS_FILLED)
+        self.assertEqual(result.filled_qty, Decimal("100"))
+        self.assertEqual(len(adapter.queried), 2)
+        self.assertEqual(result.error, "")
+
+    def test_a_terminal_answer_without_the_filled_field_is_not_a_conclusion(self):
+        """终态里**没有成交量这个字段**（不是 0）→ 不配当结论。
+
+        这一档是「同一个 bug 换个入口」：``_decimal`` 会把缺失兜成 0，于是终态 + 0 直接落到
+        ``rejected``（「确定没成交」）。形状一变（字段改名 / 新适配器），2026-09-26 那件事就
+        原样重演，所以缺失与 0 必须在进 ``_decimal`` 之前就分开。
+        """
+        adapter = _FakeAdapter(place_script=[SimpleNamespace(status="FILLED")])
+
         result = asyncio.run(place_reduce_shard(adapter, _order()))
+
+        self.assertEqual(result.status, SHARD_STATUS_UNFINISHED)
+        self.assertFalse(result.settled)
+
+    def test_a_terminal_answer_that_contradicts_itself_is_not_a_conclusion(self):
+        """终态写着 ``FILLED``、成交量却是 0：两个字段里有一个读错了，不拿它当结论。"""
+        adapter = _FakeAdapter(place_script=[_resp(status="FILLED", filled="0")])
+
+        result = asyncio.run(place_reduce_shard(adapter, _order()))
+
+        self.assertEqual(result.status, SHARD_STATUS_UNFINISHED)
+        self.assertFalse(result.settled)
+        self.assertIn("读不通", result.error)
+        # 终态不必再追问：问第二次拿到的是同一份。
+        self.assertEqual(adapter.queried, [])
+
+    def test_a_settle_answer_cannot_shrink_the_known_fill(self):
+        """追问说成交 0、而受理应答已经说了 100：取大的那个，不许把已知成交丢掉。
+
+        累计成交量对一张单是单调不减的，「后看到的比先看到的少」只可能是读错了字段。
+        """
+        adapter = _FakeAdapter(
+            place_script=[_resp(status="NEW", filled="100")],
+            fill_script=[_order_fill(status="cancelled", filled="0", avg="0")],
+        )
+
+        with patch("apps.trading.reduce.SETTLE_QUERY_INTERVAL_SECONDS", 0):
+            result = asyncio.run(place_reduce_shard(adapter, _order(qty="200")))
+
+        self.assertEqual(result.status, SHARD_STATUS_PARTIAL)
+        self.assertEqual(result.filled_qty, Decimal("100"))
+
+    def test_still_live_after_every_query_is_unfinished(self):
+        """交易所一直说「还在」：这一片绝不能当有结论，否则下一片就是减过头。"""
+        adapter = _FakeAdapter(
+            place_script=[_resp(status="NEW", filled="0")],
+            fill_script=[_order_fill(status="partial", filled="40")] * 3,
+        )
+
+        with patch("apps.trading.reduce.SETTLE_QUERY_INTERVAL_SECONDS", 0):
+            result = asyncio.run(place_reduce_shard(adapter, _order()))
+
+        self.assertEqual(result.status, SHARD_STATUS_UNFINISHED)
+        self.assertFalse(result.settled)
+        # 已知成交 40 是**事实**，照记；「不知道」的是它还会不会再成交。
+        self.assertEqual(result.filled_qty, Decimal("40"))
+        self.assertEqual(result.avg_price, Decimal("1"))
+
+    def test_partial_then_expired_is_a_settled_partial(self):
+        """部分成交 + 余量被交易所撤掉（终态）才叫 ``partial``：不会再动了才叫了结。"""
+        adapter = _FakeAdapter(
+            place_script=[_resp(status="PARTIALLY_FILLED", filled="40", avg="1")],
+            fill_script=[_order_fill(status="cancelled", filled="40", avg="1")],
+        )
+
+        with patch("apps.trading.reduce.SETTLE_QUERY_INTERVAL_SECONDS", 0):
+            result = asyncio.run(place_reduce_shard(adapter, _order()))
 
         self.assertEqual(result.status, SHARD_STATUS_PARTIAL)
         self.assertTrue(result.settled)
         self.assertEqual(result.filled_qty, Decimal("40"))
 
-    def test_zero_fill_reads_as_rejected_even_if_the_exchange_says_new(self):
-        """交易所回 ``NEW`` 却成交 0：对减仓而言这一片**没有成交**是确定的事实。"""
-        adapter = _FakeAdapter(place_script=[_resp(status="NEW", filled="0")])
+    def test_terminal_zero_fill_is_the_only_rejected(self):
+        """「确定没成交」只有一种来路：**终态** + 成交量 0。"""
+        for status in ("EXPIRED", "CANCELED", "REJECTED", "EXPIRED_IN_MATCH"):
+            with self.subTest(status=status):
+                adapter = _FakeAdapter(
+                    place_script=[_resp(status=status, filled="0", avg="0")]
+                )
+
+                result = asyncio.run(place_reduce_shard(adapter, _order()))
+
+                self.assertEqual(result.status, SHARD_STATUS_REJECTED)
+                self.assertTrue(result.settled)
+                # 终态已经是结论，不必追问。
+                self.assertEqual(adapter.queried, [])
+
+    def test_rejected_after_acceptance_is_settled(self):
+        """受理之后交易所才把它拒了（``fetch_order`` 出口的本地拼写 ``failed``）。
+
+        ``filled="40"`` 而不是 0：后者对「读到了 ``filled_quantity``」与「没读到、兜成 0」
+        两种实现都成立，钉不住形状读取。带一个非零成交量才有鉴别力，顺带覆盖「本地
+        ``failed`` 却真有成交」这个保守方向。
+        """
+        adapter = _FakeAdapter(
+            place_script=[_resp(status="NEW", filled="0")],
+            fill_script=[_order_fill(status="failed", filled="40", avg="1")],
+        )
+
+        with patch("apps.trading.reduce.SETTLE_QUERY_INTERVAL_SECONDS", 0):
+            result = asyncio.run(place_reduce_shard(adapter, _order()))
+
+        self.assertEqual(result.status, SHARD_STATUS_PARTIAL)
+        self.assertTrue(result.settled)
+        self.assertEqual(result.filled_qty, Decimal("40"))
+
+    def test_unrecognised_status_is_chased_not_guessed(self):
+        """没见过的状态一律不当结论——先问，问不出来说不知道（fail-closed 的方向是追问）。"""
+        adapter = _FakeAdapter(
+            place_script=[_resp(status="PENDING_NEW", filled="0")],
+            fill_script=[_order_fill(status="filled", filled="100")],
+        )
+
+        with patch("apps.trading.reduce.SETTLE_QUERY_INTERVAL_SECONDS", 0):
+            result = asyncio.run(place_reduce_shard(adapter, _order()))
+
+        self.assertEqual(result.status, SHARD_STATUS_FILLED)
+
+    def test_accepted_without_order_id_is_unfinished(self):
+        """受理了却没有单号：无从追问，只能如实说不知道。"""
+        adapter = _FakeAdapter(place_script=[_resp(status="NEW", filled="0", oid="")])
 
         result = asyncio.run(place_reduce_shard(adapter, _order()))
 
-        self.assertEqual(result.status, SHARD_STATUS_REJECTED)
-        self.assertTrue(result.settled)
+        self.assertEqual(result.status, SHARD_STATUS_UNFINISHED)
+        self.assertEqual(adapter.queried, [])
 
     def test_missing_avg_price_does_not_become_zero(self):
         """成交了但没给成交价：``avg_price`` 保持 ``None``，不落成 0（那会污染加权均价）。"""
