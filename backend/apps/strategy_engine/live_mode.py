@@ -267,6 +267,7 @@ class LiveStrategyRunner:
         启动时调用，确保策略知道实际持仓，避免重复开仓。
         2026-09-21（C 修复）：同步失败**不再静默按现有 ctx 继续**——置位
         `_position_synced=False`、记 ERROR、通知用户一次，决策路径据此跳过本轮。
+        2026-09-27：失败→恢复的转换也配对一条通知（状态结束必须可见）。
         """
         try:
             from apps.trading.executor import OrderExecutor
@@ -300,7 +301,7 @@ class LiveStrategyRunner:
                         f"[LiveStrategyRunner] position synced from exchange: "
                         f"{self.symbol} = {actual_qty}"
                     )
-                    self._on_position_sync_ok()
+                    await self._on_position_sync_ok()
                     return True
 
             # 没有找到持仓，确认为 0
@@ -308,21 +309,28 @@ class LiveStrategyRunner:
             logger.info(
                 f"[LiveStrategyRunner] position synced from exchange: {self.symbol} = 0"
             )
-            self._on_position_sync_ok()
+            await self._on_position_sync_ok()
             return True
         except Exception as e:
             await self._on_position_sync_failed(f"{type(e).__name__}: {e}")
             return False
 
-    def _on_position_sync_ok(self) -> None:
-        """同步成功：记录状态与时间戳，并允许后续失败重新通知。"""
-        if self._position_synced is False:
-            logger.error(
+    async def _on_position_sync_ok(self) -> None:
+        """同步成功：记录状态与时间戳，并允许后续失败重新通知。
+
+        失败→成功 转换发恢复通知：失败侧已告知「暂停下单」，状态的结束
+        必须可见——静默恢复意味着用户永远不知道会话何时恢复交易。
+        """
+        recovered = self._position_synced is False
+        if recovered:
+            logger.info(
                 f"[LiveStrategyRunner] 持仓同步已恢复: {self.symbol} "
                 f"ctx.position={self.strategy.ctx.position}"
             )
         self._position_synced = True
         self._last_position_sync_ts = time.monotonic()
+        if recovered and self._position_sync_failure_notified and self.user_id:
+            await self._notify_position_sync_recovered()
         self._position_sync_failure_notified = False
 
     async def _on_position_sync_failed(self, reason: str) -> None:
@@ -345,12 +353,37 @@ class LiveStrategyRunner:
                 lambda: Notification.objects.create(
                     user_id=self.user_id,
                     channel="web",
-                    message=f"⚠️ {self.symbol} 持仓同步失败，该会话已暂停下单：{reason}",
+                    # 措辞说清三件事：冻的是**全部**订单（含平仓——本态与 halt
+                    # 不同，策略的出场逻辑同样停摆）、是瞬态（自动重试）、会自愈
+                    # （恢复后自动继续）。异常细节留在日志，不进通知。
+                    message=(
+                        f"⚠️ {self.symbol} 持仓同步失败，该会话暂不下任何订单（含平仓），"
+                        f"正在自动重试，恢复后自动继续"
+                    ),
                 )
             )()
         except Exception as e:  # noqa: BLE001 - 通知失败不得影响主流程
             logger.error(
                 f"[LiveStrategyRunner] 持仓同步失败通知写入失败 "
+                f"(user={self.user_id}): {e}"
+            )
+
+    async def _notify_position_sync_recovered(self) -> None:
+        """恢复通知：与失败通知成对，告知用户「暂停下单」状态已结束。"""
+        try:
+            from apps.core.db_utils import db_async
+            from apps.notify.models import Notification
+
+            await db_async(
+                lambda: Notification.objects.create(
+                    user_id=self.user_id,
+                    channel="web",
+                    message=f"✅ {self.symbol} 持仓同步已恢复，该会话已恢复下单",
+                )
+            )()
+        except Exception as e:  # noqa: BLE001 - 通知失败不得影响主流程
+            logger.error(
+                f"[LiveStrategyRunner] 持仓同步恢复通知写入失败 "
                 f"(user={self.user_id}): {e}"
             )
 
@@ -547,8 +580,15 @@ class LiveStrategyRunner:
             return None
         if diff > 0:
             return self.strategy.ctx.buy(diff, signal_name=target.reason)
-        else:
-            return self.strategy.ctx.sell(abs(diff), signal_name=target.reason)
+        # 卖到空仓 = 平仓：策略侧 close_position() 的意图在 Phase 2 转目标持仓时
+        # 丢了（Insight/PortfolioTarget 没有这个字段，见 base.construct_portfolio），
+        # 这里按「目标=空仓」还原。下游两处依赖它：跳过 RiskGuard（signals.py /
+        # executor），以及 executor 把它翻译成 reduceOnly（只减不增）——后者是
+        # 「重复平仓单变反向开仓」的唯一交易所级兜底（2026-09-27 BNB 双平手账）。
+        is_close = target.target_quantity == Decimal("0")
+        return self.strategy.ctx.sell(
+            abs(diff), signal_name=target.reason, is_close_position=is_close
+        )
 
     async def _dispatch_targets(
         self, targets: "list[PortfolioTarget]", kline: dict
@@ -590,6 +630,13 @@ class LiveStrategyRunner:
             if dispatched:
                 estimated_price = Decimal(str(kline.get("close", "0")))
                 self._apply_signal_to_context(signal, estimated_price)
+                # 订单在途：交易所尚未处理它，乐观状态比交易所真值**新**。刷新同步
+                # 水位，把下一次 TTL 重同步推迟 15s——否则在途窗口（秒级）内一次
+                # 例行 TTL 到期重同步会把「还没反映本单的旧持仓」写回 ctx，覆盖
+                # 乐观值，策略据此再发一张同量平仓单，在合约侧变成反向开仓
+                # （2026-09-27 BNB 双平手账）。若订单实际被交易所拒单，最迟 15s
+                # 后（或下一根新 bar 的强制同步）重取真值，偏差有界。
+                self._last_position_sync_ts = time.monotonic()
                 if target.target_quantity <= 0:
                     self._entry_direction.pop(target.symbol, None)
                 else:

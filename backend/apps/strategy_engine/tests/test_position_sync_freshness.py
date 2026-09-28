@@ -9,6 +9,8 @@
   2. 同步失败 → 本轮跳过决策（不拿未知/陈旧持仓交易），且**不得把 ctx 当成 0**
   3. 恢复后可正常交易
   4. 转为失败时给用户一条可见通知（不按 bar 刷屏）
+  5. 恢复（失败→成功转换）配对一条可见通知——失败侧告知了「暂停下单」，
+     状态的结束必须可见（静默恢复 = 用户永远不知道会话何时恢复交易）
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ class _Signal:
     side: str
     quantity: Decimal
     signal_name: str
+    is_close_position: bool = False
 
 
 @dataclass
@@ -85,15 +88,30 @@ class _Ctx:
         self.price = Decimal(str(price))
 
     def buy(self, quantity, **kw):
-        return _Signal("buy", Decimal(str(quantity)), kw.get("signal_name", "buy"))
+        return _Signal(
+            "buy",
+            Decimal(str(quantity)),
+            kw.get("signal_name", "buy"),
+            kw.get("is_close_position", False),
+        )
 
     def sell(self, quantity, **kw):
-        return _Signal("sell", Decimal(str(quantity)), kw.get("signal_name", "sell"))
+        return _Signal(
+            "sell",
+            Decimal(str(quantity)),
+            kw.get("signal_name", "sell"),
+            kw.get("is_close_position", False),
+        )
 
     def close_position(self, **kw):
         if self._position <= 0:
             return None
-        return _Signal("sell", self._position, kw.get("signal_name", "close"))
+        return _Signal(
+            "sell",
+            self._position,
+            kw.get("signal_name", "close"),
+            True,
+        )
 
 
 class _FakeStrategy:
@@ -385,3 +403,180 @@ class TestPositionSyncFailureNotification(TestCase):
         notify_cls = self._run_failed_bars(runner, adapter, times=1)
         self.assertEqual(len(notify_cls.objects.create.call_args_list), 1)
         self.assertNotEqual(str(uuid.uuid4()), "")  # 占位：保持 uuid 导入被使用
+
+    def test_recovery_notifies_once_and_only_after_failure(self):
+        """失败→恢复：恢复通知与失败通知成对、各一条；后续正常 bar 不重复。"""
+        adapter = _FakeAdapter(error=RuntimeError("down"))
+        runner, _, _ = _make_runner("17718", adapter)
+        notify_cls = MagicMock()
+        with _patch_executor(adapter), patch("apps.notify.models.Notification", notify_cls):
+            asyncio.run(runner._process_kline(dict(KLINE)))  # 失败 → 一条通知
+
+            adapter._error = None
+            adapter._positions = [
+                SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))
+            ]
+            asyncio.run(
+                runner._process_kline(dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000))
+            )  # 恢复 → 一条通知
+            asyncio.run(
+                runner._process_kline(dict(KLINE, timestamp=KLINE["timestamp"] + 7_200_000))
+            )  # 正常 bar → 不通知
+
+        calls = notify_cls.objects.create.call_args_list
+        self.assertEqual(len(calls), 2, f"失败 + 恢复各一条，实际 {len(calls)} 条")
+        self.assertIn("持仓同步失败", calls[0].kwargs.get("message", ""))
+        self.assertIn("已恢复", calls[1].kwargs.get("message", ""))
+
+    def test_no_notification_at_all_without_user_id(self):
+        """无 user_id：失败与恢复都不通知（没有可投递的人），阻断行为不变。"""
+        adapter = _FakeAdapter(error=RuntimeError("down"))
+        runner, _, _ = _make_runner("17718", adapter)
+        runner.user_id = None
+        notify_cls = MagicMock()
+        with _patch_executor(adapter), patch("apps.notify.models.Notification", notify_cls):
+            asyncio.run(runner._process_kline(dict(KLINE)))  # 失败：不通知
+
+            adapter._error = None
+            adapter._positions = [
+                SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))
+            ]
+            asyncio.run(
+                runner._process_kline(dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000))
+            )  # 恢复：仍不通知
+
+        self.assertEqual(len(notify_cls.objects.create.call_args_list), 0)
+        self.assertEqual(len(runner._test_dispatched), 1, "恢复后决策路径照常工作")
+
+
+class _FakeClock:
+    """可控的 monotonic 时钟：把事故时间线里两个 tick 之间真实的 2 秒间隔
+    压进单元测试（不能真睡 2 秒）。只替换 live_mode 模块引用的 time.monotonic。"""
+
+    def __init__(self, start: float = 1000.0):
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class TestDispatchRefreshesSyncWatermark(TestCase):
+    """2026-09-27 BNB 双平手账：成功 dispatch 后的乐观持仓，不得被在途窗口内
+    的一次 TTL 到期重同步覆盖。
+
+    时间线（与事故一致）：上次真实同步 T0 在 14s 前 → tick 1 在 TTL 内沿用缓存
+    （position=100）→ 发平仓单 → 乐观 position=0；tick 2 隔 2 秒到来，距 T0 已
+    16s → 旧逻辑在这里 TTL 到期重同步，而交易所（在途单尚未处理）仍返回 100
+    → ctx 被覆盖回 100 → 第二张同量平仓单 → 合约侧变成反向开仓。
+    """
+
+    def test_close_dispatch_blocks_resync_in_inflight_window(self):
+        adapter = _FakeAdapter(
+            positions=[
+                SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))
+            ]
+        )
+        clock = _FakeClock()
+        with _patch_executor(adapter), patch(
+            "apps.strategy_engine.live_mode.time.monotonic", clock
+        ):
+            runner, _, ctx = _make_runner("100", adapter)
+            runner._last_bar_ts = KLINE["timestamp"]  # 不当新 bar：测 TTL 路径
+            runner._position_synced = True
+            runner._last_position_sync_ts = clock() - 14.0  # T0：上次真实同步
+
+            asyncio.run(runner._process_kline(dict(KLINE)))  # tick 1 @ T0+14（TTL 内）
+            self.assertEqual(adapter.calls, 0, "tick 1 在 TTL 内不应请求交易所")
+            self.assertEqual(len(runner._test_dispatched), 1, "position>0 → 一张平仓单")
+            self.assertEqual(ctx.position, Decimal("0"), "dispatch 后乐观更新")
+            self.assertEqual(
+                runner._last_position_sync_ts,
+                clock(),
+                "成功 dispatch 必须把同步水位推到当前时刻",
+            )
+
+            clock.advance(2.0)  # tick 2 @ T0+16：距 T0 已 TTL 过期
+            asyncio.run(runner._process_kline(dict(KLINE)))
+
+        self.assertEqual(
+            adapter.calls,
+            0,
+            "在途窗口内不得拉旧交易所值覆盖乐观持仓",
+        )
+        self.assertEqual(len(runner._test_dispatched), 1, "不得发出第二张平仓单")
+        self.assertEqual(ctx.position, Decimal("0"))
+
+    def test_rejected_dispatch_does_not_refresh_watermark(self):
+        """订单被拒（没发出去）→ 不得占用同步窗口：交易所状态仍是唯一真值。"""
+        adapter = _FakeAdapter(
+            positions=[
+                SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))
+            ]
+        )
+        clock = _FakeClock()
+        with _patch_executor(adapter), patch(
+            "apps.strategy_engine.live_mode.time.monotonic", clock
+        ):
+            runner, _, ctx = _make_runner("100", adapter)
+            runner._last_bar_ts = KLINE["timestamp"]
+            runner._position_synced = True
+            runner._last_position_sync_ts = clock() - 14.0
+
+            async def _reject(_signal):
+                return False
+
+            runner._dispatch_signal = _reject
+            asyncio.run(runner._process_kline(dict(KLINE)))  # 被拒：无乐观更新
+            self.assertEqual(len(runner._test_dispatched), 0)
+            self.assertEqual(ctx.position, Decimal("100"))
+
+            clock.advance(2.0)  # 距 T0 已 16s：TTL 过期 → 必须照常重同步
+            asyncio.run(runner._process_kline(dict(KLINE)))
+
+        self.assertEqual(adapter.calls, 1, "未成功的 dispatch 不得占用同步窗口")
+        self.assertEqual(ctx.position, Decimal("100"), "重同步后按交易所真值覆盖")
+
+
+class TestTargetToOrderCloseFlag(TestCase):
+    """Phase 2 目标持仓 → 订单：卖到空仓必须带回 is_close_position 标志。
+
+    策略侧 close_position() 置上的标志在 Insight/PortfolioTarget 转换时丢失
+    （见 base.construct_portfolio），导致平仓单按普通卖单下发：RiskGuard 不被
+    跳过、交易所侧不带 reduceOnly（超持仓的卖单在合约上变反向开仓而非拒单）。
+    `_target_to_order` 是标志回流订单信号的唯一出口，按「目标=空仓」还原。
+    """
+
+    def _bare_runner(self, position: str) -> LiveStrategyRunner:
+        ctx = _Ctx(position=position)
+        strategy = _FakeStrategy(ctx)
+        return LiveStrategyRunner(
+            strategy, "DOGE/USDT", "1h", "acct-1", user_id="user-1", live_session_id="sess-1"
+        )
+
+    def test_sell_to_flat_is_marked_close(self):
+        runner = self._bare_runner("100")
+        sig = runner._target_to_order(_Target(target_quantity=Decimal("0")))
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.side, "sell")
+        self.assertEqual(sig.quantity, Decimal("100"))
+        self.assertTrue(
+            sig.is_close_position,
+            "卖到空仓必须带平仓标志（下游依赖它跳过风控、翻译成 reduceOnly）",
+        )
+
+    def test_buy_is_not_marked_close(self):
+        runner = self._bare_runner("0")
+        sig = runner._target_to_order(_Target(target_quantity=Decimal("50")))
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.side, "buy")
+        self.assertFalse(
+            sig.is_close_position,
+            "开仓单不得带平仓标志（带了会被翻译成 reduceOnly，开仓直接被拒）",
+        )
+
+    def test_no_order_when_already_at_target(self):
+        runner = self._bare_runner("0")
+        self.assertIsNone(runner._target_to_order(_Target(target_quantity=Decimal("0"))))

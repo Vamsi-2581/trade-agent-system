@@ -232,3 +232,90 @@ class TestSubmitOrderSafety(unittest.TestCase):
             for call in mock_order_mgr.filter.return_value.update.call_args_list
         ]
         self.assertIn("unknown", written, "写入的状态必须正好是被扫描器捞起的那个")
+
+
+class TestCloseOrderIsReduceOnly(unittest.TestCase):
+    """2026-09-27 BNB 双平手账：平仓单必须翻译成 reduceOnly。
+
+    本地持仓与交易所分叉时（在途单窗口、同步滞后），一张超持仓的卖单在合约上
+    不会被拒，而是**反向开空**——reduceOnly 是唯一能拦住它的交易所级手段。
+    开仓单必须保持非 reduceOnly，否则开仓会被交易所直接拒掉。
+    """
+
+    def setUp(self):
+        self.executor = OrderExecutor()
+        self.executor._running = True
+        self.executor._riskguard = None
+        self.executor._adapters = {}
+
+    def tearDown(self):
+        OrderExecutor._instance = None
+
+    def _mock_response(self):
+        resp = MagicMock()
+        resp.exchange_order_id = "123456"
+        resp.status = "NEW"
+        resp.filled_qty = Decimal("0")
+        resp.avg_price = None
+        return resp
+
+    @patch("apps.trading.models.Order.objects")
+    def test_close_order_sends_reduce_only(self, mock_order_mgr):
+        mock_adapter = AsyncMock()
+        mock_adapter.place_order.return_value = self._mock_response()
+        self.executor._adapters = {"binance": mock_adapter}
+
+        mock_order = MagicMock()
+        mock_order.id = "order-uuid-close"
+        mock_order.request_id = uuid.uuid4()
+        mock_order_mgr.create.return_value = mock_order
+        mock_order_mgr.filter.return_value.update = MagicMock()
+
+        asyncio.run(
+            self.executor.submit_order(
+                exchange="binance",
+                symbol="BNBUSDT",
+                side="sell",
+                order_type="market",
+                quantity=Decimal("1.37"),
+                price=None,
+                exchange_account_id="uuid-placeholder",
+                is_close_position=True,
+            )
+        )
+
+        sent = mock_adapter.place_order.call_args[0][0]
+        self.assertTrue(
+            sent.reduce_only,
+            "平仓单必须 reduceOnly：超持仓部分由交易所拒单，而不是反向开仓",
+        )
+
+    @patch("apps.trading.models.Order.objects")
+    def test_normal_order_is_not_reduce_only(self, mock_order_mgr):
+        mock_adapter = AsyncMock()
+        mock_adapter.place_order.return_value = self._mock_response()
+        self.executor._adapters = {"binance": mock_adapter}
+
+        mock_order = MagicMock()
+        mock_order.id = "order-uuid-open"
+        mock_order.request_id = uuid.uuid4()
+        mock_order_mgr.create.return_value = mock_order
+        mock_order_mgr.filter.return_value.update = MagicMock()
+
+        asyncio.run(
+            self.executor.submit_order(
+                exchange="binance",
+                symbol="BNBUSDT",
+                side="buy",
+                order_type="market",
+                quantity=Decimal("1.37"),
+                price=None,
+                exchange_account_id="uuid-placeholder",
+            )
+        )
+
+        sent = mock_adapter.place_order.call_args[0][0]
+        self.assertFalse(
+            sent.reduce_only,
+            "开仓单不得 reduceOnly：带了开仓会被交易所直接拒掉",
+        )

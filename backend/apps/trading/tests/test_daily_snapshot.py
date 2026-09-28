@@ -400,13 +400,13 @@ class TestTaskWiring(unittest.TestCase):
     def test_task_runs_the_writer(self):
         """任务体必须真的调到写入方，而不是只返回一个空 dict。
 
-        判定、停用决策推导、Shadow 记录写入也一并替掉：三者都读 DB（日线 / 池化表 /
-        判定记录），而这里是 ``unittest.TestCase``，不该为一条接线测试去开数据库。
-        四者之间的先后由 ``apps.regime.tests.test_timing`` 负责，这里只确认四条职责
-        都被调到、都进了返回值。
+        判定、停用决策推导、Shadow 记录写入、日报生成也一并替掉：四者都读 DB（日线 /
+        池化表 / 判定记录 / 日报表），而这里是 ``unittest.TestCase``，不该为一条接线
+        测试去开数据库。五者之间的先后由 ``apps.regime.tests.test_timing`` 负责，这里
+        只确认五条职责都被调到、都进了返回值。
 
         替身打在**源模块**上：任务体是函数内 import（不在 import 期就把交易/判定
-        链路拉起来），``apps.trading.tasks`` 上根本没有这四个名字。
+        链路拉起来），``apps.trading.tasks`` 上根本没有这五个名字。
         """
         from apps.trading.tasks import snapshot_daily_equity
 
@@ -436,6 +436,17 @@ class TestTaskWiring(unittest.TestCase):
                     return_value={"outcome": "created", "note": "还没有任何一代池化表"}
                 ),
             ) as shadow,
+            patch(
+                "apps.regime.report.write_daily_report",
+                new=MagicMock(
+                    return_value={
+                        "outcome": "waiting",
+                        # 判定没结论、又没到截止时刻时，真身返回的就是这个形状。
+                        "written": False,
+                        "note": "今日判定尚无结论，且未到日报截止时刻，本轮不写日报",
+                    }
+                ),
+            ) as daily_report,
         ):
             payload = snapshot_daily_equity()
 
@@ -443,6 +454,18 @@ class TestTaskWiring(unittest.TestCase):
         judgement.assert_called_once()
         deactivation.assert_called_once()
         shadow.assert_called_once()
+        daily_report.assert_called_once()
+        self.assertEqual(
+            daily_report.call_args.args,
+            (
+                payload["regime"],
+                payload["deactivation"],
+                payload["shadow"],
+            ),
+            "日报必须拿到前面三段**刚落下的产物**，而不是三个空 dict——"
+            "stub 忽略入参时，`payload.get(\"shadow\")` 写错成 `{}` 也能过，"
+            "而那正是「日报说没有、实际有」这类假话的入口",
+        )
         self.assertEqual(
             payload,
             {
@@ -454,8 +477,13 @@ class TestTaskWiring(unittest.TestCase):
                     "note": "还没有任何一代池化表",
                 },
                 "shadow": {"outcome": "created", "note": "还没有任何一代池化表"},
+                "report": {
+                    "outcome": "waiting",
+                    "written": False,
+                    "note": "今日判定尚无结论，且未到日报截止时刻，本轮不写日报",
+                },
             },
-            "返回值是任务健康检查唯一看得到的东西，四条职责都必须在里面；"
+            "返回值是任务健康检查唯一看得到的东西，五条职责都必须在里面；"
             "`skipped`/`note` 尤其不能丢——「日志不算被看见」，那句话的正经出口是日报",
         )
 

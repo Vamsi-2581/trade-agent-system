@@ -314,7 +314,9 @@ class OrderExecutor:
             price: 价格（市价单可为空）
             exchange_account_id: ExchangeAccount UUID
             user_id: User UUID（供 RiskGuard 风控校验）
-            is_close_position: 平仓信号，跳过 RiskGuard 风控检查
+            is_close_position: 平仓信号，跳过 RiskGuard 风控检查，并以
+                reduceOnly（只减不增）下单——超持仓部分由交易所拒单，而不是
+                反向开仓（2026-09-27 BNB 双平手账：第二张平仓单开了空仓）
             live_session_id: 触发的实盘会话 UUID（用于追溯订单来源策略）
 
         Returns:
@@ -350,6 +352,11 @@ class OrderExecutor:
             # 同上，会话 id 是**判定输入**而不是追溯字段：策略档的停止声明要靠它换出
             # 策略 id，而落库（`_persist_order`）在风控之后，来不及。
             live_session_id=live_session_id,
+            # 平仓单 = 只减不增。本地持仓与交易所分叉时（在途单窗口、同步滞后），
+            # 一张超持仓的卖单在合约上不会被拒，而是**反向开空**——reduceOnly 是
+            # 唯一能拦住它的交易所级手段（适配层翻译成 reduceOnly 参数，见
+            # binance 适配器）。开仓单保持 False：开仓本来就要「增」。
+            reduce_only=is_close_position,
         )
         if is_close_position:
             logger.info("[SF-07a][OrderExecutor] close position — skipping RiskGuard")
