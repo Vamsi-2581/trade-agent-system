@@ -925,8 +925,8 @@ class AccountOutcome:
 async def _open_adapter(account) -> tuple[object | None, str]:
     """建适配器（含 ``connect()``）。``(None, 原因)`` = 这个账户这一轮跳过。
 
-    ``build_account_adapter`` 已经会 ``connect()``，这里**不再 connect 第二次**：适配器自己
-    在跨 event loop 时会重建客户端（``BinanceAdapter._ensure_client_for_current_loop``），
+    ``build_account_adapter`` 已经会 ``connect()``，这里**不再 connect 第二次**：适配器
+    按 event loop 分别持有 HTTP 客户端（``BinanceAdapter._clients``，每个 loop 一个），
     所以「每个账户在自己的 ``asyncio.run`` 里建一次」是安全的用法，不需要额外管理 loop。
 
     适配器**取不到时记日志 + 跳过，不写记录**：那不是一次减仓动作，为它写一行就等于替机制

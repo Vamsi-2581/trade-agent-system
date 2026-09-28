@@ -72,51 +72,85 @@ class BinanceAdapter(BaseExchangeAdapter):
 
     BASE_URL = _BASE_URL
     TIMEOUT = 10.0
-    # 旧客户端延迟关闭的宽限期：重建当刻可能正有并发请求在用旧的（见 _close_client_later）
-    CLIENT_CLOSE_GRACE_SECONDS = 15.0
     DEFAULT_LEVERAGE = 10  # 默认杠杆倍数
 
     def __init__(self, api_key: str, secret: str, testnet: bool = False):
         super().__init__(api_key, secret)
         if testnet:
             self.BASE_URL = "https://demo-fapi.binance.com"
+        # **每个 event loop 一个 HTTP 客户端**。httpx 的连接池、socket，以及 anyio
+        # StreamProtocol 的读写 Event，全都属于建立它的那个 loop；拿到别的 loop 里用就抛
+        # `RuntimeError: <asyncio.locks.Event ...> is bound to a different event loop`。
+        # 所以客户端只能按 loop 分开持有——共用一个槽位必然互相作废（2026-09-26 故障：
+        # 两个实盘会话共享同一适配器、分属两个 loop，当日 29 次持仓同步 fail-loud）。
+        # 键用 loop 对象本身而非 id(loop)：id 会被复用，新 loop 会认领别人的客户端。
+        self._clients: dict[asyncio.AbstractEventLoop, httpx.AsyncClient] = {}
+        # `_client`/`_client_loop` = 最近一次 connect() 建立的客户端，供外部读取与测试注入。
+        # 请求解析**只在 `_client_loop is None`（无归属，即注入的替身）时才看它**：
+        # 真实客户端一律走 `_clients[loop]`——共享槽位正是上面那条故障的成因。
         self._client: Optional[httpx.AsyncClient] = None
-        # 记录创建客户端的 event loop：跨 loop 使用会抛
-        # "Event is bound to a different event loop"（启动窗口实测），需要重建。
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
-        # 延迟关闭任务强引用（asyncio 只弱引用 task，不持有会被 GC 掉）
-        self._closing_tasks: set = set()
         self._time_offset: int = 0  # ms: local_time = server_time + offset
         self._leverage_set: set[str] = set()  # 已设置杠杆的交易对
         self._symbol_rules: Optional[dict[str, dict]] = None  # exchangeInfo 精度规则缓存
 
     async def connect(self) -> None:
-        await self._create_client()
+        """建立**当前 loop** 专用的 HTTP 客户端（不负责处置本 loop 已有的那个）。"""
+        client = await self._create_client()
+        # 兼容既有读取点（`connect()` 后 `_client` 非空）：记下最近一次建立的客户端。
+        self._client = client
+        self._client_loop = self._running_loop()
 
-    async def _create_client(self) -> None:
-        """创建 HTTP 客户端并同步时钟（重建路径复用；不负责处置旧客户端）。"""
+    async def _create_client(self) -> httpx.AsyncClient:
+        """为当前 loop 建一个 HTTP 客户端并同步时钟，返回它（重建路径复用）。
+
+        **客户端只能在当前 loop 里建**，所以 loop 由 `_running_loop()` 自己取，不收参数。
+        建好即入池（`_clients[loop]`）；调用方必须使用返回值——中间只要再等一次，
+        同 loop 的并发重建就可能把它挤掉。
+        """
         headers = {"X-MBX-APIKEY": self._api_key}
         proxy = getattr(settings, "WEB_PROXY", "") or None
-        self._client = httpx.AsyncClient(
+        client = httpx.AsyncClient(
             base_url=self.BASE_URL,
             headers=headers,
             timeout=self.TIMEOUT,
             proxy=proxy if proxy else None,
         )
-        self._client_loop = self._running_loop()
+        self._clients[self._running_loop()] = client
         # Sync clock with Binance server to avoid timestamp drift errors
-        await self._sync_time()
+        await self._sync_time(client)
+        return client
 
-    async def _sync_time(self) -> None:
+    async def _prune_closed_loops(self) -> None:
+        """丢弃「owner loop 已关闭」的客户端（在每次解析客户端前清一遍）。
+
+        必须清：``async_to_sync``（同步视图里调异步接口）与 ``asyncio.run`` 都是**每次
+        调用新建一个 loop、用完即关**（实测：3 次 ``async_to_sync`` → 3 个 loop，全部
+        `is_closed()`）。不清理的话池子会随调用次数无限增长，每个死条目还攥着一条
+        keep-alive 连接——views.py 的持仓接口正是这条路径。
+        只清 `is_closed()` 的：还在跑、或只是暂时停着的 loop 的客户端对它自己仍然有效，
+        清掉等于替它换客户端（那正是本类要避免的事）。
+        代价是一次长度为「活跃 loop 数」的遍历（线上 1-2 个），实现在读路径上是为了让
+        入池实现（含被替换的实现）都无法绕开它。关闭死 loop 的客户端不会挂住：
+        实测它立刻抛 `RuntimeError: Event loop is closed`，`_safe_aclose` 吃掉即可。
+        """
+        dead = [
+            owner for owner in self._clients if owner is not None and owner.is_closed()
+        ]
+        for owner in dead:
+            await self._safe_aclose(self._clients.pop(owner))
+
+    async def _sync_time(self, client: httpx.AsyncClient) -> None:
         """Fetch server time and compute local clock offset.
 
         Stores offset so that _sign() can produce server-aligned timestamps.
         Falls back gracefully on failure (offset remains 0).
+
+        客户端由调用方传入（本 loop 的那一个）：自己不去解析共享槽位，否则又会用上
+        别的 loop 的客户端。
         """
         try:
-            # Use a temporary sync client since self._client may not be fully
-            # initialized for base_url-relative paths yet.
-            resp = await self._client.get("/fapi/v1/time")
+            resp = await client.get("/fapi/v1/time")
             if resp.status_code == 200:
                 server_ts = resp.json().get("serverTime", 0)
                 local_ts = int(time.time() * 1000)
@@ -137,10 +171,28 @@ class BinanceAdapter(BaseExchangeAdapter):
             logger.warning(f"Binance time sync failed: {e}")
 
     async def disconnect(self) -> None:
-        if self._client:
-            await self._client.aclose()
-            self._client = None
-        self._client_loop = None
+        """关闭并丢弃所有客户端，**每个都只从它自己的 loop** 关闭。
+
+        跨 loop 调 aclose() 会重蹈本类被修的覆辙（httpcore 的池锁、anyio 的读写 Event
+        也是 loop-bound）。当前 loop 的内联关闭；归属别的 loop 且那个 loop 还在跑的，
+        投递到它自己的 loop 上去关；归属 loop 已停的只能丢弃引用（连接随 GC 释放）。
+        """
+        loop = self._running_loop()
+        clients, self._clients = self._clients, {}
+        legacy, self._client, self._client_loop = self._client, None, None
+        # 注入的替身（无归属）不在池里，单独关——本 loop 关它没有跨 loop 问题。
+        if legacy is not None and all(legacy is not c for c in clients.values()):
+            await self._safe_aclose(legacy)
+        for owner, client in clients.items():
+            if owner is loop or owner is None:
+                await self._safe_aclose(client)
+            elif owner.is_running():
+                fut = asyncio.run_coroutine_threadsafe(self._safe_aclose(client), owner)
+                fut.add_done_callback(lambda f: f.cancelled() or f.exception())
+            else:
+                logger.debug(
+                    "[Binance] owner loop 已停，丢弃其 HTTP 客户端（不跨 loop 关闭）"
+                )
 
     def _sign(self, params: dict) -> str:
         """HMAC SHA256 签名，返回完整查询字符串。
@@ -160,11 +212,6 @@ class BinanceAdapter(BaseExchangeAdapter):
         ).hexdigest()
         return f"{query}&signature={signature}"
 
-    def _ensure_connected(self) -> httpx.AsyncClient:
-        if self._client is None:
-            raise RuntimeError("BinanceAdapter not connected. Call connect() first.")
-        return self._client
-
     @staticmethod
     def _running_loop() -> Optional[asyncio.AbstractEventLoop]:
         """当前 running loop（无则 None）。"""
@@ -173,54 +220,52 @@ class BinanceAdapter(BaseExchangeAdapter):
         except RuntimeError:
             return None
 
-    async def _ensure_client_for_current_loop(self) -> None:
-        """客户端绑定在别的 event loop 上时重建它。
-
-        适配器可能在启动阶段的某个 loop 里 connect()，之后被 runner/consumer 任务在
-        另一个 loop 中调用 → httpx/anyio 的 loop-bound 原语抛
-        `RuntimeError: <asyncio.locks.Event ...> is bound to a different event loop`
-        （2026-09-21 启动窗口实测：持仓同步/下单/RiskGuard 拉持仓全中招，靠 _reconnect
-        自愈，约 20-40s 才恢复）。这里提前按 loop 重建，消除该窗口。
-        仅当客户端由本适配器创建（记录了创建 loop）且与当前 loop 不同才重建；
-        测试注入的替身（_client_loop is None）不碰。
-        """
-        loop = self._running_loop()
-        if loop is None or self._client is None or self._client_loop is None:
-            return
-        if self._client_loop is loop:
-            return
-        logger.warning(
-            "[Binance] HTTP client bound to another event loop; "
-            "rebuilding for the current loop"
-        )
-        # 先建新客户端并换引用，旧的**延迟**关闭：重建当刻可能正有并发请求在用旧客户端，
-        # 内联 aclose() 会让它们报 ClosedResourceError（2026-09-21 线上实测：SOL 同步被拦一轮）。
-        old = self._client
-        await self._create_client()
-        task = asyncio.create_task(self._close_client_later(old))
-        self._closing_tasks.add(task)
-        task.add_done_callback(self._closing_tasks.discard)
-
-    async def _close_client_later(self, client) -> None:
-        """延迟关闭旧客户端：并发中的在途请求可能还在用它。"""
-        await asyncio.sleep(self.CLIENT_CLOSE_GRACE_SECONDS)
+    async def _safe_aclose(self, client: httpx.AsyncClient) -> None:
+        """关闭客户端；失败只记日志（关闭不成不该掀掉调用方）。"""
         try:
             await client.aclose()
-        except Exception as e:  # noqa: BLE001 - 关闭失败不影响新客户端
-            logger.debug(f"deferred aclose failed: {type(e).__name__}: {e!r}")
+        except Exception as e:  # noqa: BLE001 - 关闭失败不影响其它客户端
+            logger.debug(f"[Binance] aclose failed: {type(e).__name__}: {e!r}")
+
+    async def _client_for_current_loop(self) -> httpx.AsyncClient:
+        """返回**属于当前 loop** 的 HTTP 客户端（没有就建一个）。
+
+        不变量：返回值一定是在当前 loop 里建出来的。调用方必须把返回值直接用在整次请求
+        上，**不得**再去读共享槽位——「取客户端」与「用客户端」之间只要夹一个 await，
+        别的 loop 就可能把槽位换掉，于是请求用上别人 loop 的客户端，其 keep-alive 连接
+        一被复用就抛
+        `RuntimeError: <asyncio.locks.Event ...> is bound to a different event loop`
+        （2026-09-26 故障的确切成因：`get_positions` 的持仓同步因此 fail-loud）。
+        """
+        await self._prune_closed_loops()
+        loop = self._running_loop()
+        client = self._clients.get(loop)
+        if client is not None:
+            return client
+        # 无 loop 归属的客户端（测试注入的替身）：不参与按 loop 重建，任何 loop 都能用。
+        if self._client is not None and self._client_loop is None:
+            return self._client
+        if loop is None:
+            raise RuntimeError("BinanceAdapter not connected. Call connect() first.")
+        return await self._create_client()
 
     async def _reconnect(self) -> None:
-        """丢弃并重建 HTTP 客户端（并重新同步时钟）。
+        """丢弃并重建**当前 loop** 的 HTTP 客户端（并重新同步时钟）。
 
         长活客户端在代理/网络抖动后可能永久卡死（2026-09-20 事故：每个请求都 httpx 超时、
         连续约 10 小时 100% 失败，只能靠重启进程恢复）。重建是唯一的自愈手段。
+        只动当前 loop 的那一个：别的 loop 的客户端对它们自己仍然有效，从错误的 loop 去
+        关它反而会抛 loop-bound 错误（本类被修的正是这一类）。
         """
-        if self._client is not None:
-            try:
-                await self._client.aclose()
-            except Exception as e:  # noqa: BLE001 - 关闭失败不应阻断重建
-                logger.debug(f"Failed to close binance client before reconnect: {e!r}")
-        self._client = None
+        old = self._clients.pop(self._running_loop(), None)
+        if old is None and self._client_loop is None:
+            # 注入的替身（无归属）：自愈同样换掉它，否则会一直用它。
+            old = self._client
+        if self._client is old:  # 别让 `_client` 继续指着已被关掉的客户端
+            self._client = None
+            self._client_loop = None
+        if old is not None:
+            await self._safe_aclose(old)
         await self.connect()
 
     async def _request(
@@ -245,8 +290,8 @@ class BinanceAdapter(BaseExchangeAdapter):
         """
 
         async def attempt() -> httpx.Response:
-            await self._ensure_client_for_current_loop()
-            client = self._ensure_connected()
+            # 本 loop 专属的客户端，拿下之后**整次请求都用它**（不再读任何共享槽位）。
+            client = await self._client_for_current_loop()
             if signed:
                 target = f"{path}?{self._sign(params or {})}"
             elif params:
@@ -285,7 +330,7 @@ class BinanceAdapter(BaseExchangeAdapter):
                 f"Binance -1021 on {method} {path} (timestamp outside recvWindow); "
                 "re-syncing clock and retrying once"
             )
-            await self._sync_time()
+            await self._sync_time(await self._client_for_current_loop())
             resp = await attempt()
 
         return resp
