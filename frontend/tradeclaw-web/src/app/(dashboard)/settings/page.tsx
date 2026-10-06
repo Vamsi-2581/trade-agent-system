@@ -36,7 +36,7 @@ export default function SettingsPage() {
   const [apiKeyExchange, setApiKeyExchange] = useState("");
   const [apiSecret, setApiSecret] = useState("");
   const [testnet, setTestnet] = useState(false);
-  const [leverage, setLeverage] = useState("10");
+  const [leverage, setLeverage] = useState("5");
   const [existingAccounts, setExistingAccounts] = useState<{
     id: string;
     exchange: string;

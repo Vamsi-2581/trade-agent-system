@@ -72,7 +72,7 @@ class BinanceAdapter(BaseExchangeAdapter):
 
     BASE_URL = _BASE_URL
     TIMEOUT = 10.0
-    DEFAULT_LEVERAGE = 10  # 默认杠杆倍数
+    DEFAULT_LEVERAGE = 5  # 默认杠杆倍数
 
     def __init__(self, api_key: str, secret: str, testnet: bool = False):
         super().__init__(api_key, secret)

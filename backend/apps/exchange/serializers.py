@@ -6,7 +6,7 @@ class ExchangeAccountSerializer(serializers.ModelSerializer):
     api_key = serializers.CharField(write_only=True, required=True)
     api_secret = serializers.CharField(write_only=True, required=True)
     testnet = serializers.BooleanField(write_only=True, default=False)
-    leverage = serializers.IntegerField(write_only=True, default=10)
+    leverage = serializers.IntegerField(write_only=True, default=5)
 
     class Meta:
         model = ExchangeAccount
