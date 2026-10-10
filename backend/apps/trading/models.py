@@ -42,6 +42,11 @@ class Order(models.Model):
     price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
     status = models.CharField(max_length=12, choices=STATUS_CHOICES, default="pending")
     exchange_order_id = models.CharField(max_length=128, blank=True)
+    # 下单时给交易所的那个 clientOrderId。`request_id` 是本地 UUID 幂等键，而
+    # clientOrderId 是**交易所侧**的锚：减仓子单的重发去重（`reduce.py` 拿同一个
+    # clientOrderId 重发）与对账反查都靠它。它是字符串（`cl<8hex><10hex>`），进不去
+    # `request_id` 那个 UUIDField，所以单开这一列。空串 = 这条路径没给过单号。
+    client_order_id = models.CharField(max_length=128, blank=True, default="")
     filled_quantity = models.DecimalField(max_digits=20, decimal_places=8, default=0)
     avg_fill_price = models.DecimalField(
         max_digits=20, decimal_places=8, null=True, blank=True
@@ -144,6 +149,11 @@ class LiveSession(models.Model):
     #: `pending` 还没启动但会启动，`paused` 只是暂停止损／止盈照样管着仓位，`stopped` /
     #: `error` 则已经结束了。被管策略集合的第二条判据（CONTEXT.md 第 105 条）读的是它。
     ACTIVE_STATUSES = ("pending", "running", "paused")
+    #: 冲突判定用：「正占用该品种账户级持仓」的状态。口径**不同于** ACTIVE_STATUSES——
+    #: `pending` 还没 runner、不占持仓（它自己的 start 会走同一道检查），`stopped` /
+    #: `error` 已结束；所以只有 `running`（runner 在跑）与 `paused`（可能残留持仓，
+    #: resume 后立刻又占）与另一会话冲突。
+    CONFLICT_STATUSES = ("running", "paused")
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -204,6 +214,40 @@ class LiveSession(models.Model):
                 f"但绑定的账户「{account.label}」testnet={account.testnet}"
             )
         return None
+
+    @classmethod
+    def conflicting_active_session(
+        cls, exchange_account, symbol, exclude_pk=None
+    ) -> str | None:
+        """同交易所账户 + 同品种上是否还有活跃会话（running/paused）；无则 None，有则拒绝原因。
+
+        `exchange_account` 接受 ExchangeAccount 实例或 pk：视图层手里有实例，
+        runner（`live_mode._shared_account_conflict`）手里只有账户 id 字符串。
+        账户行不存在（已删除）时查询自然为空 → None。
+
+        为什么算冲突：runner 每根 bar 把**账户级**该品种持仓同步进 `ctx.position`
+        （`live_mode._sync_position_from_exchange`），`close_position` 平到账户级 0——
+        没有「本会话仓位」的概念。两个策略同账户同品种必然互相平仓（2026-10-07：
+        box 会话平掉 donchian 开的 10401 DOGE/USDT，实现亏损 -79.78）。
+
+        `exclude_pk` 排除会话自身：对 running 会话点 start 是「重启自己」，不算冲突。
+        """
+        qs = cls.objects.filter(
+            exchange_account=exchange_account,
+            symbol=symbol,
+            status__in=cls.CONFLICT_STATUSES,
+        ).select_related("strategy", "exchange_account")
+        if exclude_pk is not None:
+            qs = qs.exclude(pk=exclude_pk)
+        other = qs.first()
+        if other is None:
+            return None
+        account = other.exchange_account
+        return (
+            f"交易所账户「{account.label}」已有 {symbol} 的活跃会话："
+            f"{other.strategy.name}（id {str(other.id)[:8]}…，status={other.status}）。"
+            f"runner 共享该品种的账户级持仓，同账户同品种多策略会互相平仓，请先停止另一会话"
+        )
 
     def __str__(self):
         return f"LiveSession({self.mode}/{self.status}) - {self.strategy.name} {self.symbol}"

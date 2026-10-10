@@ -131,7 +131,9 @@ const detail: LiveSessionDetail = {
       exchange_order_id: "ex-2",
       filled_quantity: "0.01000000",
       avg_fill_price: "60000.00000000",
-      realized_pnl: null,
+      // 开仓成交在**交易所口径**里就是 0（不是 null）——对账以交易所为准落库后
+      // 就是这个值。显示必须与 null 一视同仁（「—」），见 `formatOrderPnl`。
+      realized_pnl: "0.00000000",
       error_message: "",
       live_session_id: "sess-1",
       strategy_id: "strat-1",
@@ -404,12 +406,15 @@ describe("订单流水", () => {
     expect(await screen.findByText("共 2 条")).toBeTruthy();
   });
 
-  it("逐单的已实现盈亏照接口显示，开仓单是「—」而不是 0", async () => {
+  it("逐单的已实现盈亏照接口显示，开仓单是「—」而不是 +0.00", async () => {
     renderModal();
 
     const orders = within(await screen.findByTestId("session-orders"));
     expect(orders.getByText("+12.50")).toBeTruthy(); // 平仓单
-    expect(orders.getAllByText("—").length).toBeGreaterThan(0); // 开仓单（realized_pnl 为 null）
+    // 开仓单 realized_pnl=0（交易所口径），必须与 null 一样是「—」
+    expect(orders.getAllByText("—").length).toBeGreaterThan(0);
+    expect(orders.queryByText("+0.00")).toBeNull();
+    expect(orders.queryByText("0.00")).toBeNull();
   });
 });
 

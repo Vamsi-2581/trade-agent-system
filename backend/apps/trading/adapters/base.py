@@ -240,6 +240,33 @@ class BaseExchangeAdapter(ABC):
             f"{type(self).__name__} 不支持按 clientOrderId 反查"
         )
 
+    async def fetch_user_trades(
+        self, symbol: str, *, from_id: int = 0, limit: int = 1000
+    ) -> list[dict]:
+        """拉取该品种的**账户成交明细**（``userTrades``），按交易所原始字段返回。
+
+        减仓成交的已实现盈亏以**交易所的 ``realizedPnl``** 为权威口径：空头回补的盈亏
+        本地推不出来（``compute_realized_pnl`` 只做平多），只能靠它。回填命令
+        ``reconcile_realized_pnl_from_exchange`` 与 ``reduce_ledger`` 的 best-effort 取数
+        都走这个口。
+
+        这里给一个会抛的默认实现（同 ``find_order_by_client_id`` 的思路）：没有它也能
+        运行（退化成「取不到 → 交给回填」），但**绝不能静默返回空列表**——那会把
+        「这个适配器不支持」读成「该品种没有成交」，进而把盈亏落成 0。
+
+        Args:
+            symbol: 本地交易对符号（如 'BNB/USDT'，由适配器归一化）
+            from_id: 分页游标，从哪一笔成交 id 之后继续拉（0 = 从头）
+            limit: 单页上限
+
+        Returns:
+            交易所原始成交 dict 列表（币安：``orderId`` / ``qty`` / ``price`` /
+            ``realizedPnl`` / ``time`` / ``side`` / ``symbol``）。
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} 不支持拉取 userTrades"
+        )
+
     @abstractmethod
     async def get_balance(self) -> dict[str, Decimal]:
         """获取账户余额，key 为资产名称，value 为数量"""

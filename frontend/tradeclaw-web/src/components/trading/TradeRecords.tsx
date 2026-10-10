@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Order, ExchangeAccountWithBalance, OHLCVPoint } from "@/lib/api";
 import { tradingApi } from "@/lib/api";
+import { formatOrderPnl } from "@/lib/format";
 import TView from "@/components/backtest/TView";
 import type { TViewOrderMarker } from "@/components/backtest/TView";
 
@@ -37,17 +38,9 @@ function statusBadge(status: Order["status"]): string {
         : "bg-bg2 text-text3";
 }
 
-function pnlText(value: string | null): { text: string; color: string } {
-  if (value === null || value === "" || isNaN(parseFloat(value))) {
-    return { text: "—", color: "text-text3" };
-  }
-  const num = parseFloat(value);
-  const formatted = formatNumber(Math.abs(num));
-  return {
-    text: `${num >= 0 ? "+" : "-"}${formatted}`,
-    color: num >= 0 ? "text-green" : "text-red",
-  };
-}
+// 已实现盈亏的展示口径走 `lib/format`：订单行上 0 与 null 一律「—」——开仓成交
+// 的已实现盈亏在交易所口径里就是 0（见 `formatOrderPnl` 的注释），显示成 `+0.00`
+// 会让每张进场单看起来像打平的平仓单。
 
 function fmtTime(value: string): string {
   return new Date(value).toLocaleString("zh-CN", {
@@ -155,7 +148,7 @@ function TradeDetailModal({
       : order.order_type === "limit"
         ? "限价"
         : "止损";
-  const pnl = pnlText(order.realized_pnl);
+  const pnl = formatOrderPnl(order.realized_pnl);
   const filledPct =
     parseFloat(order.quantity) > 0
       ? (parseFloat(order.filled_quantity) / parseFloat(order.quantity)) * 100
@@ -426,7 +419,7 @@ export default function TradeRecords({
                     : order.order_type === "limit"
                       ? "限价"
                       : "止损";
-                const pnl = pnlText(order.realized_pnl);
+                const pnl = formatOrderPnl(order.realized_pnl);
                 return (
                   <tr
                     key={order.id}

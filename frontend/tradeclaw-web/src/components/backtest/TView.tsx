@@ -497,6 +497,17 @@ export default function TView({
     ) => {
       if (!logicalRange) return;
 
+      console.log(
+        "[DEBUG-lz1] range=", JSON.stringify(logicalRange),
+        "loadedCount=", normalizedDataRef.current.length,
+        "loadedStart=", loadedStartRef.current,
+        "total=", totalBarsRef.current,
+        "moreEarlier=", hasMoreEarlierRef.current,
+        "moreLater=", hasMoreLaterRef.current,
+        "hasCb=", !!onLoadMoreRef.current,
+        "locked=", isLoadingRef.current,
+      );
+
       // Save the current time range so the viewport can be restored after the
       // chart rebuilds (new bars are prepended/appended off-screen).
       const tr = chart.timeScale().getVisibleRange();

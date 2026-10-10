@@ -29,6 +29,68 @@ from apps.core.db_utils import db_async
 logger = logging.getLogger(__name__)
 
 
+def _routable_agent_names() -> list[str]:
+    """当前真正可路由的 Agent 名单（Prompt 发现的那批 + supervisor）。
+
+    向 `AgentRegistry` 取，不另立常量：`AgentRegistry.get()` 只认 Prompt 目录扫描出的
+    `_classes`，另立一份名单迟早与目录分家，而分家的表现正是 2026-09-28 那次事故——
+    「提交时说已提交、到期时 Agent not registered」。
+
+    `supervisor` 不在注册中心里（它由 `SupervisorAgent.get_instance()` 直达），
+    但 `_route_to_agent` 认它，所以它必须出现在名单里。
+    """
+    from apps.agent.registry import AgentRegistry
+
+    names = set(AgentRegistry.all_names())
+    names.add("supervisor")
+    return sorted(names)
+
+
+def _validate_agent_name(raw: str, *, field: str = "agent_name") -> str:
+    """校验目标 Agent 是否真的可路由，可路由返回空串，否则返回给 LLM 的错误消息。
+
+    2026-09-28 事故：supervisor 给「平掉当前BNB的仓位」填了 `agent_name='trader'`，
+    本工具照单落库并投递 Celery，一分钟到期时 `AgentRegistry.get('trader')` 才抛
+    `Agent not registered: 'trader'`。用户先收到「已提交平仓指令」的确认，再收到一条
+    迟到的失败——而系统里根本没有下单/平仓能力，那个任务从落库那一刻起就注定失败。
+
+    所以校验必须发生在**写库之前**：失败立刻回到 LLM 的上下文（工具错误会作为
+    `Error: ...` 进入下一轮），它才有机会如实告诉用户，而不是先确认再报错。
+
+    名单为空时**不放行**：那说明 Prompt 目录没部署，此刻没有任何名字能真的跑起来，
+    与其把注定失败的任务写进库，不如当场说清楚。
+    """
+    names = _routable_agent_names()
+    if not names:
+        return (
+            f"无法校验 {field}={raw!r}：没有发现任何可路由的 Agent"
+            "（Prompt 目录未部署？）。为避免提交一个到点必然失败的任务，本次不提交。"
+        )
+    if raw in names:
+        return ""
+    return (
+        f"{field}={raw!r} 不是已注册的 Agent，任务到点后必然失败（Agent not registered）。"
+        f"可用的 Agent：{'、'.join(names)}。"
+    )
+
+
+def _validate_workflow_steps(steps: list) -> str:
+    """校验多步骤 workflow 里每一步的 `agent`，返回第一条错误（无错返回空串）。
+
+    与 `agent_name` 同一类失败、同一类代价：步骤是**串行**的，第 3 步的名字写错，
+    前两步已经真的跑完并落了副作用，然后整条 workflow 才失败。
+    """
+    for idx, step in enumerate(steps or []):
+        if not isinstance(step, dict):
+            return f"steps[{idx}] 不是对象：{step!r}"
+        err = _validate_agent_name(
+            str(step.get("agent", "") or ""), field=f"steps[{idx}].agent"
+        )
+        if err:
+            return err
+    return ""
+
+
 def _format_beat_schedule(row: dict) -> str:
     """把 PeriodicTask 的 values() 行格式化成可读的调度描述（用于取消审计）。"""
     if row.get("crontab__minute") is not None:
@@ -61,7 +123,11 @@ class SubmitScheduledTaskTool(BaseTool):
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "目标 Agent 名称，如 analyst、quant、risk_advisor、coach、researcher",
+                    "description": (
+                        "目标 Agent 名称，**只能从这个名单里选**："
+                        + "、".join(_routable_agent_names())
+                        + "。名单之外的名字（如 trader）不存在，提交会当场被拒。"
+                    ),
                 },
                 "message": {
                     "type": "string",
@@ -144,6 +210,16 @@ class SubmitScheduledTaskTool(BaseTool):
                 success=False,
                 error="agent_name、message、run_at 均为必填项",
             )
+
+        # 写库之前先确认「这个名字到点真的能路由」，否则就是一个注定失败的任务：
+        # 用户此刻收到「已提交」，到期才收到失败（2026-09-28 平仓指令事故）。
+        name_error = _validate_agent_name(agent_name)
+        if name_error:
+            logger.warning(
+                "[SubmitScheduledTaskTool] rejected unregistered agent_name=%r",
+                agent_name,
+            )
+            return ToolResult(success=False, error=name_error)
 
         try:
             from apps.agent.models import ScheduledOneTimeTask
@@ -231,7 +307,12 @@ class SubmitRecurringTaskTool(BaseTool):
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "目标 Agent 名称。多 Agent 协作任务必须设为 'supervisor'",
+                    "description": (
+                        "目标 Agent 名称，**只能从这个名单里选**："
+                        + "、".join(_routable_agent_names())
+                        + "。多 Agent 协作任务（带 steps）必须设为 'supervisor'。"
+                        "名单之外的名字（如 trader）不存在，提交会当场被拒。"
+                    ),
                 },
                 "message": {
                     "type": "string",
@@ -323,6 +404,26 @@ class SubmitRecurringTaskTool(BaseTool):
                 success=False,
                 error=f"cron_expression 需要 5 个字段（分 时 日 月 周），当前: {cron_expression}",
             )
+
+        # 与 SubmitScheduledTaskTool 同一道校验、同一条理由：周期任务一旦注册就会
+        # **反复**触发，名字写错不是失败一次，而是每天都失败一次并每天推一条 ❌。
+        name_error = _validate_agent_name(agent_name)
+        if name_error:
+            logger.warning(
+                "[SubmitRecurringTaskTool] rejected unregistered agent_name=%r",
+                agent_name,
+            )
+            return ToolResult(success=False, error=name_error)
+
+        # workflow 步骤是串行的：名字写错时前面几步已经跑完并落了副作用，
+        # 所以也必须在下单（注册）之前拦下来。
+        steps_error = _validate_workflow_steps(steps)
+        if steps_error:
+            logger.warning(
+                "[SubmitRecurringTaskTool] rejected invalid workflow step: %s",
+                steps_error,
+            )
+            return ToolResult(success=False, error=steps_error)
 
         # Workflow tasks: force agent_name to supervisor so supervisor.handle()
         # is called on execution, which detects and runs the workflow steps.

@@ -768,6 +768,37 @@ class BinanceAdapter(BaseExchangeAdapter):
             error_message=None,
         )
 
+    async def fetch_user_trades(
+        self, symbol: str, *, from_id: int = 0, limit: int = 1000
+    ) -> list[dict]:
+        """拉取该品种的账户成交明细（``GET /fapi/v1/userTrades``），分页到尾部。
+
+        返回交易所原始 dict 列表。分页口径：一页返回数 **< limit** 即为尾部；否则用
+        最后一笔的 ``id`` 作 ``fromId`` 续拉（币安的 ``userTrades`` 以成交 id 递增）。
+        与 ``find_order_by_client_id`` 同一条纪律：**拿不到就抛**，绝不返回空列表——
+        空列表的含义必须是「该品种确实没有成交」，否则盈亏会被落成 0。
+        """
+        native = symbol.upper().replace("/", "")
+        out: list[dict] = []
+        cursor = from_id
+        while True:
+            resp = await self._request(
+                "GET",
+                "/fapi/v1/userTrades",
+                {"symbol": native, "fromId": cursor, "limit": limit},
+            )
+            resp.raise_for_status()
+            page = resp.json() or []
+            out.extend(page)
+            if len(page) < limit:
+                break
+            last_id = page[-1].get("id")
+            if last_id is None or int(last_id) <= cursor:
+                # 游标没前进（交易所没给 id / 给了个不递增的）→ 停，避免死循环。
+                break
+            cursor = int(last_id)
+        return out
+
     async def get_positions(self) -> list[Position]:
         resp = await self._request("GET", "/fapi/v2/positionRisk")
         resp.raise_for_status()

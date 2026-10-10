@@ -296,7 +296,12 @@ class TestDecisionTimePositionSync(TestCase):
                 asyncio.run(runner._process_kline(dict(KLINE)))
 
         self.assertEqual(adapter.calls, 1, "同 bar 内应节流为 1 次请求")
-        self.assertEqual(strategy.bar_calls, 5, "策略仍每 tick 运行（本次不改该行为）")
+        self.assertEqual(
+            strategy.bar_calls,
+            5,
+            "直接调 _process_kline 仍每次运行（生产入口 on_kline 已按 bar 收盘"
+            "门控，见 test_bar_close_gate.py）",
+        )
 
     def test_failed_sync_retries_after_ttl_not_every_tick(self):
         """失败态：TTL 内不重复打 API，TTL 外才退避重试一次。"""

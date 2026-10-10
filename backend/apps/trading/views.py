@@ -339,7 +339,8 @@ def live_session_create(request):
       backtest_result_id: str (UUID) — 来源回测
       mode: str — 'paper' 或 'live'（首次必须为 paper）
       exchange_account_id: str (UUID) — 交易所账户
-      config: dict (optional) — 运行参数
+      config: dict (optional) — 运行参数；未传时继承回测的自定义参数
+        （回测用什么参数验证的，会话就按什么参数跑），显式传入的键优先
     """
     from apps.backtest.models import BacktestResult
     from apps.exchange.models import ExchangeAccount
@@ -347,7 +348,6 @@ def live_session_create(request):
     backtest_id = request.data.get("backtest_result_id")
     mode = request.data.get("mode", "paper")
     exchange_account_id = request.data.get("exchange_account_id")
-    config = request.data.get("config", {})
 
     if not backtest_id:
         return Response({"error": "backtest_result_id is required"}, status=400)
@@ -386,6 +386,12 @@ def live_session_create(request):
     except ExchangeAccount.DoesNotExist:
         return Response({"error": "Exchange account not found or inactive"}, status=404)
 
+    # runner 共享该品种的账户级持仓：同账户同品种两个策略必然互相平仓
+    #（2026-10-07：box 会话平掉 donchian 开的 DOGE/USDT 仓）。创建时即拒绝。
+    conflict = LiveSession.conflicting_active_session(exchange_account, backtest.symbol)
+    if conflict:
+        return Response({"error": conflict}, status=400)
+
     # 初始资金取绑定账户的实时 USDT 余额，而非回测的固定金额
     try:
         initial_capital = async_to_sync(_fetch_usdt_balance)(exchange_account)
@@ -395,6 +401,12 @@ def live_session_create(request):
             {"error": f"Failed to fetch exchange account balance: {e}"},
             status=status.HTTP_502_BAD_GATEWAY,
         )
+
+    # 参数继承：未显式传 config 时继承回测的自定义参数。
+    # 防止静默漂移（2026-10 BNB/USDT 事故：回测用 exit_at_mid=false 验证通过，
+    # session.config 却是 {}，实盘按策略默认 exit_at_mid=true 跑，一周 10 次往返全亏）。
+    # 显式传入的 config 键优先于回测参数。
+    config = {**(backtest.parameters or {}), **(request.data.get("config") or {})}
 
     # 创建 LiveSession
     session = LiveSession.objects.create(
@@ -445,6 +457,13 @@ def live_session_start(request, pk):
     mismatch = session.mode_account_mismatch()
     if mismatch:
         return Response({"error": mismatch}, status=400)
+
+    # 与 create 同一道检查：runner 共享账户级持仓，同账户同品种再起一支会互相平仓
+    conflict = LiveSession.conflicting_active_session(
+        session.exchange_account, session.symbol, exclude_pk=session.pk
+    )
+    if conflict:
+        return Response({"error": conflict}, status=400)
 
     frame_manager = FrameManager.get_instance()
 
@@ -570,6 +589,13 @@ def live_session_resume(request, pk):
     mismatch = session.mode_account_mismatch()
     if mismatch:
         return Response({"error": mismatch}, status=400)
+
+    # 与 start 同一道检查：恢复前同账户同品种若已有活跃会话，同样拒绝
+    conflict = LiveSession.conflicting_active_session(
+        session.exchange_account, session.symbol, exclude_pk=session.pk
+    )
+    if conflict:
+        return Response({"error": conflict}, status=400)
 
     session.status = "running"
     session.save(update_fields=["status", "updated_at"])

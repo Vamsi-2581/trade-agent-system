@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -55,6 +56,19 @@ class LiveStrategyRunner:
         self._position_synced: bool | None = None
         self._last_position_sync_ts: float = 0.0
         self._position_sync_failure_notified = False
+        # 会话级持仓台账（2026-10-08 修复 2，2026-10-07 box 平掉 donchian 共享仓
+        # 事故跟进）：ctx.position 是「本会话台账」，不再是账户持仓——
+        #   首次成功同步 = 采用：同账户+同品种另有活跃会话时账户仓位无法归属
+        #   （可能是别人的仓）→ 采用 0；否则采用账户真值（传统行为）；
+        #   后续同步 = 对账：外部来的仓位保持 0（绝不平别会话的仓），
+        #   账户仓位 < 台账 → 台账下钳（不得卖出超出账户持有的量）。
+        self._position_adopted: bool = False
+        self._last_actual_position: Decimal | None = None  # 账户级真值：卖出侧钳制依据
+        # 最近一次成功下发订单的实时时刻：区分「本会话在途单未成交」（交易所态滞后，
+        # 保持 0 属正常）与「真外部持仓」（告警+通知）。
+        self._last_order_dispatch_ts: float = 0.0
+        self._shared_account_notified: bool = False
+        self._foreign_position_notified: bool = False
         # 最近一次决策使用的 K 线 timestamp（用于识别"新 bar"→ 强制刷新持仓）
         self._last_bar_ts = None
 
@@ -140,8 +154,12 @@ class LiveStrategyRunner:
         K 线数据回调入口。
         由 DataFeed 收到新 K 线时调用。
 
+        @kline 流每次成交都推送（同一根 bar 内约 1~2 秒一次）：bar 内 tick
+        只更新历史，**K 线收盘（is_closed=True）才执行策略决策**，与回测的
+        逐 bar 契约一致（2026-10 修复：bar 内决策导致箱体策略频繁进出场）。
+
         Args:
-            kline: {open, high, low, close, volume, timestamp, ...}
+            kline: {open, high, low, close, volume, timestamp, is_closed, ...}
         """
         if not self._running:
             return
@@ -176,6 +194,16 @@ class LiveStrategyRunner:
         max_history = 500
         if len(self._kline_history) > max_history:
             self._kline_history = self._kline_history[-max_history:]
+
+        # 只在 K 线收盘时决策：@kline 流每次成交都推送（约 1~2 秒一次），若 bar 内
+        # tick 也跑完整决策，策略的「收盘价」语义会退化成实时价——2026-10 BNB/USDT
+        # 4h 的箱体上沿/中线在 bar 内被反复穿越，一周 10 次往返（含 2 分钟卖完再买）。
+        # 回测契约是「每根已收盘 K 线决策一次」，实盘对齐它；bar 内 tick 只更新历史。
+        # 需要 bar 内监控的策略走 SignalMonitor 验证通道（get_watch_signals）。
+        # 数据源契约：WS K 线必须携带 is_closed（Binance 的 k.x）；REST 预热拉取的
+        # K 线没有该字段，按未收盘处理、不触发决策。
+        if not kline.get("is_closed"):
+            return
 
         try:
             # per-session 并发控制：上一轮信号仍在处理时，丢弃本次 kline
@@ -268,6 +296,13 @@ class LiveStrategyRunner:
         2026-09-21（C 修复）：同步失败**不再静默按现有 ctx 继续**——置位
         `_position_synced=False`、记 ERROR、通知用户一次，决策路径据此跳过本轮。
         2026-09-27：失败→恢复的转换也配对一条通知（状态结束必须可见）。
+        2026-10-08（修复 2，2026-10-07 box 平掉 donchian 共享仓事故跟进）：
+        ctx.position 不再是「账户持仓」，而是**本会话的台账**——
+          - 首次成功同步 = 采用：同账户+同品种另有活跃会话时账户仓位无法
+            归属（可能是别人的仓）→ 采用 0 并通知；否则采用账户真值；
+          - 后续同步 = 对账：账户有持仓而本会话空仓 = 外部仓位（且不在
+            在途窗口内）→ 保持 0（绝不平别会话的仓）；账户仓位 < 台账
+            → 台账下钳（不得卖出超出账户持有的量）。
         """
         try:
             from apps.trading.executor import OrderExecutor
@@ -292,23 +327,74 @@ class LiveStrategyRunner:
             positions = await adapter.get_positions()
             symbol_norm = self.symbol.replace("/", "").upper()
 
+            actual_qty = Decimal("0")
             for pos in positions:
                 pos_symbol = pos.symbol.replace("/", "").upper()
                 if pos_symbol == symbol_norm:
                     actual_qty = pos.quantity if pos.side == "long" else -pos.quantity
+                    break
+
+            # 账户级真值：_target_to_order 卖出侧钳制的唯一依据
+            self._last_actual_position = actual_qty
+
+            if not self._position_adopted:
+                # —— 首次成功同步 = 采用 ——
+                self._position_adopted = True
+                conflict = await self._shared_account_conflict()
+                if conflict is not None:
+                    self.strategy.ctx.set_position(self.symbol, Decimal("0"))
+                    logger.warning(
+                        f"[LiveStrategyRunner] 共享账户+同品种会话 → 采用 "
+                        f"{self.symbol}=0（不采用账户真值 {actual_qty}）: {conflict}"
+                    )
+                    await self._notify_shared_account(conflict)
+                else:
                     self.strategy.ctx.set_position(self.symbol, actual_qty)
                     logger.info(
-                        f"[LiveStrategyRunner] position synced from exchange: "
+                        f"[LiveStrategyRunner] position adopted from exchange: "
                         f"{self.symbol} = {actual_qty}"
                     )
-                    await self._on_position_sync_ok()
-                    return True
-
-            # 没有找到持仓，确认为 0
-            self.strategy.ctx.set_position(self.symbol, Decimal("0"))
-            logger.info(
-                f"[LiveStrategyRunner] position synced from exchange: {self.symbol} = 0"
-            )
+            else:
+                # —— 后续同步 = 对账：只纠正「台账 vs 账户」的偏差，
+                # 绝不把别会话的仓采进自己的台账 ——
+                ctx_pos = self.strategy.ctx.position
+                if ctx_pos == Decimal("0") and actual_qty > Decimal("0"):
+                    # 账户有该品种持仓而本会话台账为 0。两种成因：
+                    #   a) 本会话刚下发的平仓单仍在途/未确认（交易所态滞后）
+                    #      → 外部持仓误报；
+                    #   b) 另一会话/手工的仓位（2026-10-07 box 平掉 donchian
+                    #      10401 仓的事故形态）。
+                    # 按距上次成功下发的实时间隔区分：在途窗口（与同步 TTL 同长）
+                    # 内静默保持 0；超出窗口才是真外部持仓 → 告警 + 通知一次。
+                    in_flight = (
+                        time.monotonic() - self._last_order_dispatch_ts
+                        < self.POSITION_SYNC_MIN_INTERVAL
+                    )
+                    if in_flight:
+                        logger.debug(
+                            f"[LiveStrategyRunner] 账户 {self.symbol}={actual_qty} "
+                            f"但台账=0，处于订单在途窗口 → 保持 0，不判外部持仓"
+                        )
+                    else:
+                        logger.warning(
+                            f"[LiveStrategyRunner] 检测到外部持仓: 账户 "
+                            f"{self.symbol}={actual_qty} 但本会话台账=0，"
+                            f"保持 0（不会平掉其他会话的仓位）"
+                        )
+                        await self._notify_foreign_position(actual_qty)
+                elif ctx_pos > Decimal("0") and actual_qty < ctx_pos:
+                    clamped = max(actual_qty, Decimal("0"))
+                    self.strategy.ctx.set_position(self.symbol, clamped)
+                    logger.warning(
+                        f"[LiveStrategyRunner] 账户仓位低于会话台账，下钳: "
+                        f"ctx {self.symbol} {ctx_pos} → {clamped} "
+                        f"(账户真值 {actual_qty})"
+                    )
+                else:
+                    logger.debug(
+                        f"[LiveStrategyRunner] position reconciled (no change): "
+                        f"ctx={ctx_pos} account={actual_qty}"
+                    )
             await self._on_position_sync_ok()
             return True
         except Exception as e:
@@ -384,6 +470,101 @@ class LiveStrategyRunner:
         except Exception as e:  # noqa: BLE001 - 通知失败不得影响主流程
             logger.error(
                 f"[LiveStrategyRunner] 持仓同步恢复通知写入失败 "
+                f"(user={self.user_id}): {e}"
+            )
+
+    async def _shared_account_conflict(self) -> str | None:
+        """同交易所账户 + 同品种上是否有另一活跃会话（running/paused）；
+        有则返回拒绝原因（与视图层 LiveSession.conflicting_active_session 同口径），
+        无则 None。
+
+        任何异常（无会话 id / 非 UUID / 账户行缺失 / DB 故障）一律返回 None →
+        退回传统采用行为：本方法只决定**首次**同步采用 0 还是账户真值，DB 抖动时
+        宁可按旧行为继续，也不阻断交易。
+        """
+        if not self.live_session_id:
+            return None
+        try:
+            uid = uuid.UUID(str(self.live_session_id))
+        except (ValueError, TypeError, AttributeError):
+            # 测试/独立 runner 的 "sess-1" 之类 id：库里无会话行，视为独立
+            return None
+        try:
+            from apps.core.db_utils import db_async
+            from apps.trading.models import LiveSession
+
+            def _check() -> str | None:
+                # 传 pk：runner 手里只有账户 id 字符串（classmethod 兼容 pk/实例；
+                # 账户行已删除时查询为空 → None → 传统采用）。
+                return LiveSession.conflicting_active_session(
+                    self.exchange_account_id, self.symbol, exclude_pk=uid
+                )
+
+            return await db_async(lambda: _check())()
+        except Exception as e:  # noqa: BLE001 - 冲突检查失败不得阻断同步主流程
+            logger.warning(
+                f"[LiveStrategyRunner] 共享账户冲突检查失败，退回传统采用: {e}"
+            )
+            return None
+
+    async def _notify_shared_account(self, reason: str) -> None:
+        """一次性通知：启动时发现另一活跃会话占用同账户+同品种，本会话按 0 采用。
+
+        本会话不会再依据别会话的仓位下单、更不会再平掉它（2026-10-07 box
+        平掉 donchian 10401 仓的事故正源于「账户级仓位 + close_position」）。
+        在用户停掉另一会话并重启本会话之前，本会话对该品种始终空仓。
+        """
+        if self._shared_account_notified or not self.user_id:
+            return
+        self._shared_account_notified = True
+        try:
+            from apps.core.db_utils import db_async
+            from apps.notify.models import Notification
+
+            await db_async(
+                lambda: Notification.objects.create(
+                    user_id=self.user_id,
+                    channel="web",
+                    message=(
+                        f"⚠️ {self.symbol} 共享账户持仓冲突：{reason}"
+                        f"本会话已按空仓处理，不会开/平其他会话的仓位；"
+                        f"如需本会话交易该品种，请先停止另一会话再重启本会话"
+                    ),
+                )
+            )()
+        except Exception as e:  # noqa: BLE001 - 通知失败不得影响主流程
+            logger.error(
+                f"[LiveStrategyRunner] 共享账户冲突通知写入失败 "
+                f"(user={self.user_id}): {e}"
+            )
+
+    async def _notify_foreign_position(self, actual_qty: Decimal) -> None:
+        """一次性通知：账户存在不属于本会话的该品种持仓（手工/另一会话）。
+
+        本会话台账保持 0、绝不碰它，但用户必须知情：无人管理的持仓正是
+        2026-10-07 事故里「跌穿才触发」的前置状态。
+        """
+        if self._foreign_position_notified or not self.user_id:
+            return
+        self._foreign_position_notified = True
+        try:
+            from apps.core.db_utils import db_async
+            from apps.notify.models import Notification
+
+            await db_async(
+                lambda: Notification.objects.create(
+                    user_id=self.user_id,
+                    channel="web",
+                    message=(
+                        f"⚠️ {self.symbol} 检测到非本会话持仓：账户现有 "
+                        f"{actual_qty}，本会话未参与开仓；本会话已按空仓处理、"
+                        f"不会平掉该仓位。如属误开请自行处理"
+                    ),
+                )
+            )()
+        except Exception as e:  # noqa: BLE001 - 通知失败不得影响主流程
+            logger.error(
+                f"[LiveStrategyRunner] 外部持仓通知写入失败 "
                 f"(user={self.user_id}): {e}"
             )
 
@@ -574,12 +755,34 @@ class LiveStrategyRunner:
         )
 
     def _target_to_order(self, target: "PortfolioTarget") -> "OrderSignal | None":
-        """将目标持仓差量转化为订单信号"""
+        """将目标持仓差量转化为订单信号。
+
+        卖出侧钳制（2026-10-08 修复 2）：ctx.position 是会话级台账，可能**大于**
+        账户真值（另一会话平掉/部分平掉过）。卖量 = min(台账差量, 最近同步的
+        账户真值)——否则超出部分在 reduceOnly 下变反向开仓（2026-09-20
+        -17718 空头事故），或平掉别会话的仓位。账户真值已 0 时跳过订单
+        （台账会在下次同步被下钳）。
+        """
         diff = target.target_quantity - self.strategy.ctx.position
         if diff == 0:
             return None
         if diff > 0:
             return self.strategy.ctx.buy(diff, signal_name=target.reason)
+        sell_qty = abs(diff)
+        actual = self._last_actual_position
+        if actual is not None and actual < sell_qty:
+            clamped = max(actual, Decimal("0"))
+            if clamped == Decimal("0"):
+                logger.info(
+                    f"[LiveStrategyRunner] 卖单被账户真值钳制为 0，跳过订单: "
+                    f"ledger={abs(diff)} account={actual} ({self.symbol})"
+                )
+                return None
+            logger.warning(
+                f"[LiveStrategyRunner] 卖单按账户真值钳制: "
+                f"ledger={abs(diff)} → {clamped} ({self.symbol})"
+            )
+            sell_qty = clamped
         # 卖到空仓 = 平仓：策略侧 close_position() 的意图在 Phase 2 转目标持仓时
         # 丢了（Insight/PortfolioTarget 没有这个字段，见 base.construct_portfolio），
         # 这里按「目标=空仓」还原。下游两处依赖它：跳过 RiskGuard（signals.py /
@@ -587,7 +790,7 @@ class LiveStrategyRunner:
         # 「重复平仓单变反向开仓」的唯一交易所级兜底（2026-09-27 BNB 双平手账）。
         is_close = target.target_quantity == Decimal("0")
         return self.strategy.ctx.sell(
-            abs(diff), signal_name=target.reason, is_close_position=is_close
+            sell_qty, signal_name=target.reason, is_close_position=is_close
         )
 
     async def _dispatch_targets(
@@ -637,6 +840,9 @@ class LiveStrategyRunner:
                 # （2026-09-27 BNB 双平手账）。若订单实际被交易所拒单，最迟 15s
                 # 后（或下一根新 bar 的强制同步）重取真值，偏差有界。
                 self._last_position_sync_ts = time.monotonic()
+                # 对账侧的在途窗口依据：平仓单在途期间「账户仍有持仓而台账=0」
+                # 是本单未成交，不是外部持仓（否则误报，见 _sync_position_from_exchange）
+                self._last_order_dispatch_ts = time.monotonic()
                 if target.target_quantity <= 0:
                     self._entry_direction.pop(target.symbol, None)
                 else:

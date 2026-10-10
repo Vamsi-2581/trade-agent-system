@@ -29,7 +29,7 @@ import {
   type Order,
   type Strategy,
 } from "@/lib/api";
-import { formatNumber, formatPnl } from "@/lib/format";
+import { formatNumber, formatOrderPnl, formatPnl } from "@/lib/format";
 
 /** 打开时取一次；`running`/`paused` 的数字还在变，跟随页面同样的节奏刷新。
  *  其余状态（`stopped`/`error`/`pending`）不轮询——那些数字不会再变了。 */
@@ -73,10 +73,24 @@ function fmtTime(value: string): string {
   });
 }
 
-/** 金额：null 一律「—」（不是 0）。正负号与配色走 `lib/format` 的统一口径。 */
-function Amount({ value, size = "sm" }: { value: string | null; size?: "sm" | "lg" }) {
+/**
+ * 金额：null 一律「—」（不是 0）。正负号与配色走 `lib/format` 的统一口径。
+ *
+ * `order` 用于订单流水：开仓成交的已实现盈亏在交易所口径里就是 0，显示成
+ * `+0.00` 会让每张进场单看起来像打平的平仓单，因此那一栏走 `formatOrderPnl`
+ * （0 也当空）。会话合计、持仓盈亏这类「0 是真数」的地方不带 `order`。
+ */
+function Amount({
+  value,
+  size = "sm",
+  order = false,
+}: {
+  value: string | null;
+  size?: "sm" | "lg";
+  order?: boolean;
+}) {
   if (value === null) return <span className="font-mono text-text3">—</span>;
-  const pnl = formatPnl(value);
+  const pnl = order ? formatOrderPnl(value) : formatPnl(value);
   return (
     <span className={`font-mono font-semibold ${size === "lg" ? "text-sm" : "text-[11px]"} ${pnl.color}`}>
       {pnl.text}
@@ -562,7 +576,7 @@ export default function SessionDetailModal({
                           {formatNumber(o.filled_quantity, 4)}
                         </td>
                         <td className="py-2 px-3 text-right">
-                          <Amount value={o.realized_pnl} />
+                          <Amount value={o.realized_pnl} order />
                         </td>
                         <td className="py-2 px-3 text-center">
                           <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-bg2 text-text3">

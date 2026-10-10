@@ -22,3 +22,24 @@ export function formatPnl(value: string | number): { text: string; color: string
     color: num >= 0 ? "text-green" : "text-red",
   };
 }
+
+/**
+ * **订单行**的已实现盈亏展示口径：`0` 与 `null` 一视同仁，都显示「—」。
+ *
+ * 交易所的 `userTrades.realizedPnl` 对开仓成交就是 `0`——它说的是「这笔不产生
+ * 已实现盈亏」，不是「恰好打平」。落库以交易所为准记成 0 是对的（对账要能逐字
+ * 比对，见 `reconcile_realized_pnl_from_exchange`），但显示成 `+0.00` 会让每一张
+ * 进场单看起来像一笔打平的平仓单。真正打平的平仓单本就罕见，且它的 0 也是
+ * 「无盈亏可言」，因此这一层统一按空处理。
+ *
+ * 注意：**只用于订单流水**。持仓的未实现盈亏、会话合计这类「0 是真数」的地方
+ * 仍走 `formatPnl`。
+ */
+export function formatOrderPnl(
+  value: string | number | null,
+): { text: string; color: string } {
+  if (value === null || value === "") return { text: "—", color: "text-text3" };
+  const num = typeof value === "string" ? parseFloat(value) : value;
+  if (isNaN(num) || num === 0) return { text: "—", color: "text-text3" };
+  return formatPnl(num);
+}

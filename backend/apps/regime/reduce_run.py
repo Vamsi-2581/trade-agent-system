@@ -1270,6 +1270,24 @@ async def _execute_symbol(
         )
         result = await reduce.place_reduce_shard(adapter, shard)
         results.append(result)
+        # 落库（fix 2）：自动减仓成交也要有 Order 行（口径同 positions.py 的手动平仓）。
+        # **落库失败不得让减仓失败**——子单已经发出去了，异常只会把一次已发生的动作
+        # 读成「减仓过程中断」。只 warning，`RegimeReduceRecord.sub_orders` 仍有留痕。
+        try:
+            from apps.trading import reduce_ledger
+
+            await reduce_ledger.persist_reduce_order(
+                plan.account,
+                shard,
+                result,
+                adapter=adapter,
+                trigger=reduce_ledger.TRIGGER_REGIME_REDUCE,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "[Reduce] %s %s 减仓成交落库失败：%s", plan.label, symbol, result.exchange_order_id,
+                exc_info=True,
+            )
         if result.status == reduce.SHARD_STATUS_UNFINISHED:
             # 可能有一张活单。**立刻收手**：下一片会再开一个新敞口，而这一单的下场还未知。
             break
