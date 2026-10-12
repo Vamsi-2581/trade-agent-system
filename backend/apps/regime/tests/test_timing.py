@@ -120,6 +120,7 @@ class TestSignedCandleIsTheLastClosedOne(TestCase):
 
 def run_heartbeat(
     *,
+    candles_error=None,
     judgement_error=None,
     deactivation_error=None,
     shadow_error=None,
@@ -127,13 +128,15 @@ def run_heartbeat(
 ):
     """跑一次 `snapshot_daily_equity` 的任务体，返回按序记录的事件名。
 
-    五个被调用方都是**函数内 import**（任务模块不在 import 期就把交易/判定链路拉起来），
+    六个被调用方都是**函数内 import**（任务模块不在 import 期就把交易/判定链路拉起来），
     所以替身要打在**源模块**上，而不是 ``tasks`` 模块的属性上——``tasks`` 上根本没有
     这些名字。
 
-    `run_deactivation` 也一定要换成替身，而不是让它真跑：它内部会走
-    `deactivation_run.managed_set()` → `ensure_strategies_discovered()`，那是**进程级
-    副作用**，会把宿主机那份策略目录拖进注册表，让本模块的结论取决于运行环境。
+    `sync_daily_candles` 一定要换成替身：它是这条链里**唯一会发网络请求**的一步，
+    真跑等于把交易所 API 拉进一条调度顺序测试。其余各段的理由同理——
+    `run_deactivation` 内部会走 `deactivation_run.managed_set()` →
+    `ensure_strategies_discovered()`，那是**进程级副作用**，会把宿主机那份策略目录拖进
+    注册表，让本模块的结论取决于运行环境。
 
     `write_shadow_record` 同理换成替身：它要读判定记录、写 Shadow 记录（本模块只关心
     **调度顺序**，让它真跑等于把 DB 拉进来，而它的正确性由 `test_shadow.py` 自己盯）。
@@ -141,7 +144,8 @@ def run_heartbeat(
     `test_report.py` 盯。**而且它非换不可**：这一段的 `finally` 里有
     `close_old_connections()`，让真的写一次会把本用例所处的事务连接在断言之前收掉。
     """
-    from apps.regime import deactivation_run, judgement, report, shadow
+    from apps.regime import candles, deactivation_run, judgement, report, shadow
+    from apps.regime.candles import SyncReport
     from apps.trading import daily_snapshot, tasks
 
     events: list[str] = []
@@ -151,6 +155,28 @@ def run_heartbeat(
     async def fake_snapshot():
         events.append("snapshot")
         return snapshot
+
+    def fake_candles(*args, **kwargs):
+        events.append("candles")
+        if candles_error is not None:
+            raise candles_error
+        # 全零报告：``wrote`` 为 0（不触发落库日志），``last_date`` 为 None，
+        # 走的是任务体真正会调的 ``.wrote`` 与 ``last_date.isoformat() if … else None`` 两条路径
+        return SyncReport(
+            symbol="BTC/USDT",
+            requested_start=None,
+            requested_end=None,
+            fetched=0,
+            accepted=0,
+            incomplete=0,
+            out_of_range=0,
+            created=0,
+            updated=0,
+            unchanged=0,
+            first_date=None,
+            last_date=None,
+            dry_run=False,
+        )
 
     def fake_judgement(*args, **kwargs):
         events.append("judgement")
@@ -179,6 +205,7 @@ def run_heartbeat(
 
     with (
         patch.object(daily_snapshot, "write_daily_snapshots", new=fake_snapshot),
+        patch.object(candles, "sync_daily_candles", new=fake_candles),
         patch.object(judgement, "run_daily_judgement", new=fake_judgement),
         patch.object(deactivation_run, "run_deactivation", new=fake_deactivation),
         patch.object(shadow, "write_shadow_record", new=fake_shadow),
@@ -209,7 +236,7 @@ class TestJudgementRidesTheSnapshotHeartbeat(TestCase):
         """
         self.assertEqual(
             self._run_task(),
-            ["snapshot", "judgement", "deactivation", "shadow", "report"],
+            ["snapshot", "candles", "judgement", "deactivation", "shadow", "report"],
         )
 
     def test_a_failing_judgement_still_stops_the_task(self):
@@ -218,7 +245,7 @@ class TestJudgementRidesTheSnapshotHeartbeat(TestCase):
         失败是**期望**行为：心跳 5 分钟后再来一次，判定写入是幂等的 `get_or_create`，
         属 CONTEXT.md「读安全」那一类，可以无脑重试；而吞掉异常等于判定静默死掉。
         """
-        from apps.regime import judgement
+        from apps.regime import candles, judgement
         from apps.trading import daily_snapshot, tasks
 
         snapshot = MagicMock()
@@ -229,10 +256,43 @@ class TestJudgementRidesTheSnapshotHeartbeat(TestCase):
                 "write_daily_snapshots",
                 new=AsyncMock(return_value=snapshot),
             ),
+            # 续拉也必须换掉：真身会读库、且库里若有数据就会真发网络请求——这条用例
+            # 只关心「判定失败往上抛」，别让 candles 一步把它变成环境相关的测试。
+            # 返回值不被检视（任务在判定处就抛了），MagicMock 的自动属性足够。
+            patch.object(candles, "sync_daily_candles", new=MagicMock()),
             patch.object(judgement, "run_daily_judgement", side_effect=RuntimeError("boom")),
         ):
             with self.assertRaises(RuntimeError):
                 tasks.snapshot_daily_equity.run()
+
+
+class TestTheCandleSyncRidesTheSameHeartbeat(TestCase):
+    """日线续拉搭在同一条心跳上，且**排在快照之后、判定之前**（第①段判定取数前置）。
+
+    它与其它四段的关键差别是**失败不上抛**：取不到新日线是「上游数据暂不可得」，
+    不是代码故障。保持上一有效状态的降级由判定的 ``stale_candles`` / ``no_candles``
+    收场承担，日报会明写「今日判定缺失」；若这里往上抛，等于让一个数据源抖动就能掐断
+    日报这条「被看见」的渠道。
+    """
+
+    def test_the_heartbeat_runs_the_candle_sync(self):
+        self.assertIn("candles", run_heartbeat()[0])
+
+    def test_a_failing_candle_fetch_does_not_stop_the_task(self):
+        """续拉抛 ``CandleFetchError`` 时任务**不得**失败，且要一直跑到日报。
+
+        与判定/推导/Shadow/日报四段相反：那几段失败上抛是**期望**，这里失败上抛才是
+        bug——它会让这一轮日报不发，而日报正是「今日判定缺失」这句话的正经出口。
+        """
+        from apps.regime.candles import CandleFetchError
+
+        events, payload = run_heartbeat(candles_error=CandleFetchError("boom"))
+        # 链条必须完整跑到底：日报这一环被触达了
+        self.assertIn("candles", events)
+        self.assertEqual(events[-1], "report")
+        # 判定照跑（按库内现状降级），日报照发
+        self.assertEqual(payload["regime"]["skipped"], "no_candles")
+        self.assertTrue(payload["report"]["written"])
 
 
 class TestDeactivationRidesTheSameHeartbeat(TestCase):

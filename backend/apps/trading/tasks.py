@@ -84,6 +84,13 @@ def snapshot_daily_equity(self) -> dict:
     异常时不能连带吞掉它。判定本身失败（而不是数据不足）才往上抛——心跳 5 分钟
     后再来一次，判定写入是幂等的 ``get_or_create``，属 CONTEXT.md「读安全」那一类，
     重试无副作用；吞掉异常则会让判定静默死掉。
+
+    快照与判定之间还插一步**日线续拉**（``sync_daily_candles``）：判定只读库里已落的
+    日线，这一步把库内数据续到最新已收盘日，判定才不会天天停在「数据不新鲜」的降级
+    收场。续拉失败（取不到新数据）**不往上抛**：那是「上游数据暂不可得」，不是代码故障，
+    保持上一有效状态的降级由判定的 ``stale_candles`` / ``no_candles`` 收场承担，日报会
+    明写「今日判定缺失」；抛了反而让这一轮日报不发，等于掐断了本该看见这句话的渠道。
+    库表为空（冷启动未回填）是状态问题同样不抛。
     """
     from apps.trading.daily_snapshot import write_daily_snapshots
 
@@ -99,6 +106,34 @@ def snapshot_daily_equity(self) -> dict:
     payload = result.as_dict()
     if result.users:
         logger.info("[snapshot_daily_equity] %s", payload)
+
+    from apps.regime.candles import CandleFetchError, sync_daily_candles
+
+    try:
+        candle_report = sync_daily_candles()
+    except CandleFetchError as e:
+        # 拉不到新日线是上游数据暂不可得，不是代码故障：不抛。抛了会让这一轮日报不发，
+        # 而「今日判定缺失」正是日报要写出来的话；保持上一有效状态的降级由判定的
+        # stale_candles / no_candles 收场承担（见 apps.regime.judgement）。
+        logger.error(
+            "[snapshot_daily_equity] 日线续拉失败，判定按库内现状继续: %s", e, exc_info=True
+        )
+    except ValueError as e:
+        # 表为空：冷启动回填还没跑，是状态问题不是故障；判定的 no_candles 收场会说出来
+        logger.warning("[snapshot_daily_equity] 日线表为空，跳过续拉（需人工回填）: %s", e)
+    else:
+        # 日期序列化成 ISO 字符串：返回值进 Celery 结果，须恒为 JSON 安全
+        payload["candles"] = {
+            "created": candle_report.created,
+            "updated": candle_report.updated,
+            "unchanged": candle_report.unchanged,
+            "last_date": candle_report.last_date.isoformat() if candle_report.last_date else None,
+        }
+        # 无新数据的一轮（日频运行最常见的一支）不落日志，免得 5 分钟一条刷屏
+        if candle_report.wrote:
+            logger.info("[snapshot_daily_equity] 日线续拉 %s", candle_report.summary())
+    finally:
+        close_old_connections()
 
     from apps.regime.judgement import run_daily_judgement
 

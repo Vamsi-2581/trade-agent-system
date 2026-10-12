@@ -400,23 +400,46 @@ class TestTaskWiring(unittest.TestCase):
     def test_task_runs_the_writer(self):
         """任务体必须真的调到写入方，而不是只返回一个空 dict。
 
-        判定、停用决策推导、Shadow 记录写入、日报生成也一并替掉：四者都读 DB（日线 /
-        池化表 / 判定记录 / 日报表），而这里是 ``unittest.TestCase``，不该为一条接线
-        测试去开数据库。五者之间的先后由 ``apps.regime.tests.test_timing`` 负责，这里
-        只确认五条职责都被调到、都进了返回值。
+        日线续拉、判定、停用决策推导、Shadow 记录写入、日报生成也一并替掉：五者都碰
+        DB（日线表 / 池化表 / 判定记录 / 日报表），而这里是 ``unittest.TestCase``，
+        不该为一条接线测试去开数据库；续拉更要换掉——它是这条链里**唯一会发网络请求**
+        的一步，真跑等于把交易所 API 拉进一条接线测试。六者之间的先后由
+        ``apps.regime.tests.test_timing`` 负责，这里只确认六条职责都被调到、都进了返回值。
 
         替身打在**源模块**上：任务体是函数内 import（不在 import 期就把交易/判定
-        链路拉起来），``apps.trading.tasks`` 上根本没有这五个名字。
+        链路拉起来），``apps.trading.tasks`` 上根本没有这六个名字。
         """
+        from apps.regime.candles import SyncReport
         from apps.trading.tasks import snapshot_daily_equity
 
         fake = MagicMock()
         fake.as_dict.return_value = {"users": 1, "written": 1}
+        # 真身是 frozen dataclass，这里照实构造：``wrote`` 与 ``last_date.isoformat()``
+        # 走的是任务体真的会调的那两条路径
+        candle_report = SyncReport(
+            symbol="BTC/USDT",
+            requested_start=date(2026, 9, 22),
+            requested_end=date(2026, 9, 22),
+            fetched=1,
+            accepted=1,
+            incomplete=0,
+            out_of_range=0,
+            created=1,
+            updated=0,
+            unchanged=0,
+            first_date=date(2026, 9, 22),
+            last_date=date(2026, 9, 22),
+            dry_run=False,
+        )
         with (
             patch(
                 "apps.trading.daily_snapshot.write_daily_snapshots",
                 new=AsyncMock(return_value=fake),
             ) as writer,
+            patch(
+                "apps.regime.candles.sync_daily_candles",
+                new=MagicMock(return_value=candle_report),
+            ) as candles_sync,
             patch(
                 "apps.regime.judgement.run_daily_judgement",
                 new=MagicMock(return_value={"skipped": "no_candles"}),
@@ -451,6 +474,7 @@ class TestTaskWiring(unittest.TestCase):
             payload = snapshot_daily_equity()
 
         writer.assert_awaited_once()
+        candles_sync.assert_called_once()
         judgement.assert_called_once()
         deactivation.assert_called_once()
         shadow.assert_called_once()
@@ -471,6 +495,7 @@ class TestTaskWiring(unittest.TestCase):
             {
                 "users": 1,
                 "written": 1,
+                "candles": {"created": 1, "updated": 0, "unchanged": 0, "last_date": "2026-09-22"},
                 "regime": {"skipped": "no_candles"},
                 "deactivation": {
                     "skipped": "no_generation",
@@ -483,7 +508,7 @@ class TestTaskWiring(unittest.TestCase):
                     "note": "今日判定尚无结论，且未到日报截止时刻，本轮不写日报",
                 },
             },
-            "返回值是任务健康检查唯一看得到的东西，五条职责都必须在里面；"
+            "返回值是任务健康检查唯一看得到的东西，六条职责都必须在里面；"
             "`skipped`/`note` 尤其不能丢——「日志不算被看见」，那句话的正经出口是日报",
         )
 
