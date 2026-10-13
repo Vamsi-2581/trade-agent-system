@@ -968,6 +968,7 @@ class HaltTrigger(str, Enum):
     BLANKET = "blanket"  # 保命档（高波动）
     EVENT = "event_breaker"  # 事件熔断
     DEACTIVATION = "deactivation"  # 策略停用决策（第③段）
+    MANUAL = "manual"  # 手动熔断（ADR 0001 承诺的手动触发入口，2026-10-12 兑现）
 
     @property
     def display(self) -> str:
@@ -982,6 +983,7 @@ _HALT_TRIGGER_DISPLAY = {
     HaltTrigger.BLANKET: "保命档（高波动）",
     HaltTrigger.EVENT: "事件熔断",
     HaltTrigger.DEACTIVATION: "策略停用决策",
+    HaltTrigger.MANUAL: "手动熔断",
 }
 
 

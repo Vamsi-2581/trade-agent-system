@@ -94,7 +94,7 @@ from typing import Any, Sequence
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from apps.regime import events, gate_switch, halt, halt_sync
+from apps.regime import events, gate_switch, halt, halt_sync, manual_halt
 from apps.regime.models import HaltDeclaration, HaltTrigger
 from apps.trading.models import LiveSession
 
@@ -261,6 +261,8 @@ def _period_line(row: HaltDeclaration) -> str:
       它的截止条件**说得出来**（阶段离开高波动），所以说出来。
     - 策略停用那一档的解除条件有好几个（阶段离开 / 判据翻面 / 豁免 / 开关回 Shadow），
       一句说不完，所以它留着「截止时刻不定」。
+    - 手动熔断的截止条件只有一个人（操作者），但若带着自带时长就**两头都在日历上**——
+      那种情形说两头，与起止都由人定的「截止时刻不定」要能分辨。
 
     这一分岔与 `_headline` 是**同一个**（三档各自「已生效 / 已解除」还是「窗口已开启 /
     窗口已结束」）：标题说「已生效」而正文说「窗口：… 起」，读的人会去猜这两句说的是不是
@@ -276,6 +278,10 @@ def _period_line(row: HaltDeclaration) -> str:
         return f"窗口：{start} → {events.format_moment(row.expires_at)}"
     if trigger is HaltTrigger.BLANKET:
         return f"生效：{start} 起（随阶段离开高波动而结束）"
+    if trigger is HaltTrigger.MANUAL:
+        if row.expires_at is None:
+            return f"生效：{start} 起（到人工解除为止）"
+        return f"生效：{start} → {events.format_moment(row.expires_at)}"
     return f"生效：{start} 起（截止时刻不定）"
 
 
@@ -311,8 +317,11 @@ def _close_reason_display(row: HaltDeclaration) -> str:
     认不出的码两条路都原样返回（`close_reason_display` 的口径），所以路由写错只会错在
     同名的那一个码上，正是最难靠肉眼发现的那一个。
     """
-    if halt.trigger_of(row) is HaltTrigger.DEACTIVATION:
+    trigger = halt.trigger_of(row)
+    if trigger is HaltTrigger.DEACTIVATION:
         return gate_switch.gate_close_reason_display(row.closed_reason)
+    if trigger is HaltTrigger.MANUAL:
+        return manual_halt.close_reason_display(row.closed_reason)
     return halt_sync.close_reason_display(row.closed_reason)
 
 

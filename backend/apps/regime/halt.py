@@ -74,16 +74,22 @@ _STRATEGY_PREFIX = "strategy:"
 
 # 触发源 → 管着它的开关；`None` = 没有开关，永远作数。
 #
-# **`BLANKET` 映射到 `None` 是刻意的、也是本表唯一一处不对称**：行情阶段 gate 那个开关
-# （`REGIME_GATE`）要到第③段才接线，若把保命档挂在它下面，保命档就会被一个「默认关」
-# 的开关关掉——而保命档是「高波动算生效」的，它不需要任何人确认。
+# **`BLANKET` 映射到 `None` 是刻意的**：行情阶段 gate 那个开关（`REGIME_GATE`）要到第③段
+# 才接线，若把保命档挂在它下面，保命档就会被一个「默认关」的开关关掉——而保命档是
+# 「高波动算生效」的，它不需要任何人确认。
 #
-# `DEACTIVATION` 指向第③段的开关，现在先写下来：让「策略档的声明归哪个源」有唯一答案
-# （Q3 的判据要用到触发源），也免得第③段为了补一行映射又动一次迁移。
+# **`MANUAL` 也映射到 `None`，但理由相反**：保命档不需要确认就生效，手动熔断是**人当场
+# 确认过才生效**的——触发方（`actor`）与原因已经留在声明行上，再套一层机制开关等于让
+# 一个没参与这次决定的状态否决一个已经认领决定的人。Shadow 的「只记录、不真拦」约束的是
+# **机制**的自动行为；manage.py manual_halt 是人在机制之外亲手按下的停止，不受它辖制。
+#
+# `DEACTIVATION` 指向第③段的开关：让「策略档的声明归哪个源」有唯一答案（Q3 的判据要用到
+# 触发源），也免得第③段为了补一行映射又动一次迁移。
 HALT_TRIGGER_SWITCH: dict[HaltTrigger, MechanismKind | None] = {
     HaltTrigger.BLANKET: None,
     HaltTrigger.EVENT: MechanismKind.EVENT_BREAKER,
     HaltTrigger.DEACTIVATION: MechanismKind.REGIME_GATE,
+    HaltTrigger.MANUAL: None,
 }
 
 
@@ -201,7 +207,8 @@ def switch_open(
     **这是「哪个开关管哪条线」的唯一换算口**，所以它是公开的：读侧（``blocking_declarations``
     ——「此刻挡不挡得住一张单」）与写侧（``reduce_run``——「此刻该不该真的对市场动手」）
     问的是同一个问题，各自去查一遍 ``HALT_TRIGGER_SWITCH`` 就是给这张表造第二个答案。
-    而这张表里有一处**刻意的不对称**（``BLANKET → None``，见上面的注释），第二个答案
+    而这张表里有**两处刻意的不对称**（``BLANKET → None`` 与 ``MANUAL → None``，见上面的
+    注释），第二个答案
     分叉的表现就是保命档被某个「默认关」的开关关掉——那正是注释里说要避免的事。
 
     ``cache`` 是可选的一次求值内共享缓存（按 ``kind`` 缓存）。**不要**在这里做模块级缓存：

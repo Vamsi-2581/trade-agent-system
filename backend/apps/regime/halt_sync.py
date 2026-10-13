@@ -166,6 +166,11 @@ def close_reason_display(reason: str) -> str:
 # **它不是「每一轮都对账这些」**：每一轮对账哪几档由那轮的入参决定（见 `sync` 的
 # `gate_plan`），因为三档的期望集来自两处互不相干的计算、也由两个 300 秒任务分别驱动。
 # 一个任务只碰自己那一档，这张表就不会出现两个写方抢同一把唯一键的局面。
+#
+# **`MANUAL`（手动熔断）刻意不在其中**：它的写方是 `apps/regime/manual_halt.py`（人工入口），
+# 活到人工解除（或自带 `expires_at` 到点失效）为止——「自动解除的存在本身就是给『没人记得
+# 清了』开门」，这条理由写在那边的模块 docstring 里。对账收到这种行时照实跳过：`_reconcile`
+# 第一道 `trigger not in _OWNED_TRIGGERS` 分支会原样留着它们，既不算「计划里没有」也不报解除。
 _OWNED_TRIGGERS = (HaltTrigger.EVENT, HaltTrigger.BLANKET, HaltTrigger.DEACTIVATION)
 
 
