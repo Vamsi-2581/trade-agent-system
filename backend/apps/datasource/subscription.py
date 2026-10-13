@@ -87,7 +87,9 @@ class DataSubscriptionManager:
         )
 
         # 锁
-        self._lock = threading.Lock()
+        # RLock（而非 Lock）：unsubscribe_user() 持锁后调用 unsubscribe()，
+        # 后者会再次加同一把锁；非可重入锁会导致自死锁（真实复现，栈见 262 测试）。
+        self._lock = threading.RLock()
 
         # Redis 连接
         self._redis: Optional[redis.Redis] = None
