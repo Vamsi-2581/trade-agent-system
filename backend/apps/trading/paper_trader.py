@@ -5,7 +5,6 @@
 """
 
 import logging
-from datetime import date
 from decimal import Decimal
 from typing import Dict, Tuple
 from dataclasses import dataclass
@@ -34,84 +33,43 @@ class PaperTrader:
         self._positions: Dict[str, Position] = {}
         self._balances: Dict[str, Decimal] = {"USDT": Decimal("10000")}  # 初始资金
         self._order_id_counter = 0
-        # 风控：日内交易次数追踪
-        self._daily_trade_count = 0
-        self._trade_date = None
 
     # ─── 风控前置校验 ───────────────────────────────────────────────────────────
 
     def _get_riskguard(self):
-        """尝试获取 RiskGuard 单例，不可用时返回 None"""
+        """获取 RiskGuard 单例，不可用时返回 None"""
         try:
             from apps.riskguard.guard import RiskGuard
 
             return RiskGuard.get_instance()
         except ImportError:
-            logger.warning("[PaperTrader] RiskGuard not available, using hardcoded checks")
+            logger.warning("[PaperTrader] RiskGuard not available")
             return None
 
-    async def _pre_trade_risk_check(
-        self, request: OrderRequest
-    ) -> Tuple[bool, str]:
+    async def _pre_trade_risk_check(self, request: OrderRequest) -> Tuple[bool, str]:
         """
         下单前风控校验，返回 (approved, reason)。
-        优先使用 RiskGuard，不可用时 fallback 到硬编码检查。
+
+        只有一套风控实现（架构评审 #5）：RiskGuard。guard 本体对「查不出状态」
+        的取向是 fail-closed，这个入口对「guard 不可用 / 校验抛错」的取向必须
+        一致——拒单，而不是回落到第二套风控。曾经的硬编码 fallback（≤30次/日、
+        ≤20%、无 halt）在 guard 失效时悄悄降低风控标准，正是「guard 兜底家族
+        fail-open」的第二个成员，已随本次收口删除。
         """
         riskguard = self._get_riskguard()
-        if riskguard is not None:
-            try:
-                approved, reason = await riskguard.pre_trade_check(
-                    request, "paper_trader"
-                )
-                if not approved:
-                    return False, f"RiskGuard拒绝: {reason}"
-                return True, "OK"
-            except Exception as e:
-                logger.warning(
-                    f"[PaperTrader] RiskGuard check error, falling back to hardcoded: {e}"
-                )
-        return await self._hardcoded_risk_check(request)
-
-    async def _hardcoded_risk_check(
-        self, request: OrderRequest
-    ) -> Tuple[bool, str]:
-        """硬编码 fallback 风控：仓位≤20%，日内≤30次"""
-        # 1. 日内交易次数检查
-        today = date.today()
-        if self._trade_date != today:
-            self._trade_date = today
-            self._daily_trade_count = 0
-        if self._daily_trade_count >= 30:
-            return False, f"日内交易次数已达上限 30"
-
-        # 2. 仓位上限检查（≤总资产20%）
-        total_assets = self._calculate_total_assets()
-        if total_assets > 0:
-            if request.order_type == "market" and request.price is None:
-                price = Decimal("50000")  # 市价单保守估计
-            else:
-                price = request.price or Decimal("0")
-            order_value = request.quantity * price
-            ratio = order_value / total_assets
-            if ratio > Decimal("0.20"):
-                return False, f"单笔仓位 {ratio:.1%} 超过上限 20%"
-
+        if riskguard is None:
+            return False, "RiskGuard 不可用，纸面单按保守方向拒单（fail-closed）"
+        try:
+            approved, reason = await riskguard.pre_trade_check(request, "paper_trader")
+        except Exception as e:
+            logger.error(
+                f"[PaperTrader] RiskGuard check error — 按保守方向拒单: {e}",
+                exc_info=True,
+            )
+            return False, "RiskGuard 校验异常，纸面单按保守方向拒单（fail-closed）"
+        if not approved:
+            return False, f"RiskGuard拒绝: {reason}"
         return True, "OK"
-
-    def _calculate_total_assets(self) -> Decimal:
-        """计算当前总资产（余额 + 持仓市值）"""
-        total = self._balances.get("USDT", Decimal("0"))
-        for pos in self._positions.values():
-            total += pos.quantity * pos.avg_price
-        return total
-
-    def _increment_daily_trade_count(self):
-        """递增日内交易计数"""
-        today = date.today()
-        if self._trade_date != today:
-            self._trade_date = today
-            self._daily_trade_count = 0
-        self._daily_trade_count += 1
 
     async def start(self):
         """启动纸面交易模拟器"""
@@ -133,16 +91,14 @@ class PaperTrader:
         if not approved:
             self._order_id_counter += 1
             order_id = f"paper_{self._order_id_counter}"
-            logger.warning(
-                f"[PaperTrader] order rejected by risk check: {reason}"
-            )
+            logger.warning(f"[PaperTrader] order rejected by risk check: {reason}")
             return OrderResponse(
                 exchange_order_id=order_id,
                 status="rejected",
-                filled_quantity=Decimal("0"),
-                average_fill_price=Decimal("0"),
+                filled_qty=Decimal("0"),
+                avg_price=Decimal("0"),
                 fee=Decimal("0"),
-                timestamp=None,
+                raw={},
             )
 
         self._order_id_counter += 1
@@ -152,17 +108,16 @@ class PaperTrader:
         executed = await self._execute_order(request)
 
         if executed:
-            self._increment_daily_trade_count()
             logger.info(
                 f"[PaperTrader] order executed: {request.symbol} {request.side} {request.quantity}"
             )
             return OrderResponse(
                 exchange_order_id=order_id,
                 status="filled",
-                filled_quantity=request.quantity,
-                average_fill_price=request.price or Decimal("0"),
+                filled_qty=request.quantity,
+                avg_price=request.price or Decimal("0"),
                 fee=Decimal("0"),
-                timestamp=None,
+                raw={},
             )
         else:
             logger.info(
@@ -171,10 +126,10 @@ class PaperTrader:
             return OrderResponse(
                 exchange_order_id=order_id,
                 status="rejected",
-                filled_quantity=Decimal("0"),
-                average_fill_price=Decimal("0"),
+                filled_qty=Decimal("0"),
+                avg_price=Decimal("0"),
                 fee=Decimal("0"),
-                timestamp=None,
+                raw={},
             )
 
     async def _execute_order(self, request: OrderRequest) -> bool:

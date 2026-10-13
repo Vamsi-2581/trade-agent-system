@@ -179,12 +179,11 @@ class _FakeAdapter:
 
 
 class _FakeExecutor:
-    """复用真实的按账户 id 解析逻辑（_resolve_adapter）。"""
+    """复用真实的按账户 id 解析逻辑（resolve_adapter）。"""
 
-    _resolve_adapter = OrderExecutor._resolve_adapter
+    resolve_adapter = OrderExecutor.resolve_adapter
 
     def __init__(self, adapter):
-        self._adapters = {"binance": adapter}
         self._account_adapters = {"acct-1": adapter}
 
 

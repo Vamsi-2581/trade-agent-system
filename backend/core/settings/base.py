@@ -27,7 +27,6 @@ INSTALLED_APPS = [
     "apps.skill",
     "apps.exchange",
     "apps.trading",
-    "apps.risk",
     "apps.riskguard",
     "apps.backtest",
     "apps.memory",

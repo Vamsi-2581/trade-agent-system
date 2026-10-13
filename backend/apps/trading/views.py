@@ -152,16 +152,16 @@ def position_list(request):
             }
         )
 
-    # 按**账户**遍历，不按交易所名：`_adapters` 以交易所名为键，同交易所有两个活跃
-    # 账户时它只留最后一个，于是两个账户的持仓都会记在那个账户名下（原先这里是
-    # `exchange -> account_id` 手工反查，同样是后写覆盖）。账户地图才是每个账户各自
-    # 的适配器，`exchange_account_id` 也就直接是键本身。
+    # 按**账户**遍历，走 `OrderExecutor.account_adapters()` 这个公开 interface：
+    # 同一交易所有两个活跃账户时，按交易所名索引的表只留最后一个，于是两个账户的持仓
+    # 都会记在那个账户名下（原先这里是 `exchange -> account_id` 手工反查，同样是后写
+    # 覆盖）。账户地图才是每个账户各自的适配器，`exchange_account_id` 直接是键本身。
     account_by_id = {
         str(acc.id): acc for acc in ExchangeAccount.objects.filter(is_active=True)
     }
 
     all_positions = []
-    for account_id, adapter in executor._account_adapters.items():
+    for account_id, adapter in executor.account_adapters().items():
         account = account_by_id.get(account_id)
         if account is None:
             # 适配器还在但账户已停用/删除：不猜它的交易所名，跳过。
@@ -217,7 +217,7 @@ def account_list(request):
     executor = OrderExecutor.get_instance()
     balances = {}
     if executor and executor._running:
-        for account_id, adapter in executor._account_adapters.items():
+        for account_id, adapter in executor.account_adapters().items():
             try:
                 balance = async_to_sync(adapter.get_balance)()
                 # balance is dict[str, Decimal], e.g. {"USDT": Decimal("100.0")}

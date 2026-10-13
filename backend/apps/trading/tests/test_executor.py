@@ -18,7 +18,7 @@ class TestOrderExecutorL2(unittest.TestCase):
         self.executor = OrderExecutor()
         self.executor._running = True
         self.executor._riskguard = None
-        self.executor._adapters = {}
+        self.executor._account_adapters = {}
 
     def tearDown(self):
         OrderExecutor._instance = None
@@ -50,7 +50,7 @@ class TestOrderExecutorL2(unittest.TestCase):
 
     def test_submit_order_requires_adapter(self):
         """submit_order() 在 adapter 不存在时抛 ValueError"""
-        self.executor._adapters = {}
+        self.executor._account_adapters = {}
         self.executor._riskguard = None
         with self.assertRaises(ValueError):
             asyncio.run(
@@ -68,7 +68,7 @@ class TestOrderExecutorL2(unittest.TestCase):
     def test_submit_order_riskguard_rejection(self):
         """RiskGuard 拒绝时抛 PermissionError"""
         mock_adapter = AsyncMock()
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
 
         mock_riskguard = AsyncMock()
         mock_riskguard.pre_trade_check.return_value = (False, "日内交易次数已达上限")
@@ -96,7 +96,7 @@ class TestOrderExecutorL2(unittest.TestCase):
         mock_response.exchange_order_id = "123456"
         mock_response.status = "NEW"
         mock_adapter.place_order.return_value = mock_response
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
         self.executor._riskguard = None  # 跳过风控
 
         # Mock Order.objects.create
@@ -131,7 +131,7 @@ class TestOrderExecutorL2(unittest.TestCase):
         mock_response.status = "NEW"
         mock_response.filled_qty = None
         mock_adapter.place_order.return_value = mock_response
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
         self.executor._riskguard = None  # 跳过风控
 
         mock_strategy = MagicMock()
@@ -172,7 +172,7 @@ class TestOrderExecutorL2(unittest.TestCase):
         mock_response.status = "NEW"
         mock_response.filled_qty = None
         mock_adapter.place_order.return_value = mock_response
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
         self.executor._riskguard = None
 
         mock_order = MagicMock()
@@ -201,7 +201,7 @@ class TestOrderExecutorL2(unittest.TestCase):
         """交易所发送失败时订单状态应更新为 failed"""
         mock_adapter = AsyncMock()
         mock_adapter.place_order.side_effect = Exception("network error")
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
         self.executor._riskguard = None
 
         mock_order = MagicMock()
@@ -229,44 +229,69 @@ class TestOrderExecutorL2(unittest.TestCase):
         """cancel_order() 在未运行时抛 RuntimeError"""
         self.executor._running = False
         with self.assertRaises(RuntimeError):
-            asyncio.run(self.executor.cancel_order("binance", "123", "BTCUSDT"))
+            asyncio.run(self.executor.cancel_order("acc-1", "123", "BTCUSDT"))
 
     def test_cancel_order_no_adapter(self):
-        """cancel_order() 在 adapter 不存在时抛 ValueError"""
-        self.executor._adapters = {}
+        """cancel_order() 在账户没有适配器时抛 ValueError"""
+        self.executor._account_adapters = {}
         with self.assertRaises(ValueError):
-            asyncio.run(self.executor.cancel_order("binance", "123", "BTCUSDT"))
+            asyncio.run(self.executor.cancel_order("acc-1", "123", "BTCUSDT"))
+
+    def test_read_interfaces_take_an_account_not_an_exchange_name(self):
+        """三个读接口的首参是**账户 id**；传交易所名不再解析出任何东西。
+
+        2026-10-12 收口：原先首参是交易所名，按名字索引的表在「同一交易所两个账户」
+        时只留最后加载的那个，于是撤单/查持仓会落到**别人**的账户上。现在传
+        "binance" 只会得到一个「账户 binance 没有适配器」的 ValueError——fail-loud，
+        而不是静默拿错账户。
+        """
+        adapter = AsyncMock()
+        self.executor._account_adapters = {"acc-1": adapter}
+
+        self.assertEqual(
+            asyncio.run(self.executor.get_positions("acc-1")), adapter.get_positions.return_value
+        )
+        adapter.get_positions.assert_awaited_once()
+        asyncio.run(self.executor.get_balance("acc-1"))
+        adapter.get_balance.assert_awaited_once()
+        asyncio.run(self.executor.cancel_order("acc-1", "123", "BTCUSDT"))
+        adapter.cancel_order.assert_awaited_once_with("123", "BTCUSDT")
+
+        with self.assertRaises(ValueError):
+            asyncio.run(self.executor.get_positions("binance"))
+        with self.assertRaises(ValueError):
+            asyncio.run(self.executor.get_balance("binance"))
 
     def test_get_positions_requires_running(self):
         """get_positions() 在未运行时抛 RuntimeError"""
         self.executor._running = False
         with self.assertRaises(RuntimeError):
-            asyncio.run(self.executor.get_positions("binance"))
+            asyncio.run(self.executor.get_positions("acc-1"))
 
     def test_get_balance_requires_running(self):
         """get_balance() 在未运行时抛 RuntimeError"""
         self.executor._running = False
         with self.assertRaises(RuntimeError):
-            asyncio.run(self.executor.get_balance("binance"))
+            asyncio.run(self.executor.get_balance("acc-1"))
 
     def test_shutdown_resets_instance(self):
         """shutdown() 应重置单例"""
         mock_adapter = AsyncMock()
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
         self.executor._running = True
         OrderExecutor._instance = self.executor
 
         asyncio.run(self.executor.shutdown())
 
         self.assertFalse(self.executor._running)
-        self.assertEqual(len(self.executor._adapters), 0)
+        self.assertEqual(len(self.executor._account_adapters), 0)
         self.assertIsNone(OrderExecutor._instance)
 
     def test_shutdown_disconnects_all_adapters(self):
         """shutdown() 应断开所有 adapter"""
         mock_adapter1 = AsyncMock()
         mock_adapter2 = AsyncMock()
-        self.executor._adapters = {"binance": mock_adapter1, "okx": mock_adapter2}
+        self.executor._account_adapters = {"acc-1": mock_adapter1, "acc-2": mock_adapter2}
         self.executor._running = True
         OrderExecutor._instance = self.executor
 

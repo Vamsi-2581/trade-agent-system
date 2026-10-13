@@ -5,7 +5,6 @@ import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
 import {
   exchangeApi,
-  riskApi,
   scheduledTaskApi,
   signalMonitorApi,
   memoryApi,
@@ -13,7 +12,6 @@ import {
   Memory,
   SignalMonitor,
   ScheduledTask,
-  RiskConfig as RiskConfigType,
   FeishuAuthStatus,
 } from "@/lib/api";
 
@@ -45,14 +43,6 @@ export default function SettingsPage() {
     created_at: string;
   }[]>([]);
 
-  // Risk settings - from backend
-  const [riskConfig, setRiskConfig] = useState<RiskConfigType | null>(null);
-  const [maxPosition, setMaxPosition] = useState("35");
-  const [maxDrawdown, setMaxDrawdown] = useState("8");
-  const [varLimit, setVarLimit] = useState("3.0");
-  const [stopLoss, setStopLoss] = useState("2.0");
-  const [autoStop, setAutoStop] = useState(true);
-
   // Scheduled tasks - from backend
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
@@ -73,20 +63,11 @@ export default function SettingsPage() {
   const [qrUrl, setQrUrl] = useState<string>("");
   const [authMode, setAuthMode] = useState<"qr" | "url">("qr");
 
-  // Load existing exchange accounts and risk config
+  // Load existing exchange accounts
   const loadInitialData = useCallback(async () => {
     try {
-      const [accounts, risk] = await Promise.all([
-        exchangeApi.getAccounts(),
-        riskApi.getConfig(),
-      ]);
+      const accounts = await exchangeApi.getAccounts();
       setExistingAccounts(accounts);
-      setRiskConfig(risk);
-      if (risk.max_position_pct) setMaxPosition(String(risk.max_position_pct));
-      if (risk.max_drawdown_pct) setMaxDrawdown(String(risk.max_drawdown_pct));
-      if (risk.var_limit_pct) setVarLimit(String(risk.var_limit_pct));
-      if (risk.stop_loss_pct) setStopLoss(String(risk.stop_loss_pct));
-      if (risk.auto_stop !== undefined) setAutoStop(risk.auto_stop);
     } catch {
       // API not available or error - use defaults
     }
@@ -279,26 +260,6 @@ export default function SettingsPage() {
     }
   };
 
-  const handleRiskSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      await riskApi.updateConfig({
-        max_position_pct: parseFloat(maxPosition),
-        max_drawdown_pct: parseFloat(maxDrawdown),
-        var_limit_pct: parseFloat(varLimit),
-        stop_loss_pct: parseFloat(stopLoss),
-        auto_stop: autoStop,
-      });
-      showSaved();
-      loadInitialData();
-    } catch (err) {
-      alert(`保存失败: ${err instanceof Error ? err.message : "未知错误"}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleDeleteAccount = async (id: string) => {
     if (!confirm("确定要删除该交易所账户吗？此操作不可撤销。")) {
       return;
@@ -335,7 +296,6 @@ export default function SettingsPage() {
   const TABS = [
     { key: "general", label: "通用" },
     { key: "exchange", label: "交易所" },
-    { key: "risk", label: "风控" },
     { key: "scheduled", label: "定时任务" },
     { key: "signals", label: "信号监控" },
     { key: "memory", label: "记忆" },
@@ -624,132 +584,6 @@ export default function SettingsPage() {
               </form>
             </div>
           </div>
-        )}
-
-        {activeTab === "risk" && (
-          <form onSubmit={handleRiskSave} className="p-5 flex flex-col gap-4">
-            <div className="text-xs font-semibold text-text mb-1">
-              风控参数
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className={labelClass}>最大仓位集中度 (%)</label>
-                <input
-                  type="number"
-                  value={maxPosition}
-                  onChange={(e) => setMaxPosition(e.target.value)}
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label className={labelClass}>最大回撤限额 (%)</label>
-                <input
-                  type="number"
-                  value={maxDrawdown}
-                  onChange={(e) => setMaxDrawdown(e.target.value)}
-                  className={inputClass}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className={labelClass}>日 VaR 限额 (%)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={varLimit}
-                  onChange={(e) => setVarLimit(e.target.value)}
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label className={labelClass}>止损阈值 (%)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={stopLoss}
-                  onChange={(e) => setStopLoss(e.target.value)}
-                  className={inputClass}
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-text font-semibold">自动风控</div>
-                <div className="text-[10px] text-text3">
-                  触发风控条件时自动平仓
-                </div>
-              </div>
-              <label className="relative w-8 h-[18px]">
-                <input
-                  type="checkbox"
-                  className="hidden"
-                  checked={autoStop}
-                  onChange={() => setAutoStop(!autoStop)}
-                />
-                <div
-                  className={`absolute inset-0 rounded-[9px] cursor-pointer transition-all before:content-[''] before:absolute before:w-3 before:h-3 before:left-0.5 before:top-0.5 before:rounded-full before:bg-text3 before:transition-all before:duration-200 ${
-                    autoStop
-                      ? "!bg-green-dim !border-green before:!translate-x-[14px] before:!bg-green"
-                      : "bg-bg border border-[rgba(255,255,255,0.12)]"
-                  }`}
-                  style={autoStop ? { borderColor: "var(--color-green)" } : {}}
-                />
-              </label>
-            </div>
-
-            {/* Current risk status - show live data from backend */}
-            {riskConfig && (
-              <div className="bg-bg2 border border-[rgba(255,255,255,0.07)] rounded-lg p-4 mt-2">
-                <div className="text-[10px] text-text3 uppercase tracking-wider font-semibold mb-2">
-                  当前风控状态
-                </div>
-                <div className="grid grid-cols-4 gap-3">
-                  <div>
-                    <div className="text-[9px] text-text3">仓位集中度</div>
-                    <div className="font-mono text-sm font-semibold text-amber">
-                      {riskConfig.max_position_pct.toFixed(1)}%
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] text-text3">最大回撤</div>
-                    <div className="font-mono text-sm font-semibold text-amber">
-                      {riskConfig.max_drawdown_pct.toFixed(1)}%
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] text-text3">日VaR</div>
-                    <div className="font-mono text-sm font-semibold text-amber">
-                      {riskConfig.var_limit_pct.toFixed(1)}%
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] text-text3">自动风控</div>
-                    <div
-                      className={`font-mono text-sm font-semibold ${
-                        riskConfig.auto_stop ? "text-green" : "text-red"
-                      }`}
-                    >
-                      {riskConfig.auto_stop ? "开启" : "关闭"}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="flex justify-end">
-              <button
-                type="submit"
-                disabled={loading}
-                className="bg-green text-black text-xs font-semibold px-5 py-2 rounded-lg hover:opacity-85 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? "保存中..." : "保存风控配置"}
-              </button>
-            </div>
-          </form>
         )}
 
         {activeTab === "account" && (

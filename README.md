@@ -55,7 +55,7 @@ trade_agent_sys/
 │   │   ├── memory/           # 分层记忆管理器 (L1/L2/L3)
 │   │   ├── exchange/         # 交易所账户管理 (CCXT + Fernet)
 │   │   ├── trading/          # Order, Strategy 模型 & 视图
-│   │   ├── risk/             # RiskEvent, RiskConfig
+│   │   ├── riskguard/        # 风控守卫 + RiskEvent 档案（旧 apps/risk 已摘除）
 │   │   ├── backtest/         # BacktestResult
 │   │   ├── channel/          # Telegram Channel 适配器
 │   │   └── notify/           # 通知管理

@@ -12,12 +12,13 @@
 
 ## 为什么不用 ``OrderExecutor``
 
-``OrderExecutor.cancel_order`` / ``get_positions`` / ``get_balance`` 全部按**交易所名**
-解析适配器（``self._adapters.get(exchange)``）。同一家交易所挂两个账户时，以名为键的
-字典会互相顶掉（后加载的赢），拿它去撤另一个账户的单会撤到别人头上、查另一个账户的
-持仓会把「一半」算在错的仓位上。**减仓的目标是账户**（ADR 0003 / CONTEXT.md:117），
-所以这一层一律按 ``ExchangeAccount`` 构造适配器，走 ``pending_reconcile``
-已经铺好的那条路（``build_account_adapter``）。
+``OrderExecutor.cancel_order`` / ``get_positions`` / ``get_balance`` 现在也一律按**账户 id**
+解析适配器（2026-10-12 收口，见 ``OrderExecutor.resolve_adapter``），所以「拿错账户」不再是
+理由。这一层仍然自己构造适配器的理由是**它不需要一个跑着的框架**：机械层要能被单独测
+（一个假适配器走完撤单与分片的每条分支），而 ``OrderExecutor`` 是随 FrameManager 懒加载的
+单例，取不到就什么都做不了。**减仓的目标是账户**（ADR 0003 / CONTEXT.md:117），所以这一层
+一律按 ``ExchangeAccount`` 构造适配器，走 ``pending_reconcile`` 已经铺好的那条路
+（``build_account_adapter``）。
 
 ## ``reduce_only`` 与 ``client_order_id`` 是同级硬前置（CONTEXT.md:128）
 

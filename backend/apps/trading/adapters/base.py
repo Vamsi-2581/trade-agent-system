@@ -26,7 +26,7 @@ class OrderRequest:
     take_profit: Optional[Decimal] = None
     client_order_id: Optional[str] = None
     # 下单所依据的 ExchangeAccount.id。风控前置校验要拿它去解析**本单要用的那个**
-    # 适配器（`OrderExecutor._resolve_adapter`）——按交易所名解析在同交易所有两个
+    # 适配器（`OrderExecutor.resolve_adapter`）——按交易所名解析在同交易所有两个
     # 账户时会拿到另一个账户的余额当分母，于是仓位上限是用别人的钱算出来的。
     exchange_account_id: Optional[str] = None
     # 只减不增。**自动减仓的硬前置**：本地没有持仓表，持仓只存在于交易所侧，一旦

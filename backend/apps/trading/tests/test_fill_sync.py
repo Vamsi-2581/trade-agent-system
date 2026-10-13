@@ -47,7 +47,7 @@ class TestSubmitImmediateFill(unittest.TestCase):
         self.executor = OrderExecutor()
         self.executor._running = True
         self.executor._riskguard = None
-        self.executor._adapters = {}
+        self.executor._account_adapters = {}
 
     def tearDown(self):
         OrderExecutor._instance = None
@@ -65,7 +65,7 @@ class TestSubmitImmediateFill(unittest.TestCase):
         mock_response.filled_qty = Decimal("100")
         mock_response.avg_price = Decimal("0.1099")
         mock_adapter.place_order.return_value = mock_response
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"acc-1": mock_adapter}
 
         mock_order = MagicMock()
         mock_order.id = "order-uuid-1"
@@ -101,7 +101,7 @@ class TestSubmitImmediateFill(unittest.TestCase):
         mock_response.filled_qty = Decimal("40")
         mock_response.avg_price = Decimal("0.11")
         mock_adapter.place_order.return_value = mock_response
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"acc-1": mock_adapter}
 
         mock_order = MagicMock()
         mock_order.id = "order-uuid-1"
@@ -133,7 +133,7 @@ class TestSubmitImmediateFill(unittest.TestCase):
         mock_response.filled_qty = Decimal("0")
         mock_response.avg_price = None
         mock_adapter.place_order.return_value = mock_response
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"acc-1": mock_adapter}
 
         mock_order = MagicMock()
         mock_order.id = "order-uuid-1"
@@ -163,7 +163,7 @@ class TestFillSyncLoop(unittest.TestCase):
         self.executor = OrderExecutor()
         self.executor._running = True
         self.executor._riskguard = None
-        self.executor._adapters = {}
+        self.executor._account_adapters = {}
 
     def tearDown(self):
         OrderExecutor._instance = None
@@ -182,7 +182,7 @@ class TestFillSyncLoop(unittest.TestCase):
             filled_quantity=Decimal("100"),
             avg_fill_price=Decimal("0.1099"),
         )
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"acc-1": mock_adapter}
 
         asyncio.run(self.executor._sync_active_orders())
 
@@ -209,7 +209,7 @@ class TestFillSyncLoop(unittest.TestCase):
             filled_quantity=Decimal("100"),
             avg_fill_price=Decimal("0.1099"),
         )
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"acc-1": mock_adapter}
 
         asyncio.run(self.executor._sync_active_orders())
 
@@ -225,7 +225,7 @@ class TestFillSyncLoop(unittest.TestCase):
 
         mock_adapter = AsyncMock()
         mock_adapter.fetch_order.side_effect = OrderNotFoundError("order gone")
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"acc-1": mock_adapter}
 
         asyncio.run(self.executor._sync_active_orders())
 
@@ -243,7 +243,7 @@ class TestFillSyncLoop(unittest.TestCase):
 
         mock_adapter = AsyncMock()
         mock_adapter.fetch_order.side_effect = RuntimeError("network down")
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"acc-1": mock_adapter}
 
         asyncio.run(self.executor._sync_active_orders())
 
@@ -263,7 +263,7 @@ class TestFillSyncLoop(unittest.TestCase):
             filled_quantity=Decimal("70"),
             avg_fill_price=Decimal("0.11"),
         )
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"acc-1": mock_adapter}
 
         asyncio.run(self.executor._sync_active_orders())
 

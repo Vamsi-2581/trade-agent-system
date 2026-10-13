@@ -17,10 +17,10 @@
 **扫描范围严格限定 ``exchange_order_id == ""`` 的活跃订单**：已经有交易所 ID 的行
 属于成交同步，不属于这里。
 
-**适配器按订单自己的账户解析，不按交易所名**：``OrderExecutor._adapters`` 以交易所
-名为键，同一交易所挂两个账户时会互相顶掉（后加载的赢），用它去查另一个账户的单
-会拿到假的 ``OrderNotFoundError``，进而把一张活着的单标成 cancelled。本模块一律
-按 ``exchange_account_id`` 构造/缓存适配器。
+**适配器按订单自己的账户解析，不按交易所名**：按交易所名索引会把同交易所的两个账户
+混成一个（拿别人的单去查），于是拿到假的 ``OrderNotFoundError``，进而把一张活着的单
+标成 cancelled。本模块一律按 ``exchange_account_id`` 构造/缓存适配器；这与
+``OrderExecutor.resolve_adapter``（账户是唯一口径）是同一个判据。
 """
 
 from __future__ import annotations

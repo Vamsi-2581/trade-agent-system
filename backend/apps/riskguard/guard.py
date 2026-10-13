@@ -2,7 +2,9 @@
 RiskGuard - 风控守卫
 
 前置校验（pre_trade_check）：
-- 停止判定（halt 状态机，ADR 0001）——**只管开新仓，减仓放行**
+- 豁免：reduce_only（平仓 / 减仓）单 → 整单免风控。豁免语义**只在这里定义**，
+  入口（executor / signals）只传标志、不预跳过（CONTEXT.md「平仓放行标记」）
+- 停止判定（halt 状态机，ADR 0001）——只查开新仓
 - 单笔仓位上限
 - 最大回撤限制
 - 日内交易次数
@@ -88,7 +90,9 @@ class RiskGuard:
 
     _instance: "RiskGuard | None" = None
 
-    # 风控阈值（可由管理员通过 RiskConfig 覆盖）
+    # 风控阈值。曾经有一条「可由管理员通过 RiskConfig 覆盖」的注释，但实现从未存在
+    # ——那个配置面 guard 从不读取（2026-10-12 随 apps.risk 摘除）。现在这四个类常量
+    # 就是阈值的唯一配置面，想改它们只有一个定义可改。
     MAX_POSITION_RATIO = Decimal("0.20")  # 单仓不超过总资产20%
     MAX_DAILY_DRAWDOWN = Decimal("0.05")  # 日内最大回撤5%
     MAX_DAILY_TRADES = 50  # 日内最大交易次数
@@ -135,7 +139,10 @@ class RiskGuard:
         返回 (approved, reason)，approved=False 时 OrderExecutor 禁止下单。
 
         校验顺序：
-        0. 停止判定（halt 状态机；**只拦开新仓，减仓单连查都不查**）
+        - 豁免（不算步）：reduce_only → 整单免风控，直接放行。「这张单拦不拦」只有
+          一个答案，豁免语义只在这里定义——入口（executor / signals）不再预跳过，
+          只传标志。
+        0. 停止判定（halt 状态机，只查开新仓）
         1. 熔断器检查（已禁用，ADR 0001）
         2. 日内交易次数
         3. 仓位上限
@@ -149,32 +156,43 @@ class RiskGuard:
         """
         logger.info(f"[RiskGuard] pre_trade_check: {request.symbol} {request.side}")
 
-        # 0. 停止判定（halt 状态机，第②段接线）
+        # 豁免（唯一定义，唯一实现）：reduce_only → 整单免风控。
+        #
+        # 「这张单拦不拦」只能有一个答案。2026-10-12 合一前是三个：executor / signals
+        # 两个入口对平仓单整段预跳过 guard，而这里的分支只免 halt、次数/仓位/回撤仍查
+        # （且生产上那个分支只有测试在钉）。现在入口不再预跳过，只传标志，豁免边界由
+        # `test_guard_halt.py::TestReduceOnly` 钉死——未来任何新入口把标志传进来都得到
+        # 同一个答案，不会再踩出第三种口径。
+        #
+        # 整单免的原因：熔断想停的是「加仓」，减仓是熔断时唯一想让它动起来的事
+        # （CONTEXT.md:47）；按人的额度（次数/仓位/回撤）问的是「这个人还能不能开新仓」，
+        # 减仓单不是开仓。查库失败（下面的 fail-closed）同样只约束开仓单：数据库挂了
+        # 不能拦一次减仓。
         if request.reduce_only:
-            # 减仓单整段跳过，连查都不查：熔断想停的是「加仓」，而减仓是熔断时唯一想让它
-            # 动起来的事（CONTEXT.md:47）。查了再放行也能得到同样的结果，但那会让下面
-            # 「查询失败按保守方向处理」不得不为减仓再写一条例外——例外写在判定里，
-            # 不如写在入口。
-            logger.info("[RiskGuard] step 0: 减仓单（reduce_only），跳过停止判定")
-        else:
-            logger.info("[RiskGuard] step 0: halt 状态机判定")
-            try:
-                halt_reason = await self._halt_block_reason(request)
-            except Exception:  # noqa: BLE001 - 查不出来时的取向由下面这行决定
-                # **fail-closed**：查不到状态就按「可能在拦」处理。反方向（查不到就放行）
-                # 会让「数据库挂了」变成一次无声的机制失效——而那正是熔断最需要生效的时刻。
-                halt_reason = HALT_LOOKUP_FAILED_REASON
-                logger.error(
-                    "[RiskGuard] step 0 停止判定查询失败，按保守方向处理（拒开仓）",
-                    exc_info=True,
-                )
-            if halt_reason:
-                logger.warning(f"[RiskGuard] REJECTED: {halt_reason}")
-                # 无 user_id 时不走 `_reject`：那条路要发通知，而「发给谁」这里答不出来。
-                # 判定的结果不变（仍然是拒绝），只是没人可告知。
-                if user_id:
-                    return await self._reject(user_id, halt_reason)
-                return False, halt_reason
+            logger.info(
+                f"[RiskGuard] {request.symbol} {request.side} reduce_only — 整单免除前置校验"
+            )
+            return True, "OK"
+
+        # 0. 停止判定（halt 状态机，第②段接线）
+        logger.info("[RiskGuard] step 0: halt 状态机判定")
+        try:
+            halt_reason = await self._halt_block_reason(request)
+        except Exception:  # noqa: BLE001 - 查不出来时的取向由下面这行决定
+            # **fail-closed**：查不到状态就按「可能在拦」处理。反方向（查不到就放行）
+            # 会让「数据库挂了」变成一次无声的机制失效——而那正是熔断最需要生效的时刻。
+            halt_reason = HALT_LOOKUP_FAILED_REASON
+            logger.error(
+                "[RiskGuard] step 0 停止判定查询失败，按保守方向处理（拒开仓）",
+                exc_info=True,
+            )
+        if halt_reason:
+            logger.warning(f"[RiskGuard] REJECTED: {halt_reason}")
+            # 无 user_id 时不走 `_reject`：那条路要发通知，而「发给谁」这里答不出来。
+            # 判定的结果不变（仍然是拒绝），只是没人可告知。
+            if user_id:
+                return await self._reject(user_id, halt_reason)
+            return False, halt_reason
 
         if not user_id:
             return True, "OK"
@@ -186,6 +204,10 @@ class RiskGuard:
         # 在声明表里，两边对不上。要它重新具备停机能力，路径是让它去投递声明，不是在这
         # 里加回一个 if。`apps/riskguard/tests/test_guard.py` 有一条测试钉的就是「它根本
         # 没被问过」，而不是「它打开时不拒单」。
+        #
+        # 手动触发那条线已于 2026-10-12 兑现（ADR 0001 的欠账）：`manage.py manual_halt`
+        # → `apps/regime/manual_halt.trip` → 一行 ``HaltTrigger.MANUAL`` 声明，拦单走的
+        # 正是上面第 0 步的停止判定，与事件熔断同一个口——不是这里。
         logger.info(f"[RiskGuard] step 1: circuit breaker (disabled)")
 
         # 2. 日内交易次数
@@ -351,8 +373,12 @@ class RiskGuard:
         `OrderExecutor.submit_order` 用的是同一个口径）。此前按**交易所名**取
         `executor._adapters`：同一交易所挂两个账户时那张表里只有「最后加载的」那个，
         于是给 A 账户下的单可能拿 B 账户的余额当分母——仓位上限被算成了别人的钱，
-        而且两边日志都写着 binance，看不出来。拿不到账户 id 的调用方（纸面交易）
-        仍走 `_resolve_adapter` 的遗留回退，取不到适配器就放行（与旧行为一致）。
+        而且两边日志都写着 binance，看不出来。
+
+        2026-10-12：改走 `OrderExecutor.resolve_adapter()` 这个**公开** interface，
+        不再跨 app 摸私有方法；按名字索引的那张表也已删除，所以「拿不到账户 id 的
+        调用方（纸面交易）」现在**拿不到适配器**→ 放行（与旧行为一致），而不是退回
+        按交易所名解析（那会拿到同交易所另一个账户的余额）。
         """
         from apps.trading.executor import OrderExecutor
 
@@ -360,8 +386,8 @@ class RiskGuard:
         if not executor:
             return True, ""
 
-        adapter = executor._resolve_adapter(
-            request.exchange, getattr(request, "exchange_account_id", None)
+        adapter = executor.resolve_adapter(
+            getattr(request, "exchange_account_id", None)
         )
         if not adapter:
             return True, ""
@@ -499,10 +525,14 @@ class RiskGuard:
     async def _check_floating_pnl(self) -> None:
         """浮亏超阈值时发送告警
 
-        2026-09-22：遍历改用 `OrderExecutor._unique_adapters()`（账户地图为超集，
-        标签形如 ``binance#<账户id>``）。此前遍历 `executor._adapters`——那张表按
-        **交易所名**索引，同一交易所的两个活跃账户里只有一个在里面，于是另一个账户的
-        持仓**永远不会被巡检**，浮亏到了阈值也没人告警，而日志上看不出少了什么。
+        2026-09-22：遍历改用账户级适配器清单（标签形如 ``binance#<账户id>``）。
+        此前遍历 `executor._adapters`——那张表按**交易所名**索引，同一交易所的两个
+        活跃账户里只有一个在里面，于是另一个账户的持仓**永远不会被巡检**，浮亏到了
+        阈值也没人告警，而日志上看不出少了什么。
+
+        2026-10-12：改走 `OrderExecutor.iter_adapters()` 这个**公开** interface，
+        不再跨 app 摸私有方法；那张按名字索引的表已删除，所以「每个账户都被巡检」
+        现在是**结构上**成立的，不再依赖「账户地图是超集」这个隐含前提。
         """
         from apps.trading.executor import OrderExecutor
 
@@ -510,7 +540,7 @@ class RiskGuard:
         if not executor:
             return
 
-        for target, adapter in executor._unique_adapters():
+        for target, adapter in executor.iter_adapters():
             try:
                 positions = await adapter.get_positions()
             except Exception as e:
@@ -573,7 +603,7 @@ class RiskGuard:
     ) -> None:
         """记录风控事件到数据库"""
         try:
-            from apps.risk.models import RiskEvent
+            from apps.riskguard.models import RiskEvent
 
             @db_async
             def create():

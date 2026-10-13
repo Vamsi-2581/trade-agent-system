@@ -25,13 +25,14 @@ from apps.trading.executor import OrderExecutor
 
 
 def _executor_with(adapter) -> OrderExecutor:
-    """真 OrderExecutor，只手工填适配器地图（其余加载流程要连 DB 与交易所）。
+    """真 OrderExecutor，只手工填账户适配器地图（其余加载流程要连 DB 与交易所）。
 
-    用真对象而不是 MagicMock：`_unique_adapters()` 里「账户地图与交易所名地图怎么
-    合并、谁被顶掉」正是「哪个账户会被巡检」的那一环，替身自己实现一份就测不到它。
+    用真对象而不是 MagicMock：`iter_adapters()` 给出的标签（``binance#acct-1``）正是
+    「哪个账户会被巡检、日志里怎么分辨」的那一环，替身自己实现一份就测不到它。
     """
     executor = OrderExecutor()
-    executor._adapters = {"binance": adapter}
+    executor._account_adapters = {"acct-1": adapter}
+    executor._account_exchanges = {"acct-1": "binance"}
     return executor
 
 
@@ -99,9 +100,12 @@ class TestGuardFailureDiagnostics(unittest.IsolatedAsyncioTestCase):
 class TestFloatingPnlCoversEveryAccount(unittest.IsolatedAsyncioTestCase):
     """浮亏巡检必须覆盖**每个账户**，而不只是每个交易所名（2026-09-22）。
 
-    旧实现遍历 `executor._adapters`（按交易所名索引）。同一交易所有两个活跃账户时
-    那张表里只有最后加载的那个，另一个账户的持仓**永远不被巡检**——浮亏超阈值也没有
-    告警，日志上还看不出少了什么。这与成交同步按账户分组修掉的是同一类错误。
+    旧实现遍历一张按**交易所名**索引的表。同一交易所有两个活跃账户时那张表里只有
+    最后加载的那个，另一个账户的持仓**永远不被巡检**——浮亏超阈值也没有告警，日志上
+    还看不出少了什么。这与成交同步按账户分组修掉的是同一类错误。
+
+    2026-10-12：那张按名字索引的表已删除，`iter_adapters()` 只遍历账户地图，所以
+    「每个账户都被巡检」现在是**结构上**成立的。
     """
 
     def tearDown(self):
@@ -117,10 +121,9 @@ class TestFloatingPnlCoversEveryAccount(unittest.IsolatedAsyncioTestCase):
 
         executor = OrderExecutor()
         executor._account_adapters = {"acct-1": dead, "acct-2": live}
-        # `_load_adapters` 加载时顺手记下的账户→交易所：被顶掉的那个账户不在
-        # `_adapters` 里，交易所名只能从这里来。
+        # `_load_adapters` 加载时顺手记下的账户→交易所：适配器自己不记得交易所名，
+        # 标签里的那一段只能从这里来。
         executor._account_exchanges = {"acct-1": "binance", "acct-2": "binance"}
-        executor._adapters = {"binance": live}  # 后加载的把 dead 顶掉
 
         with patch(
             "apps.trading.executor.OrderExecutor.get_instance", return_value=executor
@@ -135,7 +138,7 @@ class TestFloatingPnlCoversEveryAccount(unittest.IsolatedAsyncioTestCase):
         )
         live.get_positions.assert_awaited_once()
         self.assertEqual(
-            [label for label, _ in executor._unique_adapters()],
+            [label for label, _ in executor.iter_adapters()],
             ["binance#acct-1", "binance#acct-2"],
             "两个账户都必须被巡检，且谁是谁一眼可读",
         )

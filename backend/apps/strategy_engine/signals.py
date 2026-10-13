@@ -88,19 +88,16 @@ class SignalDispatcher:
         """
         带风控预检查的信号分发。
 
+        fail-closed：guard 拒单**或 guard 不可用**都返回 None，不留旁路。
+
         Returns:
-            message_id 或 None（被风控拒绝）
+            message_id 或 None（被风控拒绝 / 风控不可用）
         """
         from apps.riskguard.guard import RiskGuard
 
-        logger.info(f"[SignalDispatcher] dispatching {signal.signal_name} {symbol} side={signal.side} qty={signal.quantity}")
-
-        # 平仓信号跳过 RiskGuard
-        if signal.is_close_position:
-            logger.info(f"[SignalDispatcher] close position — skipping RiskGuard")
-            return await self.dispatch(
-                signal, symbol, exchange_account_id, user_id, live_session_id
-            )
+        logger.info(
+            f"[SignalDispatcher] dispatching {signal.signal_name} {symbol} side={signal.side} qty={signal.quantity}"
+        )
 
         riskguard = RiskGuard.get_instance()
         if riskguard:
@@ -119,6 +116,9 @@ class SignalDispatcher:
                 # 会话 id 也要带上：停止判定的策略档要靠它换出策略 id。少这一行的表现是
                 # 「停用决策写进了日报，单还是出去了」——不会红任何别的东西。
                 live_session_id=live_session_id,
+                # 平仓信号 = reduce_only：豁免语义在 guard 定义（整单免前置校验），
+                # 入口不再预跳过——否则「这张单拦不拦」又会有两种答案。
+                reduce_only=signal.is_close_position,
             )
             approved, reason = await riskguard.pre_trade_check(request, user_id)
             if not approved:
@@ -128,9 +128,17 @@ class SignalDispatcher:
                 )
                 return None
         else:
-            logger.warning(
-                "[SignalDispatcher] RiskGuard not available — dispatching signal without risk check"
+            # fail-closed（架构评审 #5）：guard 不可用不再是「warning 后照常下单」。
+            # guard 本体对「查不出状态」的取向是拒单，这个入口对「连 guard 都没有」
+            # 的取向必须一致——在这里放行等于家族边界上的 fail-open，风控标准随
+            # 部署事故悄悄归零。guard 没实例化通常意味着交易框架没起来，那单本就
+            # 发不出去；这条 error 就是显式降级记录。
+            logger.error(
+                "[SF-04][SignalDispatcher] RiskGuard not available — signal rejected "
+                f"(fail-closed) | {signal.signal_name} {signal.side} "
+                f"{signal.quantity} {symbol}"
             )
+            return None
 
         return await self.dispatch(
             signal, symbol, exchange_account_id, user_id, live_session_id

@@ -16,8 +16,7 @@
 - `apps/agent/` - SupervisorAgent + 子 Agent（分析、策略、风控、教练）
 - `apps/skill/` - 技能注册中心
 - `apps/trading/` - 交易执行框架（懒加载）
-- `apps/risk/` - 风控引擎
-- `apps/riskguard/` - 风控守卫
+- `apps/riskguard/` - 风控守卫（含风控事件 RiskEvent 档案，2026-10-12 自已摘除的 apps/risk 迁入）
 - `apps/backtest/` - 回测框架
 - `apps/strategy_engine/` - 策略引擎（独立运行，支持回测/实盘双模式）
 - `apps/signal_monitor/` - 信号监控（技术指标计算）

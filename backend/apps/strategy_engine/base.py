@@ -95,7 +95,7 @@ class OrderSignal:
     exchange: str = "binance"  # 默认交易所
     signal_name: str = ""  # 信号名称（用于日志和回测记录）
     metadata: dict = field(default_factory=dict)  # 额外元数据
-    is_close_position: bool = False  # 平仓信号：跳过 RiskGuard 风控检查
+    is_close_position: bool = False  # 平仓信号：下单时以 reduce_only 传入，由 RiskGuard 免除前置校验
 
     def __post_init__(self):
         if self.side not in ("buy", "sell"):
@@ -240,7 +240,7 @@ class StrategyContext:
     def close_position(
         self, price: Decimal | None = None, signal_name: str = "close", **kwargs
     ) -> OrderSignal | None:
-        """平仓信号（卖出全部持仓）— 跳过 RiskGuard 风控检查"""
+        """平仓信号（卖出全部持仓）— 以 reduce_only 传入 RiskGuard，由它免除前置校验"""
         if self._position <= 0:
             return None
         return self.sell(

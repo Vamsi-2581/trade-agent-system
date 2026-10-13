@@ -26,10 +26,10 @@
 
 ## 适配器按**账户**建，不按交易所名
 
-``reduce.py`` 的模块 docstring 已经写明理由：``OrderExecutor._adapters`` 以交易所名为键，
-同一家交易所挂两个账户时会互相顶掉（后加载的赢）。所以这里一律走
-``pending_reconcile.build_account_adapter``：它按 ``ExchangeAccount`` 建、自己 ``connect()``、
-缺密钥/缺适配器时返回 ``None``（那与「确实空仓」必须分开说）。
+``reduce.py`` 的模块 docstring 已经写明理由：机械层要能在没有框架单例的情况下单独跑，
+而「哪个账户」才是适配器的唯一键（``OrderExecutor.resolve_adapter`` 是同一个判据）。
+所以这里一律走 ``pending_reconcile.build_account_adapter``：它按 ``ExchangeAccount`` 建、
+自己 ``connect()``、缺密钥/缺适配器时返回 ``None``（那与「确实空仓」必须分开说）。
 
 ## 四道安全门（真实资金操作，fail-closed）
 

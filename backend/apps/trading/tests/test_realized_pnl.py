@@ -162,7 +162,7 @@ class _ExecutorTestCase(unittest.TestCase):
         self.executor = OrderExecutor()
         self.executor._running = True
         self.executor._riskguard = None
-        self.executor._adapters = {}
+        self.executor._account_adapters = {}
         self.executor._bump_session_equity = AsyncMock()
 
     def tearDown(self):
@@ -303,7 +303,7 @@ class TestSubmitClosePnl(_ExecutorTestCase):
         mock_response.filled_qty = filled_qty
         mock_response.avg_price = avg_price
         mock_adapter.place_order.return_value = mock_response
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"acc-1": mock_adapter}
         return mock_adapter
 
     def _run_submit(self, **kwargs):

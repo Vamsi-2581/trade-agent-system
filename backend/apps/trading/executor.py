@@ -135,21 +135,16 @@ class OrderExecutor:
     _instance: "OrderExecutor | None" = None
 
     def __init__(self):
-        # 按**交易所名**索引：同一交易所只挂一个活跃账户时它才唯一确定适配器。
-        # 遗留口径，只给「调用方拿不到账户 id」的位置用（cancel_order / get_positions /
-        # get_balance / 视图）；下单与成交同步一律走 `_account_adapters`。
-        self._adapters: dict[str, BaseExchangeAdapter] = {}
-        # 按 **ExchangeAccount.id** 索引：这才是唯一不会拿错密钥的口径。同一交易所的
-        # 多个账户各有各的密钥与 testnet 属性，按交易所名解析会用到**别人**的凭证。
+        # 按 **ExchangeAccount.id** 索引：这是**唯一**的适配器口径。同一交易所的多个
+        # 账户各有各的密钥与 testnet 属性，任何按交易所名索引的表在那种情况下都只能
+        # 留下「最后加载的那个」——拿它去撤单/查持仓/算仓位上限就是用了**别人**的凭证，
+        # 而两边日志都写着 binance，事后看不出来。所以这里没有第二张表：
+        # 「账户是参数」由 `resolve_adapter()` / `iter_adapters()` 这一个 interface 定义。
         self._account_adapters: dict[str, BaseExchangeAdapter] = {}
         # 账户 id → 交易所名。适配器自己不记得交易所（`BaseExchangeAdapter` 上没有这个
-        # 属性），只能在加载时顺手记下：**同交易所有两个账户时，被顶掉的那个在
-        # `_adapters` 里查不到交易所名**，日志标签就只剩一个 UUID 可看。这份映射是
-        # `_unique_adapters()` 能给出「binance#<账户id>」的唯一来源。
+        # 属性），只能在加载时顺手记下，供 `iter_adapters()` 给出
+        # 「binance#<账户id>」这种可读且唯一的标签。
         self._account_exchanges: dict[str, str] = {}
-        # 同交易所有多个活跃账户的交易所名：`_adapters` 里那一条只是「最后一个加载的」，
-        # 是个任意选择，调用方据此判断「按名字解析是否可信」。
-        self._ambiguous_exchanges: set[str] = set()
         self._riskguard: Optional[RiskGuard] = None
         self._running = False
         self._fill_sync_task: Optional[asyncio.Task] = None
@@ -177,9 +172,8 @@ class OrderExecutor:
         self.start_fill_sync()
 
         logger.info(
-            "OrderExecutor initialized: %s 个账户适配器（%s 个交易所名条目）",
+            "OrderExecutor initialized: %s 个账户适配器",
             len(self._account_adapters),
-            len(self._adapters),
         )
 
     async def shutdown(self) -> None:
@@ -207,85 +201,80 @@ class OrderExecutor:
                 pass
         self._dangling_sweep_task = None
 
-        # 两个地图可能指向同一个适配器实例（同交易所单账户），按对象去重后各断一次。
-        for name, adapter in self._unique_adapters():
+        # 一张表：每个账户各断一次。
+        for label, adapter in self.iter_adapters():
             await adapter.disconnect()
-            logger.info(f"Adapter disconnected: {name}")
+            logger.info(f"Adapter disconnected: {label}")
 
-        self._adapters.clear()
         self._account_adapters.clear()
         self._account_exchanges.clear()
-        self._ambiguous_exchanges.clear()
         OrderExecutor._instance = None
         logger.info("OrderExecutor shutdown")
 
     # ─── 适配器查找 ──────────────────────────────────────────────────────────
 
-    def _unique_adapters(self) -> list[tuple[str, BaseExchangeAdapter]]:
-        """(标签, 适配器) 去重列表：账户地图是超集，遗留地图只补它没有的实例。
+    def resolve_adapter(
+        self, exchange_account_id: str | None
+    ) -> BaseExchangeAdapter | None:
+        """按**账户 id** 取适配器；拿不到就返回 None，绝不退到别的账户。
 
-        标签取**交易所名**，同交易所有多个账户时补账户 id（``binance#3f2a…``）：
-        账户地图的键是账户 id，直接用它会得到一行只有 UUID 的日志；而只写交易所名
-        则两个账户都叫 binance，等于没区分。账户 id 才是「不会拿错密钥」的那个口径，
-        所以它必须出现在标签里。
+        这是适配器查找的**唯一** interface（账户是参数）：下单、成交同步、撤单、
+        持仓/余额读取、风控、浮亏巡检全部走这里。
 
-        交易所名优先查 ``_account_exchanges``（加载时记下的账户→交易所）：同交易所有
-        两个账户时，被顶掉的那个**不在** ``_adapters`` 里，反查不到名字，标签会退化成
-        一个裸 UUID——而那恰恰是最需要分辨账户的那个场景。
+        2026-09-22：原先另有一张以**交易所名**为键的表（`_adapters`），同一交易所挂
+        两个账户时后者顶掉前者，于是下单、成交同步、反查都可能拿着**另一个账户**的
+        密钥去做——订单落到错账户上是真实的资金错误，而日志里看不出来。
+
+        2026-10-12：那张按名字索引的表**已删除**。它此前还留着一条「账户地图为空时
+        按交易所名回退」的遗留路径，只为兼容手工构造它的测试夹具；真实运行里它恒为
+        None（账户地图为空等价于一个适配器都没加载），却让「同一个问题」继续有
+        两个答案。现在**任何**取不到账户适配器的情况都返回 None：调用方要么失败，要么
+        显式降级，但绝不会静默拿到同交易所另一个账户的适配器。
+
+        Args:
+            exchange_account_id: ``ExchangeAccount.id``；空值即「拿不到账户」→ None。
+
+        Returns:
+            该账户的适配器；账户为空、未加载（密钥缺失/已停用/加载失败）时为 None。
+        """
+        account_key = str(exchange_account_id) if exchange_account_id else ""
+        if not account_key:
+            return None
+        adapter = self._account_adapters.get(account_key)
+        if adapter is None:
+            logger.warning(
+                "[OrderExecutor] 账户 %s 没有已加载的适配器"
+                "（密钥缺失/已停用/加载失败）——拒绝回退到按交易所名解析："
+                "那会拿到同交易所另一个账户的密钥",
+                account_key,
+            )
+        return adapter
+
+    def iter_adapters(self) -> list[tuple[str, BaseExchangeAdapter]]:
+        """(标签, 适配器) 列表：每个已加载账户各一项，标签形如 ``binance#<账户id>``。
+
+        标签取**交易所名 + 账户 id**：只写交易所名则同交易所的两个账户都叫 binance，
+        等于没区分；只写账户 id 则是一行裸 UUID。账户 id 才是「不会拿错密钥」的那个
+        口径，所以它必须出现在标签里。
 
         调用方（浮亏巡检、断连日志）拿到的标签因此是**可读且唯一**的。
         """
-        exchange_of = {id(a): name for name, a in self._adapters.items()}
-        seen: set[int] = set()
         out: list[tuple[str, BaseExchangeAdapter]] = []
-        for label, adapter in list(self._account_adapters.items()) + list(
-            self._adapters.items()
-        ):
-            if adapter is None or id(adapter) in seen:
+        for account_id, adapter in self._account_adapters.items():
+            if adapter is None:
                 continue
-            seen.add(id(adapter))
-            exchange = self._account_exchanges.get(label) or exchange_of.get(id(adapter))
-            if exchange is None or exchange == label:
-                # 遗留条目的键本来就是交易所名（也是账户地图为空时唯一的条目）
-                out.append((label, adapter))
-            else:
-                out.append((f"{exchange}#{label}", adapter))
+            exchange = self._account_exchanges.get(account_id)
+            out.append((f"{exchange}#{account_id}" if exchange else account_id, adapter))
         return out
 
-    def is_ambiguous_exchange(self, exchange: str) -> bool:
-        """该交易所名下是否有多个活跃账户（此时按交易所名解析不可信）。"""
-        return (exchange or "").lower() in self._ambiguous_exchanges
+    def account_adapters(self) -> dict[str, BaseExchangeAdapter]:
+        """账户 id → 适配器（只读副本），供需要按账户逐项取数的调用方使用。
 
-    def _resolve_adapter(
-        self, exchange: str, exchange_account_id: str | None
-    ) -> BaseExchangeAdapter | None:
-        """按**账户 id** 取适配器；拿不到就让调用方失败，绝不退到别的账户。
-
-        2026-09-22：`_adapters` 以交易所名为键，同一交易所挂两个账户时后者顶掉
-        前者，于是下单、成交同步、反查都可能拿着**另一个账户**的密钥去做——订单
-        落到错账户上是真实的资金错误，而日志里看不出来。
-
-        遗留回退（按交易所名）只在「账户地图为空」时生效：两个地图由
-        `_load_adapters` 同一段循环填充，真实运行里账户地图为空等价于「一个适配器
-        都没加载」，所以这条回退在真实运行中恒为 None，只为兼容手工构造 `_adapters`
-        的调用方（测试夹具）而留。**账户清单非空却没有这个账户时一律返回 None**：
-        那种情况下按名字找到的是同交易所另一个账户的适配器。
+        存在的理由是「账户是参数」这条 seam 要能被**接口层**遵守：视图要按账户列持仓与
+        余额，而它不该直接读 `_account_adapters` 那个内部字典——那会让「适配器口径」在
+        两个地方各写一遍。返回副本，调用方改不动内部状态。
         """
-        account_key = str(exchange_account_id) if exchange_account_id else ""
-        if account_key:
-            adapter = self._account_adapters.get(account_key)
-            if adapter is not None:
-                return adapter
-            if self._account_adapters:
-                logger.warning(
-                    "[OrderExecutor] 账户 %s（交易所 %s）没有已加载的适配器"
-                    "（密钥缺失/已停用/加载失败）——拒绝回退到按交易所名解析："
-                    "那会拿到同交易所另一个账户的密钥",
-                    account_key,
-                    exchange,
-                )
-                return None
-        return self._adapters.get((exchange or "").lower())
+        return dict(self._account_adapters)
 
     # ─── 下单主流程 ───────────────────────────────────────────────────────────
 
@@ -314,9 +303,10 @@ class OrderExecutor:
             price: 价格（市价单可为空）
             exchange_account_id: ExchangeAccount UUID
             user_id: User UUID（供 RiskGuard 风控校验）
-            is_close_position: 平仓信号，跳过 RiskGuard 风控检查，并以
-                reduceOnly（只减不增）下单——超持仓部分由交易所拒单，而不是
-                反向开仓（2026-09-27 BNB 双平手账：第二张平仓单开了空仓）
+            is_close_position: 平仓信号，以 reduce_only 传入 RiskGuard（豁免语义在
+                guard 定义：整单免前置校验），并以 reduceOnly（只减不增）下单——
+                超持仓部分由交易所拒单，而不是反向开仓（2026-09-27 BNB 双平手账：
+                第二张平仓单开了空仓）
             live_session_id: 触发的实盘会话 UUID（用于追溯订单来源策略）
 
         Returns:
@@ -332,13 +322,13 @@ class OrderExecutor:
         if not self._running:
             raise RuntimeError("OrderExecutor is not running")
 
-        adapter = self._resolve_adapter(exchange, exchange_account_id)
+        adapter = self.resolve_adapter(exchange_account_id)
         if not adapter:
             raise ValueError(
                 f"Exchange adapter not found: {exchange}（account={exchange_account_id}）"
             )
 
-        # 1. RiskGuard 前置校验（平仓跳过）
+        # 1. RiskGuard 前置校验
         request = OrderRequest(
             exchange=exchange,
             symbol=symbol,
@@ -358,9 +348,7 @@ class OrderExecutor:
             # binance 适配器）。开仓单保持 False：开仓本来就要「增」。
             reduce_only=is_close_position,
         )
-        if is_close_position:
-            logger.info("[SF-07a][OrderExecutor] close position — skipping RiskGuard")
-        elif self._riskguard:
+        if self._riskguard:
             # 诊断：检查方法类型
             import inspect
             method = self._riskguard.pre_trade_check
@@ -511,46 +499,77 @@ class OrderExecutor:
 
     async def cancel_order(
         self,
-        exchange: str,
+        exchange_account_id: str,
         exchange_order_id: str,
         symbol: str,
     ) -> bool:
         """
-        撤销指定订单。
+        撤销指定订单（按**账户**，不按交易所名）。
+
+        首参是 ``ExchangeAccount.id``：同交易所有两个账户时，按交易所名解析会撤到
+        别人头上的单——那是不可逆的资金错误，所以这里只认账户。
+
+        Args:
+            exchange_account_id: ExchangeAccount UUID（本单所属账户）
+            exchange_order_id: 交易所订单号
+            symbol: 交易对
 
         Returns:
             True 撤销成功，False 失败
+
+        Raises:
+            RuntimeError: OrderExecutor 未运行
+            ValueError: 该账户没有已加载的适配器
         """
         if not self._running:
             raise RuntimeError("OrderExecutor is not running")
 
-        adapter = self._adapters.get(exchange)
+        adapter = self.resolve_adapter(exchange_account_id)
         if not adapter:
-            raise ValueError(f"Exchange adapter not found: {exchange}")
+            raise ValueError(
+                f"Exchange adapter not found for account: {exchange_account_id}"
+            )
 
         return await adapter.cancel_order(exchange_order_id, symbol)
 
     # ─── 持仓 & 余额查询 ─────────────────────────────────────────────────────
 
-    async def get_positions(self, exchange: str) -> list:
-        """获取指定交易所的当前持仓"""
+    async def get_positions(self, exchange_account_id: str) -> list:
+        """获取指定**账户**的当前持仓（按账户，不按交易所名）。
+
+        Raises:
+            RuntimeError: OrderExecutor 未运行
+            ValueError: 该账户没有已加载的适配器
+        """
         if not self._running:
             raise RuntimeError("OrderExecutor is not running")
 
-        adapter = self._adapters.get(exchange)
+        adapter = self.resolve_adapter(exchange_account_id)
         if not adapter:
-            raise ValueError(f"Exchange adapter not found: {exchange}")
+            raise ValueError(
+                f"Exchange adapter not found for account: {exchange_account_id}"
+            )
 
         return await adapter.get_positions()
 
-    async def get_balance(self, exchange: str) -> dict:
-        """获取指定交易所的账户余额"""
+    async def get_balance(self, exchange_account_id: str) -> dict:
+        """获取指定**账户**的账户余额（按账户，不按交易所名）。
+
+        按交易所名取余额会把「同交易所另一个账户的钱」当成这个账户的：仓位上限的
+        分母就此变成别人的余额，而且两边日志都写着 binance。
+
+        Raises:
+            RuntimeError: OrderExecutor 未运行
+            ValueError: 该账户没有已加载的适配器
+        """
         if not self._running:
             raise RuntimeError("OrderExecutor is not running")
 
-        adapter = self._adapters.get(exchange)
+        adapter = self.resolve_adapter(exchange_account_id)
         if not adapter:
-            raise ValueError(f"Exchange adapter not found: {exchange}")
+            raise ValueError(
+                f"Exchange adapter not found for account: {exchange_account_id}"
+            )
 
         return await adapter.get_balance()
 
@@ -559,12 +578,10 @@ class OrderExecutor:
     async def _load_adapters(self) -> None:
         """从 DB 加载已激活的交易所账号，解密并连接适配器。
 
-        **同时填两个地图**，它们指向同一个适配器实例：
-        ``_account_adapters[account.id]``（唯一不会拿错密钥的口径）与
-        ``_adapters[exchange]``（遗留口径，只给拿不到账户 id 的调用方）。
-        同交易所有多个活跃账户时，``_adapters`` 里那条只是「最后加载的」，是个
-        任意选择——所以这里把它记进 ``_ambiguous_exchanges`` 并打出 ERROR，
-        让「按名字解析到底选了谁」在日志里可查，而不是静默顶掉。
+        **只填一张表**：``_account_adapters[account.id]``——唯一不会拿错密钥的口径
+        （见 `resolve_adapter`）。同交易所有多个活跃账户时，各账户各有一条，不再有
+        「后加载的顶掉先加载的」那种任意选择，因此也不需要再记「哪个交易所名有歧义」：
+        按名字解析这条路已经不存在了。
         """
         from apps.exchange.models import ExchangeAccount
 
@@ -573,9 +590,6 @@ class OrderExecutor:
         )()
 
         fernet = self._get_fernet()
-
-        # exchange → 已成功加载的账户 id（按加载顺序，最后一个就是 `_adapters` 里的赢家）
-        loaded: dict[str, list[str]] = {}
 
         for account in accounts:
             exchange = account.exchange.lower()
@@ -603,27 +617,17 @@ class OrderExecutor:
                 await adapter.connect()
                 self._account_adapters[str(account.id)] = adapter
                 self._account_exchanges[str(account.id)] = exchange
-                self._adapters[exchange] = adapter
-                loaded.setdefault(exchange, []).append(str(account.id))
+                # 标签里带账户 id：同一交易所有两个账户时，只写 binance 的那行日志
+                # 看不出加载的是哪个（原先那条「谁顶掉了谁」的 ERROR 已随名字表删除，
+                # 这里的可读标签就是「哪个账户加载成功」的唯一证据）。
                 logger.info(
-                    f"Adapter loaded: {exchange} ({account.label or 'default'})"
+                    "Adapter loaded: %s#%s (%s)",
+                    exchange,
+                    account.id,
+                    account.label or "default",
                 )
             except Exception as e:
                 logger.error(f"Failed to load adapter for {exchange}: {e}")
-
-        for exchange, account_ids in loaded.items():
-            if len(account_ids) < 2:
-                continue
-            self._ambiguous_exchanges.add(exchange)
-            logger.error(
-                "[OrderExecutor] 交易所 %s 有 %s 个活跃账户（%s）：按交易所名解析"
-                "只能得到最后加载的那个（account=%s），其余账户必须按账户 id 访问；"
-                "下单与成交同步已一律按账户 id 解析",
-                exchange,
-                len(account_ids),
-                ", ".join(account_ids),
-                account_ids[-1],
-            )
 
     def _load_riskguard(self) -> None:
         """获取 RiskGuard 单例引用"""
@@ -846,7 +850,7 @@ class OrderExecutor:
         if not orders:
             return
 
-        by_exchange: dict[str, list] = {}
+        by_account: dict[str, list] = {}
         has_dangling = False
         for order in orders:
             if not order.exchange_order_id:
@@ -857,11 +861,10 @@ class OrderExecutor:
                 continue
             # 按**账户**分组而不是按交易所名：成交通知必须用订单自己那个账户的密钥
             # 去查，否则同交易所的两个账户会互相查对方的单（查不到 → 误判 cancelled）。
-            by_exchange.setdefault(str(order.exchange_account_id), []).append(order)
+            by_account.setdefault(str(order.exchange_account_id), []).append(order)
 
-        for account_id, order_list in by_exchange.items():
-            exchange = (order_list[0].exchange_account.exchange or "").lower()
-            adapter = self._resolve_adapter(exchange, account_id)
+        for account_id, order_list in by_account.items():
+            adapter = self.resolve_adapter(account_id)
             if not adapter:
                 continue
             for order in order_list:

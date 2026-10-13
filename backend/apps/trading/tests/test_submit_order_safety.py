@@ -53,7 +53,7 @@ class TestSubmitOrderSafety(unittest.TestCase):
         self.executor = OrderExecutor()
         self.executor._running = True
         self.executor._riskguard = None
-        self.executor._adapters = {}
+        self.executor._account_adapters = {}
 
     def tearDown(self):
         OrderExecutor._instance = None
@@ -70,7 +70,7 @@ class TestSubmitOrderSafety(unittest.TestCase):
     def test_place_order_receives_request_id_as_client_order_id(self, mock_order_mgr):
         mock_adapter = AsyncMock()
         mock_adapter.place_order.return_value = self._mock_response()
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
 
         rid = uuid.UUID("11111111-2222-3333-4444-555555555555")
         mock_order = MagicMock()
@@ -103,7 +103,7 @@ class TestSubmitOrderSafety(unittest.TestCase):
         """httpx 超时异常 message 为空 → 落库也必须能看出异常类型。"""
         mock_adapter = AsyncMock()
         mock_adapter.place_order.side_effect = httpx.ConnectTimeout("")
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
         riskguard = _FakeRiskGuard()
         self.executor._riskguard = riskguard
 
@@ -154,7 +154,7 @@ class TestSubmitOrderSafety(unittest.TestCase):
         """
         mock_adapter = AsyncMock()
         mock_adapter.place_order.side_effect = OrderPlacementUnknown("对账不可达")
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
         riskguard = _FakeRiskGuard()
         self.executor._riskguard = riskguard
 
@@ -205,7 +205,7 @@ class TestSubmitOrderSafety(unittest.TestCase):
 
         mock_adapter = AsyncMock()
         mock_adapter.place_order.side_effect = OrderPlacementUnknown("对账不可达")
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
 
         with self.assertRaises(OrderPlacementUnknown):
             asyncio.run(
@@ -246,7 +246,7 @@ class TestCloseOrderIsReduceOnly(unittest.TestCase):
         self.executor = OrderExecutor()
         self.executor._running = True
         self.executor._riskguard = None
-        self.executor._adapters = {}
+        self.executor._account_adapters = {}
 
     def tearDown(self):
         OrderExecutor._instance = None
@@ -263,7 +263,7 @@ class TestCloseOrderIsReduceOnly(unittest.TestCase):
     def test_close_order_sends_reduce_only(self, mock_order_mgr):
         mock_adapter = AsyncMock()
         mock_adapter.place_order.return_value = self._mock_response()
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
 
         mock_order = MagicMock()
         mock_order.id = "order-uuid-close"
@@ -294,7 +294,7 @@ class TestCloseOrderIsReduceOnly(unittest.TestCase):
     def test_normal_order_is_not_reduce_only(self, mock_order_mgr):
         mock_adapter = AsyncMock()
         mock_adapter.place_order.return_value = self._mock_response()
-        self.executor._adapters = {"binance": mock_adapter}
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
 
         mock_order = MagicMock()
         mock_order.id = "order-uuid-open"
@@ -318,4 +318,79 @@ class TestCloseOrderIsReduceOnly(unittest.TestCase):
         self.assertFalse(
             sent.reduce_only,
             "开仓单不得 reduceOnly：带了开仓会被交易所直接拒掉",
+        )
+
+
+class _RecordingRiskGuard:
+    """记录收到的 OrderRequest，全部放行。"""
+
+    def __init__(self):
+        self.requests: list = []
+
+    async def pre_trade_check(self, request, user_id):
+        self.requests.append(request)
+        return True, "OK"
+
+    async def record_order_success(self, user_id):
+        pass
+
+
+class TestCloseOrderExemptionGoesThroughGuard(unittest.TestCase):
+    """平仓单不再在入口预跳过风控（2026-10-12 豁免语义合一）。
+
+    合一前 `submit_order` 对 `is_close_position=True` 根本不调 `pre_trade_check`，
+    「这张单拦不拦」因此有两个答案（入口预跳过 / guard 判定）。合一后平仓单也走
+    `pre_trade_check`，豁免由 guard 内的 `reduce_only` 判定——本测试钉的是：入口仍然
+    调用它，且传下去的标志是 `reduce_only=True`。
+    """
+
+    def setUp(self):
+        self.executor = OrderExecutor()
+        self.executor._running = True
+        self.executor._riskguard = None
+        self.executor._account_adapters = {}
+
+    def tearDown(self):
+        OrderExecutor._instance = None
+
+    @patch("apps.trading.models.Order.objects")
+    def test_close_order_still_goes_through_pre_trade_check(self, mock_order_mgr):
+        mock_adapter = AsyncMock()
+        resp = MagicMock()
+        resp.exchange_order_id = "123456"
+        resp.status = "NEW"
+        resp.filled_qty = Decimal("0")
+        resp.avg_price = None
+        mock_adapter.place_order.return_value = resp
+        self.executor._account_adapters = {"uuid-placeholder": mock_adapter}
+
+        riskguard = _RecordingRiskGuard()
+        self.executor._riskguard = riskguard
+
+        mock_order = MagicMock()
+        mock_order.id = "order-uuid-exempt"
+        mock_order.request_id = uuid.uuid4()
+        mock_order_mgr.create.return_value = mock_order
+        mock_order_mgr.filter.return_value.update = MagicMock()
+
+        asyncio.run(
+            self.executor.submit_order(
+                exchange="binance",
+                symbol="BNBUSDT",
+                side="sell",
+                order_type="market",
+                quantity=Decimal("1.37"),
+                price=None,
+                exchange_account_id="uuid-placeholder",
+                is_close_position=True,
+            )
+        )
+
+        self.assertEqual(
+            len(riskguard.requests), 1,
+            "平仓单必须仍走 pre_trade_check：入口预跳过会再造一个答案",
+        )
+        self.assertTrue(
+            riskguard.requests[0].reduce_only,
+            "平仓单的豁免标志是 reduce_only，豁免语义在 guard 内定义",
         )

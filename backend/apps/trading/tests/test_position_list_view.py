@@ -30,9 +30,9 @@ class TestPositionListView(APITestCase):
             password="x",
         )
         self.client.force_authenticate(self.user)
-        # 视图按 **账户 id** 遍历 executor._account_adapters，所以夹具必须有一个真实
-        # 的 ExchangeAccount 行：适配器的键就是它的 id（原先按交易所名遍历，两个账户
-        # 同交易所时会互相冒名）。
+        # 视图走 `executor.account_adapters()` 按 **账户 id** 遍历，所以夹具必须有一个
+        # 真实的 ExchangeAccount 行：适配器的键就是它的 id（原先按交易所名遍历，两个
+        # 账户同交易所时会互相冒名）。
         self.account = ExchangeAccount.objects.create(
             exchange="binance", label="default", api_key_enc=b"", api_secret_enc=b""
         )
@@ -42,7 +42,7 @@ class TestPositionListView(APITestCase):
         adapter.get_positions = AsyncMock(return_value=positions)
         executor = MagicMock()
         executor._running = True
-        executor._account_adapters = {str(self.account.id): adapter}
+        executor.account_adapters.return_value = {str(self.account.id): adapter}
         return executor
 
     def test_position_list_returns_realtime_mark_price(self):

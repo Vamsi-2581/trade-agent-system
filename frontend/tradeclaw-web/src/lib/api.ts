@@ -242,34 +242,26 @@ export interface ExchangeAccountWithBalance {
 }
 
 // ── Risk API ──
+// 风控事件档案接口（右侧风控面板的轮询源）。前端可写、guard 从不读取的
+// RiskConfig 已随 apps/risk 摘除（2026-10-12），不再提供 config 端点。
 
 export interface RiskEvent {
   id: string;
   level: "P0" | "P1" | "P2";
-  event_type: "hard_limit" | "circuit_breaker" | "reconciliation" | "heartbeat";
+  event_type:
+    | "hard_limit"
+    | "circuit_breaker"
+    | "reconciliation"
+    | "heartbeat"
+    | "floating_loss";
   message: string;
   resolved: boolean;
   created_at: string;
   resolved_at: string | null;
 }
 
-export interface RiskConfig {
-  daily_loss_warning_pct: number;
-  consecutive_loss_alert: number;
-  position_suggestion_limit: number;
-  max_position_pct: number;
-  max_drawdown_pct: number;
-  var_limit_pct: number;
-  stop_loss_pct: number;
-  auto_stop: boolean;
-  updated_at: string;
-}
-
 export const riskApi = {
   getEvents: () => request<RiskEvent[]>("/api/risk/events/"),
-  getConfig: () => request<RiskConfig>("/api/risk/config/"),
-  updateConfig: (data: Partial<RiskConfig>) =>
-    request<RiskConfig>("/api/risk/config/", "PUT", data),
 };
 
 // ── Exchange API ──
@@ -780,7 +772,7 @@ export interface SignalMonitor {
   indicator_params: Record<string, unknown>;
   condition: Record<string, unknown>;
   trigger_type: "once" | "continuous";
-  action_type: "notify" | "trade" | "notify_and_trade";
+  action_type: "notify" | "validate_strategy";
   action_params: Record<string, unknown>;
   status: "active" | "triggered" | "disabled" | "expired";
   last_triggered_at: string | null;

@@ -8,6 +8,19 @@ CircuitBreaker - 熔断器
 4. 管理员手动触发
 
 基于 Redis DB7 存储状态。
+
+## 手动触发的落点不在本类（ADR 0001，2026-10-12 兑现）
+
+四条触发条件里的「管理员手动触发」已兑现，但**落点是一行 ``HaltTrigger.MANUAL`` 声明**
+（`apps/regime/manual_halt.py` + `manage.py manual_halt`），由 halt 状态机统一判定——
+不是这里的 Redis 键：声明表上它有读者（`halt.py` 求值、通知、日报同源），而 Redis 的
+trip 状态谁都不读，把它当手动入口等于兑现了一个没人看见的开关。
+
+本类因此只剩**自动路径**（`record_failure` / `record_success`，由
+`RiskGuard.record_order_failure` 喂进）；`trip` / `is_open` / `reset` /
+`get_failure_count` 目前没有调用点、也没有读点——这是 ADR 0001 的既定状态（「连续下单
+失败 / 日内亏损 / API 断连」将来作为触发源接进状态机时再处置），不是丢了的接线。不要把
+它们接到 `pre_trade_check` 上（ADR 0001 明确否决：那会造出第二个停止抽象）。
 """
 
 from __future__ import annotations

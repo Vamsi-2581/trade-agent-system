@@ -315,12 +315,12 @@ class LiveStrategyRunner:
                 return False
 
             # 按**本会话的账户 id** 取适配器，不按交易所名：同交易所有两个账户时
-            # `_adapters["binance"]` 只是「最后加载的」那一个，会把**别的账户**的
+            # 按交易所名解析只会拿到其中一个（后加载的），会把**别的账户**的
             # 持仓当成本会话的持仓同步进 ctx——决策据此下单就是真实的资金错误。
-            adapter = executor._resolve_adapter("binance", self.exchange_account_id)
+            adapter = executor.resolve_adapter(self.exchange_account_id)
             if not adapter:
                 await self._on_position_sync_failed(
-                    f"账户 {self.exchange_account_id} 的 binance 适配器未加载"
+                    f"账户 {self.exchange_account_id} 的适配器未加载"
                 )
                 return False
 
@@ -785,9 +785,10 @@ class LiveStrategyRunner:
             sell_qty = clamped
         # 卖到空仓 = 平仓：策略侧 close_position() 的意图在 Phase 2 转目标持仓时
         # 丢了（Insight/PortfolioTarget 没有这个字段，见 base.construct_portfolio），
-        # 这里按「目标=空仓」还原。下游两处依赖它：跳过 RiskGuard（signals.py /
-        # executor），以及 executor 把它翻译成 reduceOnly（只减不增）——后者是
-        # 「重复平仓单变反向开仓」的唯一交易所级兜底（2026-09-27 BNB 双平手账）。
+        # 这里按「目标=空仓」还原。下游两处依赖它：以 reduce_only 传入 RiskGuard 获得
+        # 豁免（signals.py / executor，语义在 guard 定义），以及 executor 把它翻译成
+        # reduceOnly（只减不增）——后者是「重复平仓单变反向开仓」的唯一交易所级兜底
+        # （2026-09-27 BNB 双平手账）。
         is_close = target.target_quantity == Decimal("0")
         return self.strategy.ctx.sell(
             sell_qty, signal_name=target.reason, is_close_position=is_close

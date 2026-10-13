@@ -12,7 +12,9 @@ urlpatterns = [
     path('api/agent/', include('apps.agent.urls')),
     path('api/exchange/', include('apps.exchange.urls')),
     path('api/trading/', include('apps.trading.urls')),
-    path('api/risk/', include('apps.risk.urls')),
+    # 风控事件档案（/api/risk/events/）随 RiskEvent 住在 riskguard；
+    # /api/risk/config/ 已随 RiskConfig 摘除，不再有配置端点。
+    path('api/risk/', include('apps.riskguard.urls')),
     path('api/backtest/', include('apps.backtest.urls')),
     path('api/channel/', include('apps.channel.urls')),
     path('api/notify/', include('apps.notify.urls')),

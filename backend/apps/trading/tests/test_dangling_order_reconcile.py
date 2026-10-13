@@ -314,7 +314,7 @@ class TestSyncNoLongerSkipsDangling(unittest.TestCase):
         self.executor = OrderExecutor()
         self.executor._running = True
         self.executor._riskguard = None
-        self.executor._adapters = {}
+        self.executor._account_adapters = {}
 
     def tearDown(self):
         from apps.trading.executor import OrderExecutor
@@ -385,7 +385,7 @@ class TestSyncNoLongerSkipsDangling(unittest.TestCase):
             avg_fill_price=Decimal("1"),
             error_message=None,
         )
-        self.executor._adapters = {"binance": adapter}
+        self.executor._account_adapters = {"acc-1": adapter}
         order = _order(status="unknown", exchange_order_id="777", side="buy")
 
         self._run_sync([order])
