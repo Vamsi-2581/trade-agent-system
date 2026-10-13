@@ -8,3 +8,4 @@ build/
 media/
 staticfiles/
 .DS_Store
+.verify-fast/
