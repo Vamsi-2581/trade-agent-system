@@ -5,7 +5,7 @@
 - 加载活跃监控列表
 - 并行计算技术指标
 - 评估触发条件
-- 执行预设动作（通知/交易）
+- 执行预设动作（通知 / 策略验证）
 - 区分单次触发和持续触发
 """
 
@@ -331,17 +331,19 @@ class SignalMonitorEngine:
         }
 
     def _execute_action(self, monitor: SignalMonitor, trigger_value: dict) -> dict:
-        """执行预设动作"""
+        """执行预设动作。
+
+        仅剩两类动作：`notify`（通知）与 `validate_strategy`（live_mode 内部写入）。
+        `trade` / `notify_and_trade` 断路径已于 2026-10-12 删除：只做一次
+        `Order.objects.create()`、无消费者、订单永久停在 pending，存量行已由
+        migration 0004 迁移为 notify。
+        """
         action_type = monitor.action_type
 
         if action_type == "validate_strategy":
             return self._publish_strategy_validate(monitor, trigger_value)
 
-        if action_type in ("notify", "notify_and_trade"):
-            self._send_notification(monitor, trigger_value)
-
-        if action_type in ("trade", "notify_and_trade"):
-            self._execute_trade(monitor, trigger_value)
+        self._send_notification(monitor, trigger_value)
 
         return {
             "action_type": action_type,
@@ -449,43 +451,6 @@ class SignalMonitorEngine:
             logger.error(
                 "Failed to send Telegram message to chat_id %s: %s", chat_id, e
             )
-
-    def _execute_trade(self, monitor: SignalMonitor, trigger_value: dict) -> None:
-        """执行交易"""
-        try:
-            from apps.trading.models import Order
-            from apps.exchange.models import ExchangeAccount
-
-            params = monitor.action_params
-            exchange_account_id = params.get("exchange_account_id")
-
-            if not exchange_account_id:
-                logger.warning(
-                    "No exchange_account_id in action_params for monitor %s", monitor.id
-                )
-                return
-
-            exchange_account = ExchangeAccount.objects.get(id=exchange_account_id)
-
-            Order.objects.create(
-                user=monitor.user,
-                exchange_account=exchange_account,
-                symbol=monitor.symbol,
-                side=params.get("side", "buy"),
-                order_type=params.get("order_type", "market"),
-                quantity=params.get("quantity", 0),
-                price=params.get("price"),
-                # 记录触发来源：优先策略名（validate_strategy 场景），
-                # 否则回退到信号监控名称，保证交易详情可追溯触发来源
-                triggered_strategy=monitor.strategy_name or monitor.name,
-            )
-            logger.info(
-                "Trade order created for monitor %s (triggered_strategy=%s)",
-                monitor.id,
-                monitor.strategy_name or monitor.name,
-            )
-        except Exception as e:
-            logger.error("Failed to execute trade: %s", e)
 
     def _publish_strategy_validate(
         self, monitor: SignalMonitor, trigger_value: dict

@@ -219,53 +219,51 @@ class TestEngineSignalCheck(unittest.TestCase):
             self.assertEqual(results, [])
 
 
-class TestSignalMonitorTradeAction(unittest.TestCase):
-    """验证信号监控"执行交易"动作会记录触发来源策略。"""
+class TestTradeDeadPathRemoved(unittest.TestCase):
+    """死路径清扫（修改6，2026-10-12）：`_execute_trade` 与 trade /
+    notify_and_trade 分支已整体删除，存量 trade 行由 migration 0004 迁移为 notify。
+    这些测试钉死删除边界：即使出现 migration 之外的遗留 trade 型 monitor
+    （异常防御路径），触发后也只走通知，不再尝试建单。"""
 
     def setUp(self):
         self.engine = SignalMonitorEngine()
 
-    def _make_monitor(self, strategy_name: str = "", name: str = "EMA趋势"):
+    def test_legacy_trade_action_only_notifies(self):
         monitor = MagicMock()
-        monitor.action_params = {
-            "exchange_account_id": "acct-1",
-            "side": "buy",
-            "order_type": "market",
-            "quantity": 0.01,
-        }
-        monitor.symbol = "BTCUSDT"
-        monitor.name = name
-        monitor.strategy_name = strategy_name
-        monitor.user = MagicMock()
-        return monitor
+        monitor.action_type = "trade"
 
-    def test_trade_order_records_strategy_name(self):
-        """validate_strategy 监控触发交易时，记录 strategy_name。"""
-        monitor = self._make_monitor(strategy_name="donchian_atr_trend_strategy")
-        exchange_account = MagicMock()
+        with patch.object(SignalMonitorEngine, "_send_notification") as mock_notify:
+            result = self.engine._execute_action(monitor, {})
 
-        with patch("apps.trading.models.Order.objects") as mock_order_mgr, patch(
-            "apps.exchange.models.ExchangeAccount.objects"
-        ) as mock_acct_mgr:
-            mock_acct_mgr.get.return_value = exchange_account
-            self.engine._execute_trade(monitor, {})
+        mock_notify.assert_called_once_with(monitor, {})
+        self.assertEqual(result["action_type"], "trade")
+        self.assertEqual(result["status"], "executed")
 
-        kwargs = mock_order_mgr.create.call_args.kwargs
-        self.assertEqual(kwargs["triggered_strategy"], "donchian_atr_trend_strategy")
+    def test_no_order_created_by_execute_action(self):
+        """engine 不再有建单路径：`apps.trading.models.Order` 不该被触达。"""
+        with patch("apps.trading.models.Order.objects") as mock_order_mgr:
+            monitor = MagicMock()
+            monitor.action_type = "notify_and_trade"  # 历史遗留值（异常防御）
+            self.engine._execute_action(monitor, {})
+        mock_order_mgr.create.assert_not_called()
 
-    def test_trade_order_falls_back_to_monitor_name(self):
-        """普通 trade 监控（无 strategy_name）时，回退到监控名称。"""
-        monitor = self._make_monitor(strategy_name="", name="EMA趋势")
-        exchange_account = MagicMock()
+    def test_execute_trade_method_is_gone(self):
+        """删除边界本身：`_execute_trade` 不允许再被任何入口调用。"""
+        self.assertFalse(hasattr(self.engine, "_execute_trade"))
 
-        with patch("apps.trading.models.Order.objects") as mock_order_mgr, patch(
-            "apps.exchange.models.ExchangeAccount.objects"
-        ) as mock_acct_mgr:
-            mock_acct_mgr.get.return_value = exchange_account
-            self.engine._execute_trade(monitor, {})
+    def test_notify_action_executes_and_returns_result(self):
+        monitor = MagicMock()
+        monitor.action_type = "notify"
+        monitor.strategy_name = ""
+        monitor.name = "EMA趋势"
+        monitor.id = "mon-1"
 
-        kwargs = mock_order_mgr.create.call_args.kwargs
-        self.assertEqual(kwargs["triggered_strategy"], "EMA趋势")
+        with patch.object(SignalMonitorEngine, "_send_notification") as mock_notify:
+            result = self.engine._execute_action(monitor, {})
+
+        mock_notify.assert_called_once_with(monitor, {})
+        self.assertEqual(result["action_type"], "notify")
+        self.assertEqual(result["status"], "executed")
 
 
 if __name__ == "__main__":

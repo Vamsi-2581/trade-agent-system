@@ -1,9 +1,12 @@
-"""断路径收窄：三个入口都不再能创建 `trade` / `notify_and_trade`（第①段强制前置）。
+"""断路径收窄与清扫：三个入口都不再能创建 `trade` / `notify_and_trade`。
 
 `trade` / `notify_and_trade` 是一条**断路径**：`_execute_trade` 只做一次
 `Order.objects.create()`，全仓没有任何消费者读这些行，订单永久停在
-`status="pending"`、`exchange_order_id=""`，没有卡单告警也没有清理任务。处置方式是
-**使路径不可达**，不是在那条代码上补拦截点。
+`status="pending"`、`exchange_order_id=""`，没有卡单告警也没有清理任务。
+处置分三步（修改6，2026-10-12 收尾）：①收窄三个入口（第①段强制前置）；
+②删除引擎 `trade` / `notify_and_trade` 分支与 `_execute_trade`；
+③migration 0004 把存量 trade 行迁移为 notify 并收窄模型 choices。
+本文件钉住的是 ①+③ 的入口边界；② 在 test_engine.py 钉死。
 
 数是**三**个不是两个：创建序列化器、更新序列化器（`patch` 能把既有 notify 型改成
 trade）、以及 `import/backtest/<id>/`——最后这个按请求体自由 JSON 取 `action_type`，
@@ -150,3 +153,14 @@ class TestImportEntryPoint:
 
         assert resp.status_code == 201, resp.content
         assert SignalMonitor.objects.get().action_type == "notify"
+
+
+@pytest.mark.django_db
+class TestActionChoicesNarrowed:
+    def test_model_choices_exclude_trade_actions(self):
+        """修改6：引擎 trade 分支已删除，模型 choices 同步收窄到 notify +
+        validate_strategy，库内不存在不可触达的动作类型。"""
+        values = [choice[0] for choice in SignalMonitor.ACTION_TYPE_CHOICES]
+        assert "trade" not in values
+        assert "notify_and_trade" not in values
+        assert set(values) == {"notify", "validate_strategy"}

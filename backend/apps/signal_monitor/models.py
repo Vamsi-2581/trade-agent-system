@@ -31,10 +31,11 @@ class SignalMonitor(models.Model):
         ("expired", "已过期"),
     ]
 
+    # 收窄到 notify + validate_strategy（2026-10-12 死路径清扫）：`trade` /
+    # `notify_and_trade` 分支已删除，存量行由 migration 0004 迁移为 notify。
+    # `validate_strategy` 仅由 strategy_engine live_mode 内部写入，不走用户入口。
     ACTION_TYPE_CHOICES = [
         ("notify", "发送通知"),
-        ("trade", "执行交易"),
-        ("notify_and_trade", "通知并交易"),
         ("validate_strategy", "策略验证"),
     ]
 
