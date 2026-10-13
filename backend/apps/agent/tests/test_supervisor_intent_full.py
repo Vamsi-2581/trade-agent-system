@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import unittest
 
@@ -232,9 +232,12 @@ def create_supervisor_with_mocks(mock_session_mgr=None):
     supervisor = SupervisorAgent()
 
     # Explicitly patch _llm with a fresh AsyncMock to avoid singleton pollution
-    supervisor._llm = MagicMock()
-    supervisor._llm.chat = AsyncMock()
-    supervisor._llm.chat_with_tools = AsyncMock()
+    #
+    # 注意：不能只替换 supervisor._llm —— supervisor._intent_parser._llm 持有
+    # 同一个 LLMClient 单例的引用（见 supervisor.py:168-169），替换引用会让
+    # _parse_intent 继续打到真实 LLM（实测曾发生 25+ 次真实网络调用）。
+    # 这里在共享单例上原地替换方法，两处缓存同步生效。
+    _stub_llm_client(supervisor._llm)
 
     # Return with stopper
     def stopper():
@@ -243,6 +246,12 @@ def create_supervisor_with_mocks(mock_session_mgr=None):
         patch_redis.stop()
 
     return supervisor, mock_session_mgr, stopper
+
+
+def _stub_llm_client(client) -> None:
+    """在 LLMClient 单例上原地安装 AsyncMock（注：替换引用会造成 patch 泄漏）。"""
+    client.chat = AsyncMock()
+    client.chat_with_tools = AsyncMock()
 
 
 # ------------------------------------------------------------------ #
