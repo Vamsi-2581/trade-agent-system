@@ -27,6 +27,11 @@ class BacktestResult(models.Model):
     total_trades = models.IntegerField(default=0)
     git_commit_hash = models.CharField(max_length=40, blank=True)
     parameters = models.JSONField(default=dict)
+    cost_detail = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='回测成本明细 {"commission": x, "slippage": y, "funding": z}',
+    )
 
     # 审核字段
     REVIEW_STATUS_CHOICES = [
@@ -130,6 +135,9 @@ class BacktestTrade(models.Model):
     commission = models.DecimalField(
         max_digits=20, decimal_places=8, default=0, blank=True
     )
+    slippage = models.DecimalField(
+        max_digits=20, decimal_places=8, default=0, blank=True
+    )
     signal = models.CharField(
         max_length=64,
         blank=True,
@@ -150,6 +158,25 @@ class BacktestTrade(models.Model):
     class Meta:
         db_table = "backtest_trades"
         ordering = ["entry_time"]
+
+
+class FundingRateRecord(models.Model):
+    """永续合约资金费率历史（每 8h 一条，Binance fetchFundingRateHistory）。
+
+    用于回测中的资金费率成本结算。增量同步以 (symbol, funding_time) 幂等。
+    """
+
+    symbol = models.CharField(max_length=32, db_index=True)
+    funding_time = models.DateTimeField(db_index=True)
+    rate = models.FloatField(help_text="资金费率，如 0.0001 = 0.01%/8h")
+
+    class Meta:
+        db_table = "backtest_funding_rates"
+        unique_together = [("symbol", "funding_time")]
+        ordering = ["funding_time"]
+
+    def __str__(self) -> str:
+        return f"{self.symbol}@{self.funding_time.isoformat()} rate={self.rate}"
 
 
 class GridSearchJob(models.Model):

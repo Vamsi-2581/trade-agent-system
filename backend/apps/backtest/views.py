@@ -442,6 +442,9 @@ def result_create(request):
 
     initial_capital = request.data.get("initial_capital", 10000)
     commission_rate = request.data.get("commission_rate", 0.001)
+    slippage_rate = request.data.get("slippage_rate")
+    is_perp = bool(request.data.get("is_perp", False))
+    include_funding = bool(request.data.get("include_funding", True))
     parameters = request.data.get("parameters")
     exchange = request.data.get("exchange", "binance")
     user_id = str(request.user.id) if request.user.is_authenticated else None
@@ -475,6 +478,9 @@ def result_create(request):
             "end_date": end_date,
             "user_id": user_id,
             "result_id": result_id,
+            "slippage_rate": slippage_rate,
+            "is_perp": is_perp,
+            "include_funding": include_funding,
         }
     )
 

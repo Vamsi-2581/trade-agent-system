@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from celery_app import app
@@ -34,6 +34,9 @@ def run_backtest_task(
     user_id: str | None = None,
     result_id: str | None = None,
     benchmark: str = "",
+    slippage_rate: float | None = None,
+    is_perp: bool = False,
+    include_funding: bool = True,
 ) -> dict:
     """
     异步执行策略回测。
@@ -51,6 +54,9 @@ def run_backtest_task(
         end_date: 回测结束日期（ISO 格式，如 2024-12-31），空字符串表示不限
         user_id: 发起回测的用户 ID
         result_id: BacktestResult UUID（如果已提前创建占位记录）
+        slippage_rate: 单边滑点率（None → 引擎默认 0.0005）
+        is_perp: 是否永续合约（影响资金费率结算）
+        include_funding: 永续回测是否计入资金费率成本
 
     Returns:
         回测统计结果
@@ -130,7 +136,7 @@ def run_backtest_task(
                         user_id=user_id,
                     )
                     logger.info(
-                        f"[BacktestTask] created placeholder result_id=%s", result_id
+                        "[BacktestTask] created placeholder result_id=%s", result_id
                     )
             except Exception:
                 logger.warning(
@@ -163,6 +169,12 @@ def run_backtest_task(
 
         runner = StrategyRunner()
 
+        funding_rates = (
+            load_funding_rates(symbol, ohlcv_data)
+            if (is_perp and include_funding)
+            else {}
+        )
+
         loop = asyncio.new_event_loop()
         try:
             stats = loop.run_until_complete(
@@ -177,6 +189,11 @@ def run_backtest_task(
                     commission_rate=Decimal(str(commission_rate)),
                     result_id=result_id,
                     benchmark=benchmark,
+                    slippage_rate=(
+                        Decimal(str(slippage_rate)) if slippage_rate is not None else None
+                    ),
+                    is_perp=is_perp,
+                    funding_rates=funding_rates,
                 )
             )
         finally:
@@ -324,7 +341,11 @@ def _fetch_ohlcv_sync(
                 continue
             result.append(
                 {
-                    "timestamp": datetime.fromtimestamp(ts_ms / 1000).isoformat(),
+                    # UTC 感知时间戳：Binance epoch 为 UTC；naive 本地时间会让
+                    # Django（TIME_ZONE=UTC）与资金费率结算点判定偏移机器时区差。
+                    "timestamp": datetime.fromtimestamp(
+                        ts_ms / 1000, tz=timezone.utc
+                    ).isoformat(),
                     "open": float(candle[1]),
                     "high": float(candle[2]),
                     "low": float(candle[3]),
@@ -602,3 +623,147 @@ def run_grid_search_task(self, job_id: str, user_id: str | None = None) -> dict:
         tracker.stop()
         tracker_context.reset(token)
 
+
+
+# 同步资金费率的主流币永续（起步集合；后续可挪到配置）
+FUNDING_SYNC_SYMBOLS = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+
+
+def load_funding_rates(symbol: str, ohlcv_data: list[dict]) -> dict[str, float]:
+    """把回测区间的资金费率记录装成引擎要的 {ISO 时间: rate} 字典。
+
+    K 线时间戳为 UTC 感知 ISO（见 _fetch_ohlcv_sync），资金费率同样按 UTC 存，
+    因此键可直接对齐。无数据时返回空字典（引擎会按缺失处理并记 warning）。
+    """
+    from apps.backtest.models import FundingRateRecord
+
+    if not ohlcv_data:
+        return {}
+
+    start = _parse_ts(ohlcv_data[0].get("timestamp", ""))
+    end = _parse_ts(ohlcv_data[-1].get("timestamp", ""))
+    qs = FundingRateRecord.objects.filter(symbol=symbol)
+    if start:
+        qs = qs.filter(funding_time__gte=start)
+    if end:
+        qs = qs.filter(funding_time__lte=end)
+
+    return {
+        rec.funding_time.astimezone(timezone.utc).isoformat(): rec.rate
+        for rec in qs
+    }
+
+
+def _parse_ts(value) -> datetime | None:
+    """解析 K 线时间戳为 UTC 感知 datetime；失败返回 None。"""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+@app.task(bind=True, max_retries=2, acks_late=True)
+def sync_funding_rates(self, symbols: list[str] | None = None) -> dict:
+    """增量同步永续资金费率历史到 FundingRateRecord。
+
+    - 每个 symbol 从已有最新 funding_time 起拉取（无记录则从头）；
+    - (symbol, funding_time) 唯一约束幂等去重；
+    - Beat 每 8h 调度一次（结算点后）。
+    """
+    import asyncio
+
+    from django.db import close_old_connections
+
+    from apps.backtest.models import FundingRateRecord
+
+    symbols = symbols or FUNDING_SYNC_SYMBOLS
+    close_old_connections()
+
+    # 1. 同步段：算出每个 symbol 的增量起点（DB 查询必须在 sync 上下文）
+    plans: list[tuple[str, int | None]] = []
+    for symbol in symbols:
+        latest = (
+            FundingRateRecord.objects.filter(symbol=symbol)
+            .order_by("-funding_time")
+            .values_list("funding_time", flat=True)
+            .first()
+        )
+        plans.append((symbol, int(latest.timestamp() * 1000) + 1 if latest else None))
+
+    # 2. 网络段：异步拉取（不含 DB 访问）
+    fetched_by_symbol = asyncio.run(_fetch_all_symbols(plans))
+
+    # 3. 同步段：幂等落库
+    total_new = 0
+    for symbol, since in plans:
+        rows = fetched_by_symbol.get(symbol, [])
+        created = 0
+        for row in rows:
+            _, created_i = FundingRateRecord.objects.get_or_create(
+                symbol=symbol,
+                funding_time=row["dt"],
+                defaults={"rate": row["rate"]},
+            )
+            created += created_i
+        total_new += created
+        logger.info(
+            "[FundingSync] %s: fetched=%d new=%d (since=%s)",
+            symbol,
+            len(rows),
+            created,
+            since,
+        )
+
+    close_old_connections()
+    return {"symbols": symbols, "new_records": total_new}
+
+
+async def _fetch_all_symbols(plans: list[tuple[str, int | None]]) -> dict[str, list]:
+    """按计划拉取所有 symbol 的资金费率历史，返回 {symbol: rows}。"""
+    import ccxt.async_support as ccxt
+
+    exchange = ccxt.binance({"enableRateLimit": True})
+    out: dict[str, list] = {}
+    try:
+        for symbol, since_ms in plans:
+            out[symbol] = await _fetch_funding_history(
+                exchange, symbol, since_ms, {}
+            )
+    finally:
+        await exchange.close()
+    return out
+
+
+async def _fetch_funding_history(
+    exchange, symbol: str, since_ms: int | None, params: dict
+) -> list[dict]:
+    """拉取资金费率历史，返回 [{dt: aware datetime, rate: float}, ...]。"""
+    out: list[dict] = []
+    cursor = since_ms
+    while True:
+        call_params = dict(params)
+        if cursor:
+            call_params["startTime"] = cursor
+        fetched = await exchange.fetch_funding_rate_history(
+            symbol, since=cursor, limit=1000, params=call_params
+        )
+        if not fetched:
+            break
+        for item in fetched:
+            out.append(
+                {
+                    "dt": datetime.fromtimestamp(
+                        item["timestamp"] / 1000, tz=timezone.utc
+                    ),
+                    "rate": float(item["fundingRate"]),
+                }
+            )
+        if len(fetched) < 1000:
+            break
+        cursor = fetched[-1]["timestamp"] + 1
+    return out

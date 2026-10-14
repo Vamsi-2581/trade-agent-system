@@ -44,6 +44,14 @@ class OrderRequest:
     # 少了它，策略档的停用永远不生效，而那种失效不会红任何别的东西：日报里写着「已停用」，
     # 单照常出去。所以它必须随单一路到这里，而不是等到落库时再补——落库在风控之后。
     live_session_id: Optional[str] = None
+    # 本单的杠杆倍数（现货恒为 1）。**风控判定输入**：RiskGuard 用它做两件事——
+    # 杠杆上限校验（> MAX_LEVERAGE 拒）与总名义敞口换算（|value| × leverage）。
+    # 币安合约适配器下单前 `_ensure_leverage` 会按交易所侧设置杠杆，这里填的是
+    # 「下单方声明的杠杆」，不一致时以本字段为准（保守方向）。
+    leverage: int = 1
+    # 永续合约标志。为 False 时 guard 仍按 symbol 后缀（``-SWAP``，OKX 风格）
+    # 兜底判 perp；显式填 True 的调用方不必改 symbol 约定。
+    is_perp: bool = False
 
 
 @dataclass

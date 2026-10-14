@@ -113,6 +113,8 @@ async def _process_order(fields: dict):
             user_id=user_id,
             live_session_id=live_session_id,
             is_close_position=bool(is_close_position),
+            # 合约杠杆随单透传（风控 3a/3c 判定输入）；现货消息里没有该字段，缺省 1。
+            leverage=int(fields.get("leverage", 1) or 1),
         )
 
         logger.info(f"[OrderConsumer] order processed: {result}")

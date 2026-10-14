@@ -64,6 +64,9 @@ class StrategyRunner:
         result_id: str | None = None,
         benchmark: str = "",
         user_id: str | None = None,
+        slippage_rate: Decimal | None = None,
+        is_perp: bool = False,
+        funding_rates: dict[str, float] | None = None,
     ) -> dict:
         """
         用历史数据回放策略。
@@ -78,6 +81,9 @@ class StrategyRunner:
             strategy_id: Strategy 模型 UUID（用于存回测结果）
             git_commit_hash: 策略代码的 git 提交哈希
             commission_rate: 手续费率
+            slippage_rate: 单边滑点率（None → 引擎默认）
+            is_perp: 是否永续合约（决定是否结算资金费率）
+            funding_rates: {ISO 时间: rate}，由调用方从 FundingRateRecord 组装
 
         Returns:
             回测统计结果
@@ -115,15 +121,20 @@ class StrategyRunner:
         )
 
         # 运行回测
-        engine = BacktestEngine(
-            strategy=strategy,
-            ohlcv_data=ohlcv_data,
-            initial_capital=initial_capital,
-            symbol=symbol,
-            timeframe=timeframe,
-            commission_rate=commission_rate,
-            benchmark=benchmark,
-        )
+        engine_kwargs = {
+            "strategy": strategy,
+            "ohlcv_data": ohlcv_data,
+            "initial_capital": initial_capital,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "commission_rate": commission_rate,
+            "benchmark": benchmark,
+            "is_perp": is_perp,
+            "funding_rates": funding_rates or {},
+        }
+        if slippage_rate is not None:
+            engine_kwargs["slippage_rate"] = slippage_rate
+        engine = BacktestEngine(**engine_kwargs)
         stats = await engine.run()
 
         # 存入数据库：优先使用已有的 result_id（BacktestResult），否则根据 strategy_id 查找/创建

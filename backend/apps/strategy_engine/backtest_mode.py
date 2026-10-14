@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_COMMISSION_RATE = Decimal("0.001")
+# taker 单边滑点（0.05%），成交价劣化方向：买更贵、卖更便宜
+DEFAULT_SLIPPAGE_RATE = Decimal("0.0005")
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -41,7 +43,10 @@ class BacktestEngine:
         symbol: str,
         timeframe: str,
         commission_rate: Decimal = DEFAULT_COMMISSION_RATE,
+        slippage_rate: Decimal = DEFAULT_SLIPPAGE_RATE,
         benchmark: str = "",
+        is_perp: bool = False,
+        funding_rates: dict[str, float] | None = None,
     ):
         self.strategy = strategy
         self.ohlcv_data = ohlcv_data
@@ -49,7 +54,14 @@ class BacktestEngine:
         self.symbol = symbol
         self.timeframe = timeframe
         self.commission_rate = commission_rate
+        self.slippage_rate = slippage_rate
         self.benchmark = benchmark
+        self.is_perp = is_perp
+        # 资金费率表：{ISO8601 结算时间: rate}（由调用方从 FundingRateRecord 组装）
+        self.funding_rates = funding_rates or {}
+
+        # 成本明细累计（commission/slippage/funding）
+        self.cost_detail: dict = {"commission": 0.0, "slippage": 0.0, "funding": 0.0}
 
         # 运行状态
         self._cash = initial_capital
@@ -92,6 +104,10 @@ class BacktestEngine:
                 if signal:
                     self._process_signal(signal, kline)
 
+            # 永续：每个 bar 检查是否命中 8h 资金费率结算点
+            if self.is_perp:
+                self._settle_funding(kline)
+
             # 记录权益点
             current_equity = self._cash + self._position_value(kline)
             self._peak_equity = max(self._peak_equity, current_equity)
@@ -131,12 +147,15 @@ class BacktestEngine:
 
     def _process_signal(self, signal: "OrderSignal", kline: dict) -> None:
         """处理策略信号，模拟成交"""
-        # 使用 K 线收盘价作为成交价（简化市价单模拟）
-        fill_price = Decimal(str(kline["close"]))
+        # 使用 K 线收盘价作为基准价（简化市价单模拟），
+        # 再按滑点方向劣化：买入成交价上浮、卖出成交价下浮。
+        base_price = Decimal(str(kline["close"]))
 
         if signal.side == "buy":
+            fill_price = base_price * (1 + self.slippage_rate)
             self._execute_buy(signal, fill_price, kline)
         elif signal.side == "sell":
+            fill_price = base_price * (1 - self.slippage_rate)
             self._execute_sell(signal, fill_price, kline)
 
     def _execute_buy(
@@ -153,8 +172,10 @@ class BacktestEngine:
                 "Backtest: insufficient cash for buy signal. "
                 f"need={total_cost}, cash={self._cash}"
             )
-            # 计算最大可买数量
-            max_qty = self._cash / (fill_price * (1 + self.commission_rate))
+            # 计算最大可买数量（含滑点价与佣金）
+            max_qty = self._cash / (
+                fill_price * (1 + self.slippage_rate + self.commission_rate)
+            )
             if max_qty <= 0:
                 return
             signal = signal.__class__(
@@ -171,6 +192,11 @@ class BacktestEngine:
             total_cost = cost + commission
 
         self._cash -= total_cost
+        # 滑点成本 = 实际成交额 - 无滑点基准成交额（fill 已含滑点劣化）
+        self._accumulate_cost(
+            "slippage", cost * self.slippage_rate / (1 + self.slippage_rate)
+        )
+        self._accumulate_cost("commission", commission)
 
         # 更新加权平均入场价（按成交金额加权）
         old_cost_basis = self._avg_entry_price * self._position
@@ -198,6 +224,7 @@ class BacktestEngine:
                 "pnl": None,
                 "pnl_pct": None,
                 "commission": float(commission),
+                "slippage": float(cost * self.slippage_rate / (1 + self.slippage_rate)),
                 "signal": signal.signal_name,
                 "exit_reason": "",
                 "trade_type": trade_type,
@@ -220,6 +247,8 @@ class BacktestEngine:
         proceeds = sell_qty * fill_price
         commission = proceeds * self.commission_rate
         net_proceeds = proceeds - commission
+        # 滑点成本 = 无滑点基准成交额 - 实际成交额（fill 已含滑点劣化）
+        slippage_cost = proceeds * self.slippage_rate / (1 - self.slippage_rate)
 
         # 计算平均成本（使用引擎追踪的加权平均入场价）
         avg_cost = (
@@ -234,6 +263,8 @@ class BacktestEngine:
         entry_time_for_trade = self._get_fifo_entry_time(sell_qty)
 
         self._cash += net_proceeds
+        self._accumulate_cost("slippage", slippage_cost)
+        self._accumulate_cost("commission", commission)
         self._position -= sell_qty
 
         # 同步回策略上下文
@@ -255,6 +286,7 @@ class BacktestEngine:
                 if avg_cost * sell_qty > 0
                 else 0,
                 "commission": float(commission),
+                "slippage": float(slippage_cost),
                 "signal": signal.signal_name,
                 "exit_reason": signal.metadata.get("reason", "signal"),
                 "trade_type": "close",
@@ -288,10 +320,11 @@ class BacktestEngine:
         if self._position <= 0:
             return
 
-        fill_price = Decimal(str(kline["close"]))
+        fill_price = Decimal(str(kline["close"])) * (1 - self.slippage_rate)
         proceeds = self._position * fill_price
         commission = proceeds * self.commission_rate
         net_proceeds = proceeds - commission
+        slippage_cost = proceeds * self.slippage_rate / (1 - self.slippage_rate)
         avg_cost = (
             self._avg_entry_price
             if self._avg_entry_price > 0
@@ -300,6 +333,8 @@ class BacktestEngine:
         pnl = (fill_price - avg_cost) * self._position - commission
 
         self._cash += net_proceeds
+        self._accumulate_cost("slippage", slippage_cost)
+        self._accumulate_cost("commission", commission)
 
         # FIFO 匹配：获取平仓对应的最早开仓时间
         entry_time_for_close = self._get_fifo_entry_time(self._position)
@@ -317,6 +352,7 @@ class BacktestEngine:
                 if avg_cost * self._position > 0
                 else 0,
                 "commission": float(commission),
+                "slippage": float(slippage_cost),
                 "signal": "close_position",
                 "exit_reason": reason,
                 "trade_type": "close",
@@ -332,6 +368,79 @@ class BacktestEngine:
         self.strategy.ctx.balance = self._cash
         self.strategy.ctx.set_position(self.symbol, self._position)
         self.strategy.ctx.avg_entry_price = self._avg_entry_price
+
+    def _accumulate_cost(self, kind: str, amount: Decimal) -> None:
+        """累计成本明细（金额为 Decimal，存储为 float）。"""
+        if amount:
+            self.cost_detail[kind] = self.cost_detail.get(kind, 0.0) + float(amount)
+
+    # Binance 永续资金费率结算点：UTC 00:00 / 08:00 / 16:00
+    _FUNDING_HOURS = (0, 8, 16)
+
+    def _settle_funding(self, kline: dict) -> None:
+        """若当前 bar 命中资金费率结算点，对当前持仓名义结算一次。
+
+        - 多头在正费率时支付（rate × notional），负费率时收取；
+        - 空头方向相反；
+        - 无持仓不结算；
+        - 费率数据缺失：跳过并记 warning（不静默当作 0）。
+        """
+        if not self.is_perp or self._position == 0:
+            return
+
+        ts = kline.get("timestamp", "")
+        try:
+            dt = _parse_dt(ts)
+        except (ValueError, TypeError):
+            dt = None
+        if dt is None:
+            return
+        # 结算点按 UTC 整点判定（Binance 00/08/16 UTC），与 K 线时区无关
+        dt_utc = dt.astimezone(dt_timezone.utc)
+        if dt_utc.hour not in self._FUNDING_HOURS or dt_utc.minute != 0:
+            return
+
+        rate = self.funding_rates.get(ts)
+        if rate is None:
+            # 结算时间戳可能有秒级差异，退而按 (UTC date, UTC hour) 匹配
+            rate = next(
+                (
+                    r
+                    for t, r in self.funding_rates.items()
+                    if (parsed := _parse_dt(t))
+                    and parsed.astimezone(dt_timezone.utc).date() == dt_utc.date()
+                    and parsed.astimezone(dt_timezone.utc).hour == dt_utc.hour
+                ),
+                None,
+            )
+        if rate is None:
+            logger.warning(
+                "Backtest: funding rate missing at settlement %s for %s — "
+                "settlement skipped (NOT treated as zero).",
+                ts,
+                self.symbol,
+            )
+            return
+
+        # 名义价值取绝对值：_position_value 对 _position<=0 短路返回 0，
+        # 直接拿它算空头会恒为 0（空头资金费率静默丢失），故单独取 abs。
+        notional = abs(self._position) * Decimal(str(kline["close"]))
+        # 方向由持仓符号决定：多头正费率付（正支出）；空头镜像（收正费率）
+        payment = Decimal(str(rate)) * notional
+        if self._position < 0:
+            payment = -payment
+
+        # payment > 0：现金支出；payment < 0：现金收入
+        self._cash -= payment
+        self._accumulate_cost("funding", payment)
+        if payment:
+            logger.info(
+                "Backtest: funding settled at %s: rate=%s notional=%s payment=%s",
+                ts,
+                rate,
+                notional,
+                payment,
+            )
 
     def _position_value(self, kline: dict) -> Decimal:
         """当前持仓市值"""
@@ -379,6 +488,7 @@ class BacktestEngine:
             "win_rate": win_rate,
             "sharpe_ratio": sharpe,
             "total_trades": total_closed,
+            "cost_detail": dict(self.cost_detail),
             "equity_curve": self._equity_curve,
             "trades": self._trades,
         }
@@ -460,7 +570,6 @@ class BacktestEngine:
 async def _resolve_strategy_id(strategy_name: str) -> str | None:
     from asgiref.sync import sync_to_async
     from apps.trading.models import Strategy
-    from apps.strategy_engine.registry import StrategyRegistry
 
     # 先精确匹配，失败后尝试模糊解析
     canonical = _resolve_strategy_name(strategy_name)
@@ -665,6 +774,7 @@ async def save_backtest_result(
             result.total_trades = stats["total_trades"]
             result.git_commit_hash = git_commit_hash
             result.parameters = parameters
+            result.cost_detail = stats.get("cost_detail", {})
             result.equity_curve = stats.get("equity_curve", [])[:2000]
             result.drawdown_curve = [
                 {"timestamp": p["timestamp"], "drawdown": p["drawdown"]}
@@ -693,6 +803,7 @@ async def save_backtest_result(
                 max_drawdown_pct=stats["max_drawdown_pct"],
                 win_rate=stats["win_rate"],
                 total_trades=stats["total_trades"],
+                cost_detail=stats.get("cost_detail", {}),
                 git_commit_hash=git_commit_hash,
                 parameters=parameters,
                 equity_curve=stats.get("equity_curve", [])[:2000],
@@ -728,6 +839,7 @@ async def save_backtest_result(
                     pnl=trade_data.get("pnl"),
                     pnl_pct=trade_data.get("pnl_pct"),
                     commission=trade_data.get("commission", 0),
+                    slippage=trade_data.get("slippage", 0),
                     signal=trade_data.get("signal") or "",
                     exit_reason=trade_data.get("exit_reason") or "",
                     trade_type=trade_data.get("trade_type", "open"),

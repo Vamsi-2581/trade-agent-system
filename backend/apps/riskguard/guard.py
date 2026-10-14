@@ -93,10 +93,19 @@ class RiskGuard:
     # 风控阈值。曾经有一条「可由管理员通过 RiskConfig 覆盖」的注释，但实现从未存在
     # ——那个配置面 guard 从不读取（2026-10-12 随 apps.risk 摘除）。现在这四个类常量
     # 就是阈值的唯一配置面，想改它们只有一个定义可改。
-    MAX_POSITION_RATIO = Decimal("0.20")  # 单仓不超过总资产20%
+    MAX_POSITION_RATIO = Decimal("0.20")  # 单仓不超过总资产20%（现货）
     MAX_DAILY_DRAWDOWN = Decimal("0.05")  # 日内最大回撤5%
     MAX_DAILY_TRADES = 50  # 日内最大交易次数
     FLOATING_LOSS_ALERT = Decimal("-0.03")  # 浮亏-3%预警
+
+    # ---- 合约（perp）模式阈值（Ticket 3 共识参数）----
+    #: 合约杠杆上限。超过即拒：杠杆是把上面所有比例类阈值同时放大的旋钮，
+    #: 必须最先卡住。
+    MAX_LEVERAGE = 5
+    #: 合约单仓上限（名义 / 总资产）。现货的 20% 口径不适用于带杠杆的合约。
+    MAX_POSITION_RATIO_PERP = Decimal("0.10")
+    #: 组合总名义敞口硬顶：Σ|position_value × leverage| / total_equity。
+    MAX_TOTAL_NOTIONAL_EXPOSURE = Decimal("1.00")
 
     def __init__(self, mode: str = "trading"):
         self.mode = mode
@@ -145,8 +154,12 @@ class RiskGuard:
         0. 停止判定（halt 状态机，只查开新仓）
         1. 熔断器检查（已禁用，ADR 0001）
         2. 日内交易次数
-        3. 仓位上限
+        3. 仓位上限（3a 杠杆 / 3b 单仓比例 / 3c 总名义敞口）
         4. 日内回撤
+
+        **RiskEvent 归档不对称**：只有第 3 步的三条 perp 校验（3a/3b/3c）拒单时写
+        ``RiskEvent(P0, hard_limit)``；第 0/2/4 步的拒单不写 RiskEvent（沿用历史行为，
+        未纳入本次 P0）。读者别默认所有拒单都归档。
 
         **第 0 步排在 ``user_id`` 判空之前**，这是它与后面四步的根本区别：后面四步问的
         都是「这个人还能不能下单」（次数、仓位、回撤都是按人的额度），而停止判定问的是
@@ -208,10 +221,10 @@ class RiskGuard:
         # 手动触发那条线已于 2026-10-12 兑现（ADR 0001 的欠账）：`manage.py manual_halt`
         # → `apps/regime/manual_halt.trip` → 一行 ``HaltTrigger.MANUAL`` 声明，拦单走的
         # 正是上面第 0 步的停止判定，与事件熔断同一个口——不是这里。
-        logger.info(f"[RiskGuard] step 1: circuit breaker (disabled)")
+        logger.info("[RiskGuard] step 1: circuit breaker (disabled)")
 
         # 2. 日内交易次数
-        logger.info(f"[RiskGuard] step 2: daily trade count check")
+        logger.info("[RiskGuard] step 2: daily trade count check")
         daily_count = await self._get_daily_trade_count(user_id)
         logger.info(f"[RiskGuard] step 2 done: count={daily_count}")
         if daily_count >= self.MAX_DAILY_TRADES:
@@ -219,16 +232,26 @@ class RiskGuard:
             logger.warning(f"[RiskGuard] REJECTED: {reason}")
             return await self._reject(user_id, reason)
 
-        # 3. 仓位上限
-        logger.info(f"[RiskGuard] step 3: position limit check")
+        # 3. 仓位上限（含 3a 杠杆 / 3b 合约单仓 / 3c 总名义敞口，见下面各方法）
+        logger.info("[RiskGuard] step 3: position limit check")
+        # 3a 杠杆上限（最便宜的本地判定，排最前）
+        leverage_reason = await self._check_leverage(request)
+        if leverage_reason:
+            logger.warning(f"[RiskGuard] REJECTED: {leverage_reason}")
+            return await self._reject(user_id, leverage_reason, record_event=True)
+        # 3c 总名义敞口（本单成交后 Σ|value × leverage| / equity）
+        exposure_reason = await self._check_total_notional_exposure(request, user_id)
+        if exposure_reason:
+            logger.warning(f"[RiskGuard] REJECTED: {exposure_reason}")
+            return await self._reject(user_id, exposure_reason, record_event=True)
         position_ok, reason = await self._check_position_limit(request, user_id)
         logger.info(f"[RiskGuard] step 3 done: ok={position_ok}")
         if not position_ok:
             logger.warning(f"[RiskGuard] REJECTED: {reason}")
-            return await self._reject(user_id, reason)
+            return await self._reject(user_id, reason, record_event=True)
 
         # 4. 日内回撤
-        logger.info(f"[RiskGuard] step 4: drawdown check")
+        logger.info("[RiskGuard] step 4: drawdown check")
         drawdown_ok, reason = await self._check_drawdown(user_id)
         logger.info(f"[RiskGuard] step 4 done: ok={drawdown_ok}")
         if not drawdown_ok:
@@ -255,7 +278,13 @@ class RiskGuard:
         verdict = await db_async(_halt_verdict)(request)
         return verdict.reason
 
-    async def _reject(self, user_id: str, reason: str) -> Tuple[bool, str]:
+    async def _reject(
+        self,
+        user_id: str,
+        reason: str,
+        *,
+        record_event: bool = False,
+    ) -> Tuple[bool, str]:
         """拒绝下单**并让用户看见**，然后返回 (False, reason)。
 
         2026-09-22：`pre_trade_check` 返回 False 时 `OrderExecutor` 抛
@@ -263,8 +292,17 @@ class RiskGuard:
         `record_order_failure` 那条通知。用户的意图于是被静默丢弃，与
         `record_order_failure` 里记的 2026-09-21 事故是同一种病。
         通知失败只记日志，绝不改变「拒绝」这个决定本身。
+
+        ``record_event=True``（Ticket 3：额度类新拒单——杠杆 / 单仓 / 总敞口）时
+        另写一条 ``RiskEvent``（type=hard_limit，message 即带具体数字的 reason）。
+        写入失败只记日志：档案缺一行不能变成二次拒单或放行。
         """
         from apps.trading.alerts import notify_user
+
+        if record_event:
+            await self._record_risk_event(
+                level="P0", event_type="hard_limit", message=reason
+            )
 
         try:
             await notify_user(user_id, f"⚠️ 下单被风控拦截\n{reason}")
@@ -364,6 +402,80 @@ class RiskGuard:
 
         return await count()
 
+    @staticmethod
+    def _is_perp_request(request: "OrderRequest") -> bool:
+        """这张单是不是永续合约单。
+
+        两个口径取或：``request.is_perp`` 显式标志（币安 fapi 通路由下单方声明），
+        或 symbol 后缀 ``-SWAP``（OKX 风格的统一合约符号）。现货（默认）两者皆无。
+        """
+        return bool(request.is_perp) or request.symbol.upper().endswith("-SWAP")
+
+    async def _check_leverage(self, request: "OrderRequest") -> str:
+        """3a 杠杆上限。返回空串 = 放行，否则返回带具体数字的拒绝理由。"""
+        if request.leverage > self.MAX_LEVERAGE:
+            return (
+                f"杠杆 {request.leverage}x 超过上限 {self.MAX_LEVERAGE}x"
+                f"（MAX_LEVERAGE={self.MAX_LEVERAGE}）"
+            )
+        return ""
+
+    async def _check_total_notional_exposure(
+        self, request: "OrderRequest", user_id: str
+    ) -> str:
+        """3c 组合总名义敞口：Σ|position_value × leverage| / total_equity ≤ 100%。
+
+        本单若成交也计入分子（它此刻就是新的敞口）。持仓与净值都按**本单的账户**
+        解析（与 `_check_position_limit` 同一个适配器、同一个口径）；任一取数失败
+        或分母非正 → 降级放行，与现货单仓检查的取向一致——这里的职责是拦「明知
+        超限还开仓」，不是把取数故障变成全场停摆。
+        """
+        from apps.trading.executor import OrderExecutor
+
+        executor = OrderExecutor.get_instance()
+        if not executor:
+            return ""
+        adapter = executor.resolve_adapter(
+            getattr(request, "exchange_account_id", None)
+        )
+        if not adapter:
+            return ""
+
+        try:
+            balance = await adapter.get_balance()
+            positions = await adapter.get_positions()
+        except Exception:  # noqa: BLE001 - 取数失败降级放行（同现货单仓检查）
+            logger.warning(
+                "[RiskGuard] step 3c 总名义敞口取数失败，本轮降级放行",
+                exc_info=True,
+            )
+            return ""
+
+        total_equity = balance.get("USDT", Decimal("0"))
+        if total_equity <= 0:
+            return ""
+
+        total_notional = Decimal("0")
+        for pos in positions:
+            mark = pos.mark_price if pos.mark_price is not None else pos.entry_price
+            total_notional += abs(pos.quantity * mark * pos.leverage)
+
+        if request.price is not None:
+            # 本单成交后的新增名义敞口。spec 公式无条件 ×leverage：现货单
+            # leverage=1（OrderRequest 缺省），perp 单 ×实际杠杆——同一式子。
+            total_notional += abs(
+                request.price * request.quantity * Decimal(request.leverage)
+            )
+
+        ratio = total_notional / total_equity
+        if ratio > self.MAX_TOTAL_NOTIONAL_EXPOSURE:
+            return (
+                f"总名义敞口 {ratio:.1%} 超过上限 "
+                f"{self.MAX_TOTAL_NOTIONAL_EXPOSURE:.0%}"
+                f"（持仓+本单名义 {total_notional}，净值 {total_equity}）"
+            )
+        return ""
+
     async def _check_position_limit(
         self, request: "OrderRequest", user_id: str
     ) -> Tuple[bool, str]:
@@ -407,9 +519,15 @@ class RiskGuard:
 
         order_value = request.price * request.quantity
         ratio = order_value / total_usdt
-        if ratio > self.MAX_POSITION_RATIO:
+        # 3b：perp（显式标志或 -SWAP 后缀）用合约单仓上限，现货维持 0.20 不回退。
+        max_ratio = (
+            self.MAX_POSITION_RATIO_PERP
+            if self._is_perp_request(request)
+            else self.MAX_POSITION_RATIO
+        )
+        if ratio > max_ratio:
             return False, (
-                f"单笔仓位 {ratio:.1%} 超过上限 {self.MAX_POSITION_RATIO:.0%}"
+                f"单笔仓位 {ratio:.1%} 超过上限 {max_ratio:.0%}"
             )
         return True, ""
 

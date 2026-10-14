@@ -290,6 +290,9 @@ class OrderExecutor:
         user_id: Optional[str] = None,
         is_close_position: bool = False,
         live_session_id: Optional[str] = None,
+        # 本单杠杆倍数（现货恒为 1）。透传给 OrderRequest → RiskGuard 的杠杆上限
+        # （3a）与总名义敞口（3c）校验；适配器侧杠杆设置仍由 `_ensure_leverage` 负责。
+        leverage: int = 1,
     ) -> dict:
         """
         下单主流程。
@@ -347,6 +350,9 @@ class OrderExecutor:
             # 唯一能拦住它的交易所级手段（适配层翻译成 reduceOnly 参数，见
             # binance 适配器）。开仓单保持 False：开仓本来就要「增」。
             reduce_only=is_close_position,
+            # 杠杆是**判定输入**不是追溯字段：RiskGuard 的 3a/3c 校验在落库之前，
+            # 必须随单带下去。
+            leverage=leverage,
         )
         if self._riskguard:
             # 诊断：检查方法类型

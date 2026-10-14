@@ -169,6 +169,21 @@ class SubmitBacktestTool(BaseTool):
                     "type": "string",
                     "description": "基准策略名称，用于对比（如 buy_and_hold），可选",
                 },
+                "slippage_rate": {
+                    "type": "number",
+                    "description": "单边滑点率，默认 0.0005（0.05%）。回测成交价按此劣化",
+                    "default": 0.0005,
+                },
+                "is_perp": {
+                    "type": "boolean",
+                    "description": "是否永续合约回测（决定是否结算资金费率成本），默认 false",
+                    "default": False,
+                },
+                "include_funding": {
+                    "type": "boolean",
+                    "description": "永续回测是否计入资金费率成本，默认 true（仅 is_perp 时生效）",
+                    "default": True,
+                },
                 "grid_search": {
                     "type": "object",
                     "description": (
@@ -368,6 +383,9 @@ class SubmitBacktestTool(BaseTool):
                 "end_date": end_date,
                 "result_id": result_id,
                 "benchmark": kwargs.get("benchmark", ""),
+                "slippage_rate": kwargs.get("slippage_rate"),
+                "is_perp": bool(kwargs.get("is_perp", False)),
+                "include_funding": bool(kwargs.get("include_funding", True)),
             }
             # Only set user_id if explicitly provided; otherwise let Supervisor
             # inject it. Setting None here would block Supervisor auto-injection.

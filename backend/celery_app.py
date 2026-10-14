@@ -62,6 +62,11 @@ app.conf.beat_schedule = {
         'task': 'apps.signal_monitor.tasks.check_signals',
         'schedule': 30.0,
     },
+    # Sync perpetual funding rates every 8h (after settlement points 00/08/16 UTC)
+    'sync-funding-rates': {
+        'task': 'apps.backtest.tasks.sync_funding_rates',
+        'schedule': crontab(hour='1,9,17', minute=30),
+    },
     # Refresh expiring Feishu user tokens every 15 minutes
     'refresh-feishu-user-tokens': {
         'task': 'apps.channel.tasks.refresh_feishu_user_tokens',
