@@ -574,8 +574,8 @@ def run_grid_search_task(self, job_id: str, user_id: str | None = None) -> dict:
         tracker_context.reset(token)
 
 
-# 同步资金费率的主流币永续（起步集合；后续可挪到配置）
-FUNDING_SYNC_SYMBOLS = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+# 资金费率同步标的集合已移到 settings.FUNDING_SYNC_SYMBOLS（与 K 线同步对齐，
+# 单一来源，见 spec §8/§9）。
 
 
 def load_funding_rates(symbol: str, ohlcv_data: list[dict]) -> dict[str, float]:
@@ -625,11 +625,13 @@ def sync_funding_rates(self, symbols: list[str] | None = None) -> dict:
     """
     import asyncio
 
+    from django.conf import settings
     from django.db import close_old_connections
 
     from apps.backtest.models import FundingRateRecord
 
-    symbols = symbols or FUNDING_SYNC_SYMBOLS
+    # 标的集合单一来源在 settings（与 K 线增量同步对齐）
+    symbols = symbols or list(settings.FUNDING_SYNC_SYMBOLS)
     close_old_connections()
 
     # 1. 同步段：算出每个 symbol 的增量起点（DB 查询必须在 sync 上下文）

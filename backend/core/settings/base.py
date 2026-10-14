@@ -192,6 +192,19 @@ DATASOURCE_AUTO_WS = (
     os.environ.get("DATASOURCE_AUTO_WS", "true").lower() not in ("0", "false", "no")
 )
 
+# ---------------------------------------------------------------------------
+# 行情数据同步（K 线 / 资金费率）
+# ---------------------------------------------------------------------------
+# 标的集合单一来源：K 线增量同步与资金费率同步共用同一批永续合约。
+# 历史上两者各自硬编码在各自的任务模块里（见 spec §8），容易漂移。
+PERPETUAL_SYNC_SYMBOLS = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+KLINE_SYNC_SYMBOLS = list(PERPETUAL_SYNC_SYMBOLS)
+FUNDING_SYNC_SYMBOLS = list(PERPETUAL_SYNC_SYMBOLS)
+
+KLINE_SYNC_TIMEFRAMES = ["15m", "1h", "4h"]
+KLINE_BACKFILL_DAYS = 365  # 首次回填 / 无记录时的默认回溯天数
+KLINE_SYNC_INTERVAL = 900  # 增量同步间隔（秒）；beat 与任务同源读这一个值
+
 # Web tools
 WEB_SEARCH_PROVIDER = os.environ.get(
     "WEB_SEARCH_PROVIDER", "duckduckgo"

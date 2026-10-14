@@ -2,6 +2,7 @@ import logging
 import os
 from celery import Celery
 from celery.schedules import crontab
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ app.autodiscover_tasks()
 # 显式导入 task 模块（autodiscover_tasks 在某些环境下不生效）
 import apps.agent.tasks  # noqa: F401
 import apps.backtest.tasks  # noqa: F401
+import apps.datasource.tasks  # noqa: F401
 import apps.signal_monitor.tasks  # noqa: F401
 import apps.channel.tasks  # noqa: F401
 import apps.trading.tasks  # noqa: F401
@@ -66,6 +68,12 @@ app.conf.beat_schedule = {
     'sync-funding-rates': {
         'task': 'apps.backtest.tasks.sync_funding_rates',
         'schedule': crontab(hour='1,9,17', minute=30),
+    },
+    # 增量同步 K 线（15min 一轮，覆盖 15m 周期最新 bar）
+    # 间隔与任务同源读 settings.KLINE_SYNC_INTERVAL，避免两处硬编码漂移
+    'sync-klines': {
+        'task': 'apps.datasource.tasks.sync_klines',
+        'schedule': settings.KLINE_SYNC_INTERVAL,
     },
     # Refresh expiring Feishu user tokens every 15 minutes
     'refresh-feishu-user-tokens': {
