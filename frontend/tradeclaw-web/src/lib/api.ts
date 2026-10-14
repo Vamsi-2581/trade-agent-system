@@ -178,10 +178,37 @@ export interface Strategy {
   created_at: string;
 }
 
+/** 策略**声明**的一个参数（`params_schema` 的一项）。
+ *  说"策略允许你设什么"——与 `LiveSessionDetail["params"]` 的"这条会话实际在跑什么"
+ *  是两件事，别混用。`default` 是该键未被覆盖时真正生效的值。 */
+export interface StrategyParamSpec {
+  key: string;
+  /** 声明里的 type（"int" | "float" | "bool" | "string" | null）。null = 声明里没写。 */
+  type: string | null;
+  default: unknown;
+  description: string;
+  min: number | null;
+  max: number | null;
+}
+
+export interface StrategyParamsResponse {
+  strategy_name: string;
+  /** false = 解析不到策略实现类，`params` 必为空。 */
+  resolved: boolean;
+  params: StrategyParamSpec[];
+}
+
 export const tradingApi = {
   getOrders: () => request<Order[]>("/api/trading/orders/"),
   getOrder: (id: string) => request<Order>(`/api/trading/orders/${id}/`),
   getStrategies: () => request<Strategy[]>("/api/trading/strategies/"),
+  /** 某策略声明的参数表。部署会话时用它渲染"可覆盖的参数"——
+   *  没有这个入口，像 `volume_filter` 这种默认关闭的键就没地方打开
+   *  （2026-10-12 SOL/USDT 审计）。 */
+  getStrategyParams: (name: string) =>
+    request<StrategyParamsResponse>(
+      `/api/trading/strategies/${encodeURIComponent(name)}/params/`
+    ),
   createStrategy: (data: Partial<Strategy>) =>
     request<Strategy>("/api/trading/strategies/", "POST", data),
   getSummary: () =>

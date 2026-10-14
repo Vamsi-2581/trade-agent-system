@@ -8,11 +8,13 @@ import {
   backtestApi,
   liveSessionApi,
   exchangeApi,
+  tradingApi,
   type BacktestDetail,
   type BacktestTrade,
   type OHLCVPoint,
   type IndicatorData,
   type ExchangeAccount,
+  type StrategyParamSpec,
 } from "@/lib/api";
 import { resampleOHLCV, computeIndicators, timeframeToMinutes } from "@/lib/resample";
 import TView from "@/components/backtest/TView";
@@ -55,6 +57,12 @@ export default function BacktestDetailPage() {
   const [accounts, setAccounts] = useState<ExchangeAccount[]>([]);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deploySuccess, setDeploySuccess] = useState<string | null>(null);
+  /** 部署时可覆盖的策略参数（键 → 值）。只放**用户显式改过**的键：
+   *  没碰过的键不进 config，让会话走策略声明默认值（与后端
+   *  `{**backtest.parameters, **config}` 的继承语义一致）。 */
+  const [deployParams, setDeployParams] = useState<Record<string, unknown>>({});
+  const [deploySchema, setDeploySchema] = useState<StrategyParamSpec[]>([]);
+  const [deploySchemaError, setDeploySchemaError] = useState<string | null>(null);
 
   // ── Timeframe switching with cache ──
   const [activeTf, setActiveTf] = useState<string | null>(null);
@@ -355,6 +363,42 @@ export default function BacktestDetailPage() {
     exchangeApi.getAccounts().then(setAccounts);
   }, [deployOpen]);
 
+  // 部署弹窗打开时拉该策略**声明**的参数表（可覆盖的键）。
+  // 没有这一步，像 volume_filter 这种默认关闭的键就没有任何入口能打开——
+  // 2026-10-12 SOL/USDT 的量能门全程关闭就是这么来的。
+  useEffect(() => {
+    if (!deployOpen) return;
+    const name = detail?.strategy_name;
+    setDeployParams({});
+    setDeploySchema([]);
+    setDeploySchemaError(null);
+    if (!name) {
+      // 回测没记策略名（strategy_name 可空）：不猜，如实说没有可覆盖的表
+      setDeploySchemaError("该回测未记录策略名，无法列出可覆盖参数");
+      return;
+    }
+    let cancelled = false;
+    tradingApi
+      .getStrategyParams(name)
+      .then((res) => {
+        if (cancelled) return;
+        if (!res.resolved) {
+          setDeploySchemaError(`解析不到策略 ${name} 的实现类，无法列出参数`);
+          return;
+        }
+        setDeploySchema(res.params);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setDeploySchemaError(
+          e instanceof Error ? e.message : "加载策略参数失败"
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deployOpen, detail?.strategy_name]);
+
   const handleReview = async (approved: boolean) => {
     setReviewLoading(true);
     try {
@@ -396,6 +440,11 @@ export default function BacktestDetailPage() {
         backtest_result_id: id,
         mode: deployMode,
         exchange_account_id: deployAccountId,
+        // 只发用户**显式改过**的键：没碰过的键不进 config，会话走策略声明默认值。
+        // 后端会把它覆盖在回测参数之上（`{**backtest.parameters, **config}`）。
+        ...(Object.keys(deployParams).length > 0
+          ? { config: deployParams }
+          : {}),
       });
       setDeploySuccess(`会话已创建 (${deployMode === "paper" ? "模拟" : "实盘"} 模式)`);
       setTimeout(() => setDeployOpen(false), 1500);
@@ -670,6 +719,110 @@ export default function BacktestDetailPage() {
                   </option>
                 ))}
               </select>
+            </div>
+
+            {/* 运行参数覆盖：只列策略**声明**的键。
+                不改的键不发出去，会话走策略默认值——与后端
+                `{**backtest.parameters, **config}` 的继承语义一致。
+                没有这块，像 volume_filter 这种默认关闭的键就没入口打开。 */}
+            <div className="mb-4">
+              <label className="text-[10px] text-text3 uppercase tracking-wider font-semibold block mb-2">
+                运行参数（可覆盖）
+              </label>
+              {deploySchemaError ? (
+                <div className="text-[11px] text-text3 bg-bg2 border border-[rgba(255,255,255,0.07)] rounded-lg px-3 py-2">
+                  {deploySchemaError}
+                </div>
+              ) : deploySchema.length === 0 ? (
+                <div className="text-[11px] text-text3">该策略没有声明任何参数。</div>
+              ) : (
+                <div className="max-h-56 overflow-y-auto bg-bg2 border border-[rgba(255,255,255,0.07)] rounded-lg divide-y divide-[rgba(255,255,255,0.04)]">
+                  {deploySchema.map((spec) => {
+                    const overridden = Object.prototype.hasOwnProperty.call(
+                      deployParams,
+                      spec.key
+                    );
+                    return (
+                      <div key={spec.key} className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-[11px] text-text2 flex-1">
+                            {spec.key}
+                          </span>
+                          <span className="text-[9px] text-text3">
+                            默认 {String(spec.default)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1">
+                          {spec.type === "bool" ? (
+                            <label className="flex items-center gap-1.5 text-[11px] text-text2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={
+                                  overridden
+                                    ? Boolean(deployParams[spec.key])
+                                    : Boolean(spec.default)
+                                }
+                                onChange={(e) =>
+                                  setDeployParams((p) => ({
+                                    ...p,
+                                    [spec.key]: e.target.checked,
+                                  }))
+                                }
+                                className="accent-green"
+                              />
+                              启用
+                            </label>
+                          ) : (
+                            <input
+                              type="number"
+                              value={
+                                overridden
+                                  ? String(deployParams[spec.key] ?? "")
+                                  : ""
+                              }
+                              placeholder={`留空 = 默认 ${String(spec.default)}`}
+                              min={spec.min ?? undefined}
+                              max={spec.max ?? undefined}
+                              step="any"
+                              onChange={(e) =>
+                                setDeployParams((p) => {
+                                  const next = { ...p };
+                                  if (e.target.value === "") {
+                                    delete next[spec.key];
+                                  } else {
+                                    next[spec.key] = Number(e.target.value);
+                                  }
+                                  return next;
+                                })
+                              }
+                              className="flex-1 bg-bg1 border border-[rgba(255,255,255,0.1)] rounded px-2 py-1 text-[11px] text-text focus:outline-none focus:border-green/30"
+                            />
+                          )}
+                          {overridden && (
+                            <button
+                              onClick={() =>
+                                setDeployParams((p) => {
+                                  const next = { ...p };
+                                  delete next[spec.key];
+                                  return next;
+                                })
+                              }
+                              className="text-[10px] text-amber hover:underline cursor-pointer shrink-0"
+                            >
+                              改过 · 重置
+                            </button>
+                          )}
+                        </div>
+                        {spec.description && (
+                          <div className="text-[10px] text-text3 mt-1 leading-snug">
+                            {spec.description}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Error / Success */}

@@ -75,7 +75,12 @@ def klines(request):
             status=status.HTTP_502_BAD_GATEWAY,
         )
     return Response(
-        {"symbol": symbol, "interval": interval, "count": len(ohlcv), "ohlcv_data": ohlcv}
+        {
+            "symbol": symbol,
+            "interval": interval,
+            "count": len(ohlcv),
+            "ohlcv_data": ohlcv,
+        }
     )
 
 
@@ -118,9 +123,7 @@ def trading_summary(request):
 
     # 活跃订单数（含「未知」：它是非终态，可能仍在交易所活着）
     # 枚举不许手抄：常量在 Order 上（`Order.ACTIVE_STATUSES`），这里是它唯一的家。
-    active_count = Order.objects.filter(
-        status__in=Order.ACTIVE_STATUSES
-    ).count()
+    active_count = Order.objects.filter(status__in=Order.ACTIVE_STATUSES).count()
 
     # 交易所账户数
     account_count = ExchangeAccount.objects.filter(is_active=True).count()
@@ -329,6 +332,67 @@ async def _fetch_usdt_balance(exchange_account) -> Decimal:
     return balance.get("USDT", Decimal("0"))
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def strategy_params(request, name):
+    """某策略**声明**的参数表 —— 部署会话时可覆盖的键。
+
+    为什么要这个接口（2026-10-12 SOL/USDT 审计）：`live_sessions.config` 只记录
+    "本会话覆盖了什么"，没覆盖的键走策略声明的默认值。部署弹窗过去不发 `config`，
+    于是像 `volume_filter` 这种键**没有任何入口**能显式打开——只能改策略文件默认值
+    或手工写库。审计时"量能门全程是关的"就卡在这里：不是界面显示错了，是压根
+    没有地方能把它打开。
+
+    返回 `params_schema` 的原始声明（键 + 默认值 + 描述 + 约束），**不**与任何会话
+    的 config 合并——合并后那张表是 `live_session_detail` 的 `params` 字段负责的。
+    两个接口各说各的一件事：这里说"策略允许你设什么"，那里说"这条会话实际在跑什么"。
+    """
+    from apps.strategy_engine.registry import StrategyRegistry
+
+    if name not in StrategyRegistry.list_registered():
+        StrategyRegistry.discover()
+
+    try:
+        strategy_cls = StrategyRegistry.get_class(name)
+    except Exception:
+        return Response(
+            {"error": f"Strategy {name!r} not resolvable"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    schema = getattr(strategy_cls, "params_schema", None)
+    if not isinstance(schema, dict):
+        return Response({"strategy_name": name, "resolved": True, "params": []})
+
+    params = []
+    for key, spec in schema.items():
+        if isinstance(spec, dict):
+            params.append(
+                {
+                    "key": key,
+                    "type": spec.get("type"),
+                    "default": spec.get("default"),
+                    "description": spec.get("description", ""),
+                    # 约束原样透出，由前端决定怎么呈现；后端不替它判合法性
+                    "min": spec.get("min"),
+                    "max": spec.get("max"),
+                }
+            )
+        else:
+            params.append(
+                {
+                    "key": key,
+                    "type": None,
+                    "default": spec,
+                    "description": "",
+                    "min": None,
+                    "max": None,
+                }
+            )
+
+    return Response({"strategy_name": name, "resolved": True, "params": params})
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def live_session_create(request):
@@ -387,7 +451,7 @@ def live_session_create(request):
         return Response({"error": "Exchange account not found or inactive"}, status=404)
 
     # runner 共享该品种的账户级持仓：同账户同品种两个策略必然互相平仓
-    #（2026-10-07：box 会话平掉 donchian 开的 DOGE/USDT 仓）。创建时即拒绝。
+    # （2026-10-07：box 会话平掉 donchian 开的 DOGE/USDT 仓）。创建时即拒绝。
     conflict = LiveSession.conflicting_active_session(exchange_account, backtest.symbol)
     if conflict:
         return Response({"error": conflict}, status=400)
@@ -474,7 +538,9 @@ def live_session_start(request, pk):
             "Session %s is already running, stopping old runner before restart", pk
         )
         try:
-            async_to_sync(frame_manager.stop_strategy_runner)(live_session_id=str(session.id))
+            async_to_sync(frame_manager.stop_strategy_runner)(
+                live_session_id=str(session.id)
+            )
         except Exception:
             pass
 
@@ -503,7 +569,9 @@ def live_session_start(request, pk):
         logger.exception("Failed to start strategy for session %s: %s", pk, e)
         # 只回滚当前 session 的 runner，不动整个 trading frame（避免误杀并发策略）
         try:
-            async_to_sync(frame_manager.stop_strategy_runner)(live_session_id=str(session.id))
+            async_to_sync(frame_manager.stop_strategy_runner)(
+                live_session_id=str(session.id)
+            )
         except Exception:
             pass
         return Response({"error": f"Failed to start strategy: {e}"}, status=500)
@@ -534,7 +602,9 @@ def live_session_start(request, pk):
             "message": "Trading framework started",
             # 字段恒在：空串 = 没有层在拦。恒在的话客户端不用去区分「没有层」与
             # 「服务端没这个字段」——后者会把一次静默的裁剪读成一次未实现的回显。
-            "notice": start_notice.start_notice(session.symbol, str(session.strategy_id)),
+            "notice": start_notice.start_notice(
+                session.symbol, str(session.strategy_id)
+            ),
         }
     )
 
@@ -620,7 +690,9 @@ def live_session_resume(request, pk):
         {
             "status": session.status,
             "message": "Session resumed",
-            "notice": start_notice.start_notice(session.symbol, str(session.strategy_id)),
+            "notice": start_notice.start_notice(
+                session.symbol, str(session.strategy_id)
+            ),
         }
     )
 

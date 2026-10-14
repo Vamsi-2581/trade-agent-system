@@ -6,6 +6,9 @@ urlpatterns = [
     path("orders/<uuid:pk>/", views.order_detail),
     path("klines/", views.klines),
     path("strategies/", views.strategy_list),
+    # 某策略声明的参数表（部署会话时可覆盖的键）——与 `sessions/<pk>/` 详情里的
+    # `params` 是两件事：这里说"策略允许设什么"，那里说"这条会话实际在跑什么"。
+    path("strategies/<str:name>/params/", views.strategy_params),
     path("summary/", views.trading_summary),
     path("positions/", views.position_list),
     path("accounts/", views.account_list),

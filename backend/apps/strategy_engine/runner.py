@@ -17,6 +17,29 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def resolve_params(strategy_cls, parameters: dict | None = None) -> dict:
+    """`策略声明默认值 ⊕ 会话覆盖` → 真正传给 `StrategyContext.params` 的那一份。
+
+    回测与实盘**共用**这一个函数，是为了堵住 2026-10-12 SOL/USDT 那类静默漂移：
+    实盘分支当时只做 `params.update(parameters)`，**不注入 `params_schema` 默认值**，
+    于是会话 config 里没写的键不会走"策略声明的默认值"，而是落到策略 `__init__` 里
+    各自的 `.get(key, fallback)` 兜底。两处默认值一旦分家，会话就是按一个**界面上
+    看不到**的参数在跑——`volume_filter` 正是这么全程关着的（会话 config 里没有它，
+    实盘没注入 schema 默认值，策略兜底 `False`），而部署界面显示的却是声明默认值。
+
+    没有白名单：`parameters` 里多出来的键照旧原样传入（`session_params.effective_params`
+    的 `declared=False` 行描述的就是这些键，两边口径必须一致）。
+    """
+    schema: dict = getattr(strategy_cls, "params_schema", None) or {}
+    params = {
+        key: val.get("default") if isinstance(val, dict) else val
+        for key, val in schema.items()
+    }
+    if parameters:
+        params.update(parameters)
+    return params
+
+
 class StrategyRunner:
     """策略运行器：回测/实盘统一入口"""
 
@@ -72,13 +95,7 @@ class StrategyRunner:
         strategy_cls = StrategyRegistry.get_class(strategy_name)
 
         # 合并参数：先从 params_schema 提取默认值，再覆盖用户传入的参数
-        schema: dict = getattr(strategy_cls, "params_schema", {})
-        params = {
-            key: val.get("default") if isinstance(val, dict) else val
-            for key, val in schema.items()
-        }
-        if parameters:
-            params.update(parameters)
+        params = resolve_params(strategy_cls, parameters)
 
         # 创建上下文
         context = StrategyContext(
@@ -188,10 +205,9 @@ class StrategyRunner:
         # 加载策略类
         strategy_cls = StrategyRegistry.get_class(strategy_name)
 
-        # 合并参数
-        params = {}
-        if parameters:
-            params.update(parameters)
+        # 合并参数：与回测分支**同一函数**（见 resolve_params 的 docstring——
+        # 实盘曾漏注入 params_schema 默认值，导致 volume_filter 这类键静默取兜底值）
+        params = resolve_params(strategy_cls, parameters)
 
         # 创建上下文
         context = StrategyContext(
