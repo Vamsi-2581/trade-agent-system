@@ -11,7 +11,7 @@
 import threading
 import time
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 import statistics
 
@@ -301,7 +301,7 @@ class DataQualityMonitor:
                 if isinstance(ts, datetime):
                     timestamps.append(ts)
                 elif isinstance(ts, (int, float)):
-                    timestamps.append(datetime.fromtimestamp(ts))
+                    timestamps.append(datetime.fromtimestamp(ts, tz=timezone.utc))
 
         if timestamps:
             # 检查时间间隔是否合理

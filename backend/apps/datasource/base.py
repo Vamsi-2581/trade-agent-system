@@ -14,7 +14,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 import threading
 
@@ -265,7 +265,9 @@ class BaseDataSource(ABC):
             else None,
             "subscriptions": len(self._subscriptions),
             "subscription_keys": list(self._subscriptions.keys()),
-            "last_data_time": datetime.fromtimestamp(self._last_data_time).isoformat()
+            "last_data_time": datetime.fromtimestamp(
+                self._last_data_time, tz=timezone.utc
+            ).isoformat()
             if self._last_data_time > 0
             else None,
             "last_data_age_seconds": last_data_age,

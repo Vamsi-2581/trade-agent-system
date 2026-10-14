@@ -147,6 +147,7 @@ OpenAI gpt-4o → (超时/429/错误) → DeepSeek (deepseek-chat) → (失败) 
 - This project uses Django async. NEVER write raw sync database queries in async contexts. ALWAYS use `sync_to_async` or the centralized `db_async` utility for any DB operation.
 - Before debugging database connection errors, verify the Docker environment is running and not serving stale code (restart containers first).
 - When fixing async/threading issues, always check for `sync_to_async` usage and `close_old_connections()` calls in long-running loops (e.g., Celery tasks, grid search).
+- Timezone: Django `TIME_ZONE="UTC"`; the machine's local tz is NOT reliable. `datetime.fromtimestamp(ts)` with no `tz=` returns the **local** tz and silently offsets timestamps (this caused a funding-settlement bug). ALWAYS pass `tz=timezone.utc` when converting epoch→datetime. `datetime.now()` (naive) is acceptable only for TUI display / stats; use `django.utils.timezone.now()` (aware-UTC) for data paths. Enforced by the `timezone_convention` invariant in `scripts/check_invariants.py` (L3 CI).
 
 ## Fix Verification Protocol
 - After a bug fix, run the tests affected by the change (not necessarily the full suite). For reversible, low-impact changes, don't gate on the full suite—broaden scope only on new failures, regressions, or unresolved concerns.
@@ -156,3 +157,17 @@ OpenAI gpt-4o → (超时/429/错误) → DeepSeek (deepseek-chat) → (失败) 
 ## Code Change Discipline
 - When using formatters (Prettier, Black, etc.), scope changes to ONLY the files/lines relevant to the task. Revert unrelated formatting changes before committing.
 - Prefer minimal, targeted edits over broad refactors unless explicitly asked to refactor.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary — `needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`, each label string equal to its role name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+multi-context — a root `CONTEXT-MAP.md` points at one `CONTEXT.md` per sub-project; ADRs in `docs/adr/` (system-wide) and the owning context's `docs/adr/` (context-scoped). See `docs/agents/domain.md`.

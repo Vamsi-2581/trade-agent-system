@@ -12,7 +12,7 @@ import json
 import logging
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Callable
 import aiohttp
 import ccxt.async_support as ccxt
@@ -1088,8 +1088,8 @@ class BinanceDataSource(BaseDataSource):
         return {
             "symbol": k.get("s"),
             "interval": k.get("i"),
-            "open_time": datetime.fromtimestamp(k.get("t", 0) / 1000),
-            "close_time": datetime.fromtimestamp(k.get("T", 0) / 1000),
+            "open_time": datetime.fromtimestamp(k.get("t", 0) / 1000, tz=timezone.utc),
+            "close_time": datetime.fromtimestamp(k.get("T", 0) / 1000, tz=timezone.utc),
             "open": float(k.get("o", 0)),
             "high": float(k.get("h", 0)),
             "low": float(k.get("l", 0)),
@@ -1099,7 +1099,7 @@ class BinanceDataSource(BaseDataSource):
             "trades": int(k.get("n", 0)),
             "is_closed": k.get("x", False),
             "source": self.name,
-            "timestamp": datetime.fromtimestamp(k.get("t", 0) / 1000),
+            "timestamp": datetime.fromtimestamp(k.get("t", 0) / 1000, tz=timezone.utc),
         }
 
     def normalize_kline_rest(
@@ -1109,8 +1109,8 @@ class BinanceDataSource(BaseDataSource):
         return {
             "symbol": symbol,
             "interval": interval.value,
-            "open_time": datetime.fromtimestamp(raw_data[0] / 1000),
-            "close_time": datetime.fromtimestamp(raw_data[6] / 1000),
+            "open_time": datetime.fromtimestamp(raw_data[0] / 1000, tz=timezone.utc),
+            "close_time": datetime.fromtimestamp(raw_data[6] / 1000, tz=timezone.utc),
             "open": float(raw_data[1]),
             "high": float(raw_data[2]),
             "low": float(raw_data[3]),
@@ -1119,7 +1119,7 @@ class BinanceDataSource(BaseDataSource):
             "turnover": float(raw_data[7]),
             "trades": int(raw_data[8]),
             "source": self.name,
-            "timestamp": datetime.fromtimestamp(raw_data[0] / 1000),
+            "timestamp": datetime.fromtimestamp(raw_data[0] / 1000, tz=timezone.utc),
         }
 
     def normalize_trade(self, raw_data: Any) -> Dict:
@@ -1130,7 +1130,9 @@ class BinanceDataSource(BaseDataSource):
             "price": float(raw_data.get("p", 0)),
             "quantity": float(raw_data.get("q", 0)),
             "side": "buy" if raw_data.get("m", False) else "sell",
-            "timestamp": datetime.fromtimestamp(raw_data.get("T", 0) / 1000),
+            "timestamp": datetime.fromtimestamp(
+                raw_data.get("T", 0) / 1000, tz=timezone.utc
+            ),
             "source": self.name,
         }
 
@@ -1142,7 +1144,9 @@ class BinanceDataSource(BaseDataSource):
             "price": float(raw_data.get("price", 0)),
             "quantity": float(raw_data.get("qty", 0)),
             "side": "buy" if raw_data.get("isBuyerMaker", False) else "sell",
-            "timestamp": datetime.fromtimestamp(raw_data.get("time", 0) / 1000),
+            "timestamp": datetime.fromtimestamp(
+                raw_data.get("time", 0) / 1000, tz=timezone.utc
+            ),
             "source": self.name,
         }
 
@@ -1180,7 +1184,9 @@ class BinanceDataSource(BaseDataSource):
             "turnover_24h": float(raw_data.get("quoteVolume", 0)),
             "change_24h": float(raw_data.get("priceChange", 0)),
             "change_pct_24h": float(raw_data.get("priceChangePercent", 0)),
-            "timestamp": datetime.fromtimestamp(raw_data.get("closeTime", 0) / 1000),
+            "timestamp": datetime.fromtimestamp(
+                raw_data.get("closeTime", 0) / 1000, tz=timezone.utc
+            ),
             "source": self.name,
         }
 

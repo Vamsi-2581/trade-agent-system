@@ -13,7 +13,7 @@ import time
 import threading
 from typing import Dict, List, Optional
 from collections import OrderedDict
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -355,7 +355,7 @@ class MemoryDataStore:
                         if start_time <= data_ts <= end_time:
                             result.append(entry.data)
                     elif isinstance(data_ts, (int, float)):
-                        ts_dt = datetime.fromtimestamp(data_ts)
+                        ts_dt = datetime.fromtimestamp(data_ts, tz=timezone.utc)
                         if start_time <= ts_dt <= end_time:
                             result.append(entry.data)
 

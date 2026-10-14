@@ -585,12 +585,12 @@ class SignalMonitorEngine:
           按默认 4h，交由 WS 更新接管。
         """
         import ccxt
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
         tf_seconds = ccxt.Exchange.parse_timeframe(interval or "1h")
         for i, k in enumerate(klines):
             open_ms = int(k["timestamp"])
-            open_dt = datetime.fromtimestamp(open_ms / 1000)
+            open_dt = datetime.fromtimestamp(open_ms / 1000, tz=timezone.utc)
             is_closed = i < len(klines) - 1
             entry = {
                 "symbol": store_symbol,

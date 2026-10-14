@@ -15,7 +15,8 @@
 """
 
 import sys
-import json
+import re
+import pathlib
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from enum import Enum
@@ -23,16 +24,18 @@ from enum import Enum
 
 class InvariantCategory(Enum):
     """不变量类别"""
+
     ARCHITECTURE = "architecture"  # 架构约束
-    FINANCIAL = "financial"        # 金融约束（交易相关）
-    DATA = "data"                  # 数据约束
-    CONCURRENCY = "concurrency"    # 并发约束
-    SECURITY = "security"          # 安全约束
+    FINANCIAL = "financial"  # 金融约束（交易相关）
+    DATA = "data"  # 数据约束
+    CONCURRENCY = "concurrency"  # 并发约束
+    SECURITY = "security"  # 安全约束
 
 
 @dataclass
 class InvariantResult:
     """不变量检查结果"""
+
     name: str
     category: InvariantCategory
     passed: bool
@@ -130,6 +133,10 @@ class InvariantsChecker:
 
         # I9: 数据完整性
         result = self._check_data_integrity()
+        self._results.append(result)
+
+        # I10: 时区口径（epoch→datetime 必须 tz=UTC，机器本地时区不可信）
+        result = self._check_timezone_convention()
         self._results.append(result)
 
     def _check_concurrency_invariants(self) -> None:
@@ -451,6 +458,54 @@ class InvariantsChecker:
                 category=InvariantCategory.SECURITY,
                 passed=False,
                 message=f"硬编码密钥检查失败: {str(e)}",
+            )
+
+    def _check_timezone_convention(self) -> InvariantResult:
+        """
+        I10: 时区口径——epoch→datetime 必须带 tz=UTC。
+
+        ``datetime.fromtimestamp(ts)`` 无 tz 参数时返回**机器本地时区**的 naive
+        datetime；本系统 Django ``TIME_ZONE="UTC"``、资金费率结算点等口径都是 UTC，
+        机器时区（如 +8）会让时间戳偏移、结算在错误 bar 触发。故禁止裸
+        ``fromtimestamp``（须带 ``tz=`` 或 ``timezone.utc``）。
+
+        扫描 backend/apps 下非测试 .py。``datetime.now()``（naive）不在本检查范围——
+        多数是 TUI 显示/统计时间戳，非数据正确性路径；Django 侧应优先用
+        ``django.utils.timezone.now()``（aware-UTC）。
+        """
+        try:
+            base = pathlib.Path(__file__).resolve().parents[2] / "apps"
+            naive: List[str] = []
+            for f in base.rglob("*.py"):
+                if "tests" in f.parts:
+                    continue
+                text = f.read_text(encoding="utf-8")
+                for m in re.finditer(r"fromtimestamp\(", text):
+                    window = text[m.start() : m.start() + 120]
+                    if "tz=" not in window and "timezone.utc" not in window:
+                        line = text[: m.start()].count("\n") + 1
+                        rel = f.relative_to(base.parent)
+                        naive.append(f"{rel}:{line}")
+            if naive:
+                return InvariantResult(
+                    name="timezone_convention",
+                    category=InvariantCategory.DATA,
+                    passed=False,
+                    message=f"{len(naive)} 处 fromtimestamp 无 tz（须 tz=timezone.utc）",
+                    details={"offenders": naive},
+                )
+            return InvariantResult(
+                name="timezone_convention",
+                category=InvariantCategory.DATA,
+                passed=True,
+                message="时区口径检查通过：所有 fromtimestamp 均带 tz=UTC",
+            )
+        except Exception as e:
+            return InvariantResult(
+                name="timezone_convention",
+                category=InvariantCategory.DATA,
+                passed=False,
+                message=f"时区口径检查失败: {str(e)}",
             )
 
 
