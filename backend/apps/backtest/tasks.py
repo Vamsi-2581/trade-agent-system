@@ -15,6 +15,16 @@ from celery_app import app
 
 from apps.regime.tasks import dispatch_slice
 
+# 交易所访问共享工具（ccxt 构造 / 分页拉取 / 符号归一化）已抽到
+# apps.datasource.exchange，回测与 datasource 同步任务共用。
+# normalize_binance_symbol 在此 re-export，保持既有 import 路径可用：
+# apps/agent/tools/backtest.py、apps/backtest/views.py、test_grid_search.py。
+from apps.datasource.exchange import (  # noqa: F401
+    build_exchange,
+    fetch_ohlcv_paged,
+    normalize_binance_symbol,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -231,50 +241,8 @@ def run_backtest_task(
         tracker_context.reset(token)
 
 
-# 常见报价币后缀（长后缀在前，避免 BTC 误匹配 WBTC、ETH 误匹配 WBETH）
-_QUOTE_SUFFIXES = (
-    "USDT",
-    "USDC",
-    "FDUSD",
-    "BFUSD",
-    "USDP",
-    "TUSD",
-    "BUSD",
-    "DAI",
-    "WBTC",
-    "WBETH",
-    "BTC",
-    "ETH",
-    "BNB",
-    "EUR",
-    "GBP",
-)
-
-
-def normalize_binance_symbol(symbol: str) -> str:
-    """把用户/agent 输入的 symbol 归一化成 ccxt 标准格式 BASE/QUOTE。
-
-    - "SOL/USDT"  -> "SOL/USDT"（已标准，原样返回）
-    - "SOLUSDT"   -> "SOL/USDT"（交易所拼接格式，按报价币后缀拆分）
-    - "SOL-USDT" / "SOL_USDT" -> "SOL/USDT"
-    - "SOL"       -> "SOL/USDT"（裸基础币，默认 USDT 报价）
-    """
-    s = (symbol or "").strip().upper()
-    if not s:
-        return s
-    # 统一分隔符：SOL-USDT / SOL_USDT -> SOL/USDT
-    s = s.replace("-", "/").replace("_", "/")
-    if "/" in s:
-        # 已含分隔符（含上面替换产生的），去空段后原样返回
-        return "/".join(p for p in s.split("/") if p)
-    # 裸报价币种本身（BTC/ETH/WBTC/USDC...）视为基础币，默认 USDT 报价，
-    # 避免 "WBTC" 被后缀规则误切成 "W/BTC"
-    if s in _QUOTE_SUFFIXES:
-        return f"{s}/USDT"
-    for quote in _QUOTE_SUFFIXES:
-        if s.endswith(quote) and len(s) > len(quote):
-            return f"{s[: -len(quote)]}/{quote}"
-    return f"{s}/USDT"
+# _QUOTE_SUFFIXES / normalize_binance_symbol 已移至 apps.datasource.exchange，
+# 并在文件顶部 re-export（既有调用方仍可从 apps.backtest.tasks import）。
 
 
 def _fetch_ohlcv_sync(
@@ -285,10 +253,13 @@ def _fetch_ohlcv_sync(
     start_date: str = "",
     end_date: str = "",
 ) -> list[dict]:
-    """同步获取历史 OHLCV 数据（供 Celery task 使用）"""
-    import ccxt.async_support as ccxt
-    from django.conf import settings
+    """同步获取历史 OHLCV 数据（供 Celery task 使用）
 
+    交易所构造与分页拉取走 ``apps.datasource.exchange`` 的共享实现（代理注入、
+    rate limit、分页边界统一一处）；本函数只负责 ``date`` 字符串 → epoch ms 的
+    解析，以及把共享层返回的 aware-datetime 行转回既有调用方依赖的 ISO 字符串
+    形态——**输出结构与值类型保持不变**。
+    """
     symbol_normalized = normalize_binance_symbol(symbol)
 
     since_ms: int | None = None
@@ -306,70 +277,34 @@ def _fetch_ohlcv_sync(
             logger.warning(f"[BacktestTask] invalid end_date={end_date}, ignoring")
 
     async def _fetch():
-        exchange_class = getattr(ccxt, exchange.lower(), None)
-        if exchange_class is None:
+        try:
+            ex = build_exchange(exchange)
+        except ValueError:
             logger.error(f"[BacktestTask] unsupported exchange: {exchange}")
             return []
 
-        options = {"enableRateLimit": True}
-        proxy = getattr(settings, "WEB_PROXY", "") or None
-        if proxy:
-            options["aiohttp_proxy"] = proxy
-
-        ex = exchange_class(options)
         try:
-            # 分页获取全部历史数据（CCXT 每次最多返回 limit 根）
-            all_candles: list = []
-            batch_since = since_ms
-            while True:
-                ohlcv = await ex.fetch_ohlcv(
-                    symbol_normalized, timeframe, since=batch_since, limit=limit
-                )
-                if not ohlcv:
-                    break
-                raw_count = len(ohlcv)
-                # Filter batch by end_ms to avoid fetching beyond the target range
-                if end_ms is not None:
-                    ohlcv = [c for c in ohlcv if c[0] <= end_ms]
-                all_candles.extend(ohlcv)
-                if raw_count < limit:
-                    # Reached present (exchange had fewer bars than requested)
-                    break
-                if not ohlcv:
-                    # All bars in this batch were beyond end_ms
-                    break
-                # 下一批从最后一根 K 线的时间戳+1ms 开始
-                batch_since = ohlcv[-1][0] + 1
-                if end_ms is not None and batch_since > end_ms:
-                    break
+            rows = await fetch_ohlcv_paged(
+                ex, symbol_normalized, timeframe, since_ms, end_ms, limit
+            )
         finally:
             await ex.close()
 
-        if not all_candles:
+        if not rows:
             logger.warning(f"[BacktestTask] no OHLCV data for {symbol_normalized}")
             return []
 
-        result = []
-        for candle in all_candles:
-            ts_ms = int(candle[0])
-            if end_ms is not None and ts_ms > end_ms:
-                continue
-            result.append(
-                {
-                    # UTC 感知时间戳：Binance epoch 为 UTC；naive 本地时间会让
-                    # Django（TIME_ZONE=UTC）与资金费率结算点判定偏移机器时区差。
-                    "timestamp": datetime.fromtimestamp(
-                        ts_ms / 1000, tz=timezone.utc
-                    ).isoformat(),
-                    "open": float(candle[1]),
-                    "high": float(candle[2]),
-                    "low": float(candle[3]),
-                    "close": float(candle[4]),
-                    "volume": float(candle[5]),
-                }
-            )
-
-        return result
+        return [
+            {
+                "timestamp": row["timestamp"].isoformat(),
+                "open": row["open"],
+                "high": row["high"],
+                "low": row["low"],
+                "close": row["close"],
+                "volume": row["volume"],
+            }
+            for row in rows
+        ]
 
     try:
         return asyncio.run(_fetch())
@@ -739,19 +674,12 @@ def sync_funding_rates(self, symbols: list[str] | None = None) -> dict:
 async def _fetch_all_symbols(plans: list[tuple[str, int | None]]) -> dict[str, list]:
     """按计划拉取所有 symbol 的资金费率历史，返回 {symbol: rows}。
 
-    代理注入必须与 _fetch_ohlcv_sync 保持一致：漏注入时，在需要代理出网的
-    环境下 K 线能拉、资金费率拉不到，而 sync_funding_rates 不检查失败，
-    缺陷是静默的。
+    交易所构造走 ``build_exchange``（共享层统一注入 WEB_PROXY + rate limit）：
+    此处历史上漏注入代理，导致需要代理出网的环境下 K 线能拉、资金费率拉不到，
+    而 sync_funding_rates 不检查失败，缺陷是静默的。统一到共享层后不再有第二处
+    可漏的注入点。
     """
-    import ccxt.async_support as ccxt
-    from django.conf import settings
-
-    options: dict = {"enableRateLimit": True}
-    proxy = getattr(settings, "WEB_PROXY", "") or None
-    if proxy:
-        options["aiohttp_proxy"] = proxy
-
-    exchange = ccxt.binance(options)
+    exchange = build_exchange("binance")
     out: dict[str, list] = {}
     try:
         for symbol, since_ms in plans:
