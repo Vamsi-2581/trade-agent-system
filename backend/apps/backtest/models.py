@@ -32,6 +32,11 @@ class BacktestResult(models.Model):
         blank=True,
         help_text='回测成本明细 {"commission": x, "slippage": y, "funding": z}',
     )
+    data_source = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='K线数据来源统计 {"from_db": n, "from_api": m, "gaps": [...]}',
+    )
 
     # 审核字段
     REVIEW_STATUS_CHOICES = [

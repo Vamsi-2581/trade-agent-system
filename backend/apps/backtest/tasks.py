@@ -157,14 +157,22 @@ def run_backtest_task(
             state="STARTED", meta={"step": "fetching_ohlcv", "symbol": symbol}
         )
         tracker.milestone("正在获取历史K线数据...", progress=0.1)
-        ohlcv_data = _fetch_ohlcv_sync(
-            symbol, timeframe, exchange, start_date=start_date, end_date=end_date
+        ohlcv_data, source_stats = _load_ohlcv_for_backtest(
+            symbol,
+            timeframe,
+            start_date=start_date,
+            end_date=end_date,
+            exchange=exchange,
         )
         if not ohlcv_data:
             tracker.fail(f"未能获取 {symbol} {timeframe} 的历史K线数据")
             raise ValueError(f"未能获取 {symbol} {timeframe} 的历史K线数据")
 
-        logger.info(f"[BacktestTask] OHLCV data fetched: {len(ohlcv_data)} bars")
+        logger.info(
+            f"[BacktestTask] OHLCV data fetched: {len(ohlcv_data)} bars "
+            f"(from_db={source_stats['from_db']}, from_api={source_stats['from_api']}, "
+            f"gaps={len(source_stats['gaps'])})"
+        )
         tracker.milestone(
             f"已获取 {len(ohlcv_data)} 条K线数据，正在执行回测...", progress=0.3
         )
@@ -178,6 +186,9 @@ def run_backtest_task(
         close_old_connections()
 
         runner = StrategyRunner()
+
+        if is_perp and include_funding:
+            _warn_funding_coverage(symbol, ohlcv_data)
 
         funding_rates = (
             load_funding_rates(symbol, ohlcv_data)
@@ -212,6 +223,17 @@ def run_backtest_task(
             _close_async_resources(loop)
             loop.close()
 
+        # 数据来源统计落库（spec §7.3）：结果行由 runner 写进 BacktestResult，
+        # 而 data_source 是本次改造新增的字段，runner 不感知，故在此补写。
+        persisted_id = stats.get("result_id") or result_id
+        if persisted_id:
+            from apps.backtest.models import BacktestResult
+
+            close_old_connections()
+            BacktestResult.objects.filter(id=persisted_id).update(
+                data_source=source_stats
+            )
+
         total_trades = stats.get("total_trades", 0)
         total_return = stats.get("total_return_pct", 0)
         sharpe = stats.get("sharpe_ratio", 0) or 0
@@ -245,6 +267,30 @@ def run_backtest_task(
 # 并在文件顶部 re-export（既有调用方仍可从 apps.backtest.tasks import）。
 
 
+def _parse_date_utc(value: str) -> datetime | None:
+    """``YYYY-MM-DD``（或 ISO 时间串）→ aware-UTC datetime；失败返回 None。
+
+    ``datetime.fromisoformat("2026-01-01")`` 返回 **naive** datetime，其
+    ``.timestamp()`` 按**本机时区**解释：本机是 CST(+8) 时整体偏移 8 小时，与
+    ``KlineRecord`` 存的 UTC 口径不一致（缺口检测错位、补拉窗口偏移）。故此处
+    显式补 UTC——与仓库既有的 ``_parse_ts`` 同口径。
+    """
+    try:
+        dt = datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _date_to_epoch_ms(value: str, field: str) -> int | None:
+    """日期串 → epoch 毫秒（按 UTC 解释）；非法输入记 warning 并返回 None。"""
+    dt = _parse_date_utc(value)
+    if dt is None:
+        logger.warning(f"[BacktestTask] invalid {field}={value}, ignoring")
+        return None
+    return int(dt.timestamp() * 1000)
+
+
 def _fetch_ohlcv_sync(
     symbol: str,
     timeframe: str,
@@ -252,29 +298,27 @@ def _fetch_ohlcv_sync(
     limit: int = 1000,
     start_date: str = "",
     end_date: str = "",
+    since_ms: int | None = None,
+    end_ms: int | None = None,
 ) -> list[dict]:
     """同步获取历史 OHLCV 数据（供 Celery task 使用）
 
     交易所构造与分页拉取走 ``apps.datasource.exchange`` 的共享实现（代理注入、
-    rate limit、分页边界统一一处）；本函数只负责 ``date`` 字符串 → epoch ms 的
-    解析，以及把共享层返回的 aware-datetime 行转回既有调用方依赖的 ISO 字符串
-    形态——**输出结构与值类型保持不变**。
+    rate limit、分页边界统一一处）；本函数只负责区间解析，以及把共享层返回的
+    aware-datetime 行转回既有调用方依赖的 ISO 字符串形态——**输出结构与值类型
+    保持不变**。
+
+    ``since_ms`` / ``end_ms`` 是显式 epoch 毫秒，**优先于** ``start_date`` /
+    ``end_date``：缺口补拉需要亚日精度，date 字符串表达不了。
     """
     symbol_normalized = normalize_binance_symbol(symbol)
 
-    since_ms: int | None = None
-    end_ms: int | None = None
-
-    if start_date:
-        try:
-            since_ms = int(datetime.fromisoformat(start_date).timestamp() * 1000)
-        except (ValueError, TypeError):
-            logger.warning(f"[BacktestTask] invalid start_date={start_date}, ignoring")
-    if end_date:
-        try:
-            end_ms = int(datetime.fromisoformat(end_date).timestamp() * 1000)
-        except (ValueError, TypeError):
-            logger.warning(f"[BacktestTask] invalid end_date={end_date}, ignoring")
+    since = since_ms
+    if since is None and start_date:
+        since = _date_to_epoch_ms(start_date, "start_date")
+    end = end_ms
+    if end is None and end_date:
+        end = _date_to_epoch_ms(end_date, "end_date")
 
     async def _fetch():
         try:
@@ -285,7 +329,7 @@ def _fetch_ohlcv_sync(
 
         try:
             rows = await fetch_ohlcv_paged(
-                ex, symbol_normalized, timeframe, since_ms, end_ms, limit
+                ex, symbol_normalized, timeframe, since, end, limit
             )
         finally:
             await ex.close()
@@ -311,6 +355,203 @@ def _fetch_ohlcv_sync(
     except Exception as e:
         logger.error(f"[BacktestTask] OHLCV fetch failed: {e}", exc_info=True)
         return []
+
+
+def _db_row_to_ohlcv(row: dict) -> dict:
+    """单条 ``KlineRecord`` 查询结果 → 与 ``_fetch_ohlcv_sync`` 同构的 dict。"""
+    return {
+        "timestamp": row["timestamp"].isoformat(),
+        "open": row["open"],
+        "high": row["high"],
+        "low": row["low"],
+        "close": row["close"],
+        "volume": row["volume"],
+    }
+
+
+def _ohlcv_row_to_kline(row: dict, exchange: str, symbol: str, timeframe: str) -> dict:
+    """同构 OHLCV dict → ``upsert_klines`` 需要的行（timestamp 转回 datetime）。"""
+    return {
+        "exchange": exchange,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "timestamp": _parse_ts(row["timestamp"]),
+        "open": row["open"],
+        "high": row["high"],
+        "low": row["low"],
+        "close": row["close"],
+        "volume": row["volume"],
+    }
+
+
+def _detect_kline_gaps(
+    db_rows: list[dict], start_dt: datetime, end_dt: datetime, step: timedelta
+) -> list[tuple[datetime, datetime]]:
+    """库内 bar 相对 ``[start_dt, end_dt]`` 的缺口（spec §7.1 细则）。
+
+    头部：库空（整段都是缺口），或首行 ``> start_dt + step``；
+    中间：相邻两行差 ``> step``；
+    尾部：末行 ``< end_dt - step``。
+    """
+    if not db_rows:
+        return [(start_dt, end_dt)]
+
+    gaps: list[tuple[datetime, datetime]] = []
+    first = db_rows[0]["timestamp"]
+    last = db_rows[-1]["timestamp"]
+    if first > start_dt + step:
+        gaps.append((start_dt, first - step))
+    for prev, cur in zip(db_rows, db_rows[1:]):
+        if cur["timestamp"] - prev["timestamp"] > step:
+            gaps.append((prev["timestamp"] + step, cur["timestamp"] - step))
+    if last < end_dt - step:
+        gaps.append((last + step, end_dt))
+    return gaps
+
+
+def _load_ohlcv_for_backtest(
+    symbol: str,
+    timeframe: str,
+    start_date: str = "",
+    end_date: str = "",
+    exchange: str = "binance",
+) -> tuple[list[dict], dict]:
+    """回测 OHLCV 获取：**库优先，缺口回退 API**（spec §7.1）。
+
+    有效 bar 集合 = ``timestamp + step <= end_dt``（未收盘 bar 不进回测）。库查询
+    与补拉结果都按这一条过滤，因此「库里已有的 bar」与「API 会返回的 bar」口径
+    一致——补一次即收敛，不会每轮都报同一个尾部缺口。
+
+    无缺口时**零 API 调用**；有缺口时逐 gap 调 ``_fetch_ohlcv_sync`` 补拉并
+    ``upsert_klines`` 回写：「跑一次回测，库就补全一段」。
+
+    ``start_date`` / ``end_date`` 为空时无法界定区间与缺口，退回全量 API（保持
+    既有行为）。
+
+    Returns:
+        ``(ohlcv_data, source_stats)``。``ohlcv_data`` 与 ``_fetch_ohlcv_sync``
+        同构（引擎无需改动）；``source_stats = {"from_db": n, "from_api": m,
+        "gaps": [[iso_start, iso_end], ...]}``。
+    """
+    from apps.datasource.exchange import timeframe_to_seconds
+    from apps.datasource.models import KlineRecord
+    from apps.datasource.services import upsert_klines
+
+    start_dt = _parse_date_utc(start_date) if start_date else None
+    end_dt = _parse_date_utc(end_date) if end_date else None
+    if start_dt is None or end_dt is None:
+        rows = _fetch_ohlcv_sync(
+            symbol, timeframe, exchange, start_date=start_date, end_date=end_date
+        )
+        return rows, {"from_db": 0, "from_api": len(rows), "gaps": []}
+
+    step = timedelta(seconds=timeframe_to_seconds(timeframe))
+
+    # ① 查库：区间 + 排除未收盘 bar
+    queried = list(
+        KlineRecord.objects.filter(
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            timestamp__gte=start_dt,
+            timestamp__lte=end_dt,
+        )
+        .order_by("timestamp")
+        .values("timestamp", "open", "high", "low", "close", "volume")
+    )
+    db_rows = [r for r in queried if r["timestamp"] + step <= end_dt]
+
+    # ② 缺口检测
+    gaps = _detect_kline_gaps(db_rows, start_dt, end_dt, step)
+    if not gaps:
+        logger.info(
+            "[BacktestTask] %s %s: %d bars all from DB, 0 API calls",
+            symbol,
+            timeframe,
+            len(db_rows),
+        )
+        return [_db_row_to_ohlcv(r) for r in db_rows], {
+            "from_db": len(db_rows),
+            "from_api": 0,
+            "gaps": [],
+        }
+
+    # ③ 逐 gap 补拉 + 回写
+    fetched: list[dict] = []
+    for gap_start, gap_end in gaps:
+        rows = _fetch_ohlcv_sync(
+            symbol,
+            timeframe,
+            exchange,
+            since_ms=int(gap_start.timestamp() * 1000),
+            end_ms=int(gap_end.timestamp() * 1000),
+        )
+        if not rows:
+            continue
+        fetched.extend(rows)
+        upsert_klines(
+            [_ohlcv_row_to_kline(r, exchange, symbol, timeframe) for r in rows]
+        )
+
+    # ④ 合并：按 timestamp 去重，**同 timestamp 以库为准**（库值已确认）
+    merged: dict[int, dict] = {}
+    for row in db_rows:
+        merged[int(row["timestamp"].timestamp() * 1000)] = _db_row_to_ohlcv(row)
+    from_db = len(merged)
+
+    from_api = 0
+    for row in fetched:
+        ts = _parse_ts(row["timestamp"])
+        if ts is None or not (start_dt <= ts <= end_dt) or ts + step > end_dt:
+            continue
+        key = int(ts.timestamp() * 1000)
+        if key in merged:
+            continue
+        merged[key] = row
+        from_api += 1
+
+    logger.info(
+        "[BacktestTask] %s %s: from_db=%d from_api=%d gaps=%d",
+        symbol,
+        timeframe,
+        from_db,
+        from_api,
+        len(gaps),
+    )
+    return [merged[key] for key in sorted(merged)], {
+        "from_db": from_db,
+        "from_api": from_api,
+        "gaps": [[g[0].isoformat(), g[1].isoformat()] for g in gaps],
+    }
+
+
+def _warn_funding_coverage(symbol: str, ohlcv_data: list[dict]) -> None:
+    """回测前检查资金费率覆盖度，缺失时告警（spec §7.2）。
+
+    **一期只告警，不改变回测失败行为**：成本模型 P0 已定「缺费率按 0 计 +
+    warning」是可接受的保守策略，避免阻断策略工厂流水线。
+
+    ``expected`` 按「每 8h 一个结算点」估算（Binance 永续结算周期），是下界近似
+    ——只用于判断「有没有缺」，不作为精确覆盖度指标。
+    """
+    from apps.backtest.models import FundingRateRecord
+
+    start = _parse_ts(ohlcv_data[0].get("timestamp", "")) if ohlcv_data else None
+    end = _parse_ts(ohlcv_data[-1].get("timestamp", "")) if ohlcv_data else None
+    if start is None or end is None:
+        return
+
+    expected = int((end - start) / timedelta(hours=8))
+    actual = FundingRateRecord.objects.filter(
+        symbol=symbol, funding_time__gte=start, funding_time__lte=end
+    ).count()
+    missing = expected - actual
+    if missing > 0:
+        logger.warning(
+            "[BacktestTask] %s funding rate coverage gap: %d missing in range",
+            symbol,
+            missing,
+        )
 
 
 def _close_async_resources(loop: asyncio.AbstractEventLoop) -> None:
