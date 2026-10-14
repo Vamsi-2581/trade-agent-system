@@ -112,6 +112,16 @@ class BaseAgent(ABC):
         "result_id",
     )
 
+    # 同一工具连续失败达到该阈值后熔断：后续对该工具的调用不再真实执行，
+    # 直接返回禁用通知（2026-10-14：web_search 因代理 DNS 失败被 LLM 反复
+    # 重试，烧满 _max_tool_rounds=32 轮，无法给出结果）。
+    _TOOL_FAILURE_DISABLE_THRESHOLD = 3
+    _TOOL_DISABLED_NOTICE = (
+        "【系统通知】工具 {tool} 已连续失败 {n} 次，本次调用已被系统禁用，"
+        "不会执行。不要再尝试调用它。请基于已有信息给出回答；"
+        "如确需该数据，请如实说明该数据源当前不可用。"
+    )
+
     # 工具通道（LLM function calling）彻底不可用时的对外答复：
     # 必须明确告诉用户"本次未执行"，绝不能把降级文本当成正常答复转发。
     _TOOL_CHANNEL_DOWN_REPLY = (
@@ -640,6 +650,8 @@ class BaseAgent(ABC):
         # 失败感知总结（2026-09-18 虚构事故）：记录每个工具的失败次数与最近错误，
         # 供循环耗尽后的 summary 轮使用（告知 LLM 真实失败状态 + 拦截虚构总结）
         tool_failure_counts: dict[str, int] = {}
+        # 同工具连续失败熔断（2026-10-14 web_search×32 事故）
+        disabled_tools: set[str] = set()
         last_tool_error = ""
         # 指标锚定（2026-09-18 事故）：本轮 get_task_result 返回的复算值，
         # 同时注入工具结果旁（覆盖直接返回路径）与 summary prompt
@@ -782,13 +794,35 @@ class BaseAgent(ABC):
 
             # 执行工具
             tool_results = []
+            all_disabled = True
             for tc in tool_calls:
-                result_text = await self._execute_tool_call(tc)
+                if tc.name in disabled_tools:
+                    # 熔断：该工具已连续失败达阈值，不再真实执行，
+                    # 直接注入禁用通知（明令 LLM 停止重试）
+                    result_text = self._TOOL_DISABLED_NOTICE.format(
+                        tool=tc.name,
+                        n=tool_failure_counts.get(tc.name, 0),
+                    )
+                else:
+                    all_disabled = False
+                    result_text = await self._execute_tool_call(tc)
                 if result_text.startswith("Error"):
                     tool_failure_counts[tc.name] = (
                         tool_failure_counts.get(tc.name, 0) + 1
                     )
                     last_tool_error = result_text[:300]
+                    if (
+                        tool_failure_counts[tc.name]
+                        >= self._TOOL_FAILURE_DISABLE_THRESHOLD
+                    ):
+                        disabled_tools.add(tc.name)
+                        logger.warning(
+                            "[%s] circuit breaker: tool %s failed %d times, "
+                            "disabled for the rest of this loop",
+                            self.name,
+                            tc.name,
+                            tool_failure_counts[tc.name],
+                        )
                 elif tc.name == "get_task_result":
                     # 指标锚定（2026-09-18 事故）：get_task_result 成功且含指标时，
                     # 在工具结果旁追加复算值锚定块 + 硬规则——后续每一轮
@@ -837,6 +871,17 @@ class BaseAgent(ABC):
                 assistant_msg["reasoning_content"] = resp.reasoning_content
             messages.append(assistant_msg)
             messages.extend(tool_results)
+
+            # 本轮所有工具调用均已熔断禁用 → 继续循环只会空转烧轮次
+            # （2026-10-14 web_search×32 事故），直接跳出并走 summary 收尾。
+            if all_disabled:
+                logger.warning(
+                    "[%s] _run_tool_loop round %d: all tool calls hit circuit "
+                    "breaker (%s); breaking out to summary",
+                    self.name, round_idx + 1,
+                    ", ".join(sorted(disabled_tools)),
+                )
+                break
 
         # 超出轮次或 LLM 返回空内容但有工具结果，让 LLM 总结
         logger.info(
