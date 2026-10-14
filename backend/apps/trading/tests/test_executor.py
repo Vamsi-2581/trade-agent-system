@@ -123,7 +123,9 @@ class TestOrderExecutorL2(unittest.TestCase):
 
     @patch("apps.trading.models.LiveSession.objects")
     @patch("apps.trading.models.Order.objects")
-    def test_submit_order_persists_triggered_strategy(self, mock_order_mgr, mock_ls_mgr):
+    def test_submit_order_persists_triggered_strategy(
+        self, mock_order_mgr, mock_ls_mgr
+    ):
         """带 live_session_id 下单时，应把会话策略名快照到 triggered_strategy。"""
         mock_adapter = AsyncMock()
         mock_response = MagicMock()
@@ -164,7 +166,9 @@ class TestOrderExecutorL2(unittest.TestCase):
         self.assertEqual(kwargs["triggered_strategy"], "ema_trend_weekday")
 
     @patch("apps.trading.models.Order.objects")
-    def test_submit_order_without_session_has_no_triggered_strategy(self, mock_order_mgr):
+    def test_submit_order_without_session_has_no_triggered_strategy(
+        self, mock_order_mgr
+    ):
         """无 live_session_id 下单时，不写 triggered_strategy（手动单）。"""
         mock_adapter = AsyncMock()
         mock_response = MagicMock()
@@ -249,7 +253,8 @@ class TestOrderExecutorL2(unittest.TestCase):
         self.executor._account_adapters = {"acc-1": adapter}
 
         self.assertEqual(
-            asyncio.run(self.executor.get_positions("acc-1")), adapter.get_positions.return_value
+            asyncio.run(self.executor.get_positions("acc-1")),
+            adapter.get_positions.return_value,
         )
         adapter.get_positions.assert_awaited_once()
         asyncio.run(self.executor.get_balance("acc-1"))
@@ -291,7 +296,10 @@ class TestOrderExecutorL2(unittest.TestCase):
         """shutdown() 应断开所有 adapter"""
         mock_adapter1 = AsyncMock()
         mock_adapter2 = AsyncMock()
-        self.executor._account_adapters = {"acc-1": mock_adapter1, "acc-2": mock_adapter2}
+        self.executor._account_adapters = {
+            "acc-1": mock_adapter1,
+            "acc-2": mock_adapter2,
+        }
         self.executor._running = True
         OrderExecutor._instance = self.executor
 

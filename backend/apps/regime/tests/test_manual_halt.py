@@ -200,7 +200,10 @@ class TestLift(TestCase):
     def test_a_lifted_scope_can_be_retripped_as_a_new_row(self):
         first = _trip(halt.symbol_scope(SYMBOL))
         manual_halt.lift(
-            halt.symbol_scope(SYMBOL), actor_kind=ActorKind.CLI, actor_name=".ops2", now=NOW
+            halt.symbol_scope(SYMBOL),
+            actor_kind=ActorKind.CLI,
+            actor_name=".ops2",
+            now=NOW,
         )
         again = manual_halt.trip(
             halt.symbol_scope(SYMBOL),
@@ -249,7 +252,10 @@ class TestNotificationWording(TestCase):
     def test_close_reason_routes_to_the_manual_table(self):
         _trip(halt.symbol_scope(SYMBOL))
         manual_halt.lift(
-            halt.symbol_scope(SYMBOL), actor_kind=ActorKind.CLI, actor_name=".ops2", now=NOW
+            halt.symbol_scope(SYMBOL),
+            actor_kind=ActorKind.CLI,
+            actor_name=".ops2",
+            now=NOW,
         )
         row = HaltDeclaration.objects.get(closed_reason__isnull=False)
         assert _close_reason_display(row) == "人工解除"

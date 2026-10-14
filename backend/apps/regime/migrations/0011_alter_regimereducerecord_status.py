@@ -18,19 +18,32 @@
 少了 ``no_op``，写方一试就会在 ``ReduceStatus(record.status)`` 上抛 ``ValueError``——
 而那时记录已经落库了，抛在**收尾**而不是**认领**，表现是「减仓做完了，通知发不出去」。
 """
+
 from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0010_regimereducepause_regimereducerecord_and_more'),
+        ("regime", "0010_regimereducepause_regimereducerecord_and_more"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='regimereducerecord',
-            name='status',
-            field=models.CharField(choices=[('claimed', '已认领（进行中）'), ('succeeded', '已减仓'), ('partial', '部分减仓'), ('failed', '减仓失败（确定未成交）'), ('no_op', '无需减仓（无可减）'), ('unsettled', '未得出结论（可能仍有活单）')], db_index=True, default='claimed', max_length=16, verbose_name='收场'),
+            model_name="regimereducerecord",
+            name="status",
+            field=models.CharField(
+                choices=[
+                    ("claimed", "已认领（进行中）"),
+                    ("succeeded", "已减仓"),
+                    ("partial", "部分减仓"),
+                    ("failed", "减仓失败（确定未成交）"),
+                    ("no_op", "无需减仓（无可减）"),
+                    ("unsettled", "未得出结论（可能仍有活单）"),
+                ],
+                db_index=True,
+                default="claimed",
+                max_length=16,
+                verbose_name="收场",
+            ),
         ),
     ]

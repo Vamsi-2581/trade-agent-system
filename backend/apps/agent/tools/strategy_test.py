@@ -61,7 +61,7 @@ class TestStrategyTool(BaseTool):
                 f"- 收益率: {stats.get('total_return_pct', '?')}%",
             ]
             if warnings:
-                parts.append(f"\n⚠️ 警告:\n" + "\n".join(f"  - {w}" for w in warnings))
+                parts.append("\n⚠️ 警告:\n" + "\n".join(f"  - {w}" for w in warnings))
             return ToolResult(success=True, data="\n".join(parts))
 
         errors = result.get("errors") or []
@@ -70,5 +70,5 @@ class TestStrategyTool(BaseTool):
         for err in errors:
             parts.append(f"  - {err}")
         if warnings:
-            parts.append(f"\n⚠️ 警告:\n" + "\n".join(f"  - {w}" for w in warnings))
+            parts.append("\n⚠️ 警告:\n" + "\n".join(f"  - {w}" for w in warnings))
         return ToolResult(success=False, error="\n".join(parts))

@@ -8,9 +8,9 @@ class ExchangeConfig(AppConfig):
     name = "apps.exchange"
 
     def ready(self):
-        if not getattr(settings, 'FERNET_KEY', ''):
+        if not getattr(settings, "FERNET_KEY", ""):
             raise ImproperlyConfigured(
                 "FERNET_KEY environment variable is required. "
                 "Generate one with: python -c "
-                "\"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+                '"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
             )

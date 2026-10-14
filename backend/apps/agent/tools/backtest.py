@@ -97,9 +97,7 @@ async def _resolve_django_user_id(channel_user_id: str | None) -> str | None:
         )
         return None
     except Exception as exc:
-        logger.warning(
-            "Error resolving channel user_id '%s': %s", channel_user_id, exc
-        )
+        logger.warning("Error resolving channel user_id '%s': %s", channel_user_id, exc)
         return None
 
 
@@ -223,9 +221,11 @@ class SubmitBacktestTool(BaseTool):
 
         logger.info(
             "[SubmitBacktestTool] execute called with strategy_name=%s symbol=%s timeframe=%s",
-            strategy_name, symbol, timeframe,
+            strategy_name,
+            symbol,
+            timeframe,
         )
-        
+
         if not strategy_name or not symbol or not timeframe:
             return ToolResult(
                 success=False,
@@ -309,14 +309,22 @@ class SubmitBacktestTool(BaseTool):
                 )
 
                 gs_task = run_grid_search.apply_async(
-                    kwargs={"job_id": str(job.id), "user_id": django_gs_user_id if django_gs_user_id else None},
-                    queue='grid_search',
+                    kwargs={
+                        "job_id": str(job.id),
+                        "user_id": django_gs_user_id if django_gs_user_id else None,
+                    },
+                    queue="grid_search",
                 )
-                await db_async(lambda _j: job.__class__.objects.filter(id=job.id).update(celery_task_id=gs_task.id))(job)
+                await db_async(
+                    lambda _j: job.__class__.objects.filter(id=job.id).update(
+                        celery_task_id=gs_task.id
+                    )
+                )(job)
 
                 # Immediately record submission so get_task_result can
                 # distinguish "never submitted" from "genuinely pending"
                 from apps.agent.task_tracker import TaskTracker
+
                 TaskTracker.record_submitted(
                     task_id=gs_task.id,
                     user_id=raw_gs_user_id if raw_gs_user_id else "",
@@ -346,7 +354,8 @@ class SubmitBacktestTool(BaseTool):
             raw_user_id = kwargs.get("user_id")
             logger.info(
                 "[SubmitBacktestTool] user_id: raw=%s, type=%s",
-                raw_user_id, type(raw_user_id).__name__,
+                raw_user_id,
+                type(raw_user_id).__name__,
             )
             django_user_id = await _resolve_django_user_id(raw_user_id)
             logger.info(
@@ -406,6 +415,7 @@ class SubmitBacktestTool(BaseTool):
             # Immediately record submission so get_task_result can
             # distinguish "never submitted" from "genuinely pending"
             from apps.agent.task_tracker import TaskTracker
+
             TaskTracker.record_submitted(
                 task_id=task.id,
                 user_id=user_id if user_id else "",
@@ -434,7 +444,6 @@ class SubmitBacktestTool(BaseTool):
         except Exception as e:
             logger.error("[SubmitBacktestTool] submit failed: %s", e, exc_info=True)
             return ToolResult(success=False, error=f"提交回测任务失败: {e}")
-
 
 
 async def _get_redis_task_data(task_id: str) -> dict | None:
@@ -478,6 +487,7 @@ async def _get_archived_task_result(task_id: str) -> dict | None:
     expired and the ScheduledOneTimeTask resolution has no match.
     """
     import logging as _logging
+
     _log = _logging.getLogger(__name__)
 
     is_short_id = len(task_id) < 36
@@ -486,10 +496,10 @@ async def _get_archived_task_result(task_id: str) -> dict | None:
     try:
         from apps.agent.models import TaskProgress
 
-        tp_filter = {"task_id__startswith": task_id} if is_short_id else {"task_id": task_id}
-        tp = await db_async(
-            lambda: TaskProgress.objects.filter(**tp_filter).first()
-        )()
+        tp_filter = (
+            {"task_id__startswith": task_id} if is_short_id else {"task_id": task_id}
+        )
+        tp = await db_async(lambda: TaskProgress.objects.filter(**tp_filter).first())()
         if tp is not None:
             data: dict = {
                 "task_id": tp.task_id,  # actual full ID from DB
@@ -504,7 +514,8 @@ async def _get_archived_task_result(task_id: str) -> dict | None:
                 data["completed_at"] = tp.completed_at.isoformat()
             _log.info(
                 "[get_task_result] found in TaskProgress: task_id=%s status=%s",
-                tp.task_id, tp.status,
+                tp.task_id,
+                tp.status,
             )
             return data
     except Exception as e:
@@ -518,18 +529,23 @@ async def _get_archived_task_result(task_id: str) -> dict | None:
         from django.db.models import Q
 
         if is_short_id:
-            br_filter = Q(id__startswith=task_id) | Q(celery_task_id__startswith=task_id)
+            br_filter = Q(id__startswith=task_id) | Q(
+                celery_task_id__startswith=task_id
+            )
         else:
             br_filter = Q(id=task_id) | Q(celery_task_id=task_id)
         br = await db_async(
-            lambda: BacktestResult.objects.select_related("strategy").filter(
-                br_filter
-            ).first()
+            lambda: (
+                BacktestResult.objects.select_related("strategy")
+                .filter(br_filter)
+                .first()
+            )
         )()
         if br is not None:
             _log.info(
                 "[get_task_result] found in BacktestResult: id=%s status=%s",
-                br.id, br.review_status,
+                br.id,
+                br.review_status,
             )
             return {
                 "task_id": str(br.id),
@@ -566,13 +582,17 @@ async def _get_archived_task_result(task_id: str) -> dict | None:
         from django.db.models import Q
 
         if is_short_id:
-            job_filter = Q(id__startswith=task_id) | Q(celery_task_id__startswith=task_id)
+            job_filter = Q(id__startswith=task_id) | Q(
+                celery_task_id__startswith=task_id
+            )
         else:
             job_filter = Q(id=task_id) | Q(celery_task_id=task_id)
         job = await db_async(
-            lambda: GridSearchJob.objects.select_related(
-                "best_result", "strategy"
-            ).filter(job_filter).first()
+            lambda: (
+                GridSearchJob.objects.select_related("best_result", "strategy")
+                .filter(job_filter)
+                .first()
+            )
         )()
         if job is not None:
             data: dict = {
@@ -597,7 +617,8 @@ async def _get_archived_task_result(task_id: str) -> dict | None:
                 }
             _log.info(
                 "[get_task_result] found in GridSearchJob: id=%s status=%s",
-                job.id, job.status,
+                job.id,
+                job.status,
             )
             return data
     except Exception as e:
@@ -667,9 +688,11 @@ class GetTaskResultTool(BaseTool):
 
             # 查询所有以该前缀开头的 UUID
             matching_tasks = await db_async(
-                lambda: list(ScheduledOneTimeTask.objects.filter(
-                    id__startswith=task_id
-                ).values_list('id', flat=True))
+                lambda: list(
+                    ScheduledOneTimeTask.objects.filter(
+                        id__startswith=task_id
+                    ).values_list("id", flat=True)
+                )
             )()
 
             if len(matching_tasks) == 1:
@@ -700,6 +723,7 @@ class GetTaskResultTool(BaseTool):
 
             # Check if this is a ScheduledOneTimeTask DB UUID
             from uuid import UUID
+
             try:
                 UUID(resolved_id)
                 from apps.agent.models import ScheduledOneTimeTask
@@ -710,7 +734,9 @@ class GetTaskResultTool(BaseTool):
                 if one_time_task:
                     data = {
                         "task_id": str(one_time_task.id),  # Always return full UUID
-                        "short_id": task_id if len(task_id) < 36 else None,  # Show user input if it was a short ID
+                        "short_id": task_id
+                        if len(task_id) < 36
+                        else None,  # Show user input if it was a short ID
                         "status": one_time_task.status.upper(),
                         "source": "one_time",
                         "task_name": one_time_task.task_name,
@@ -769,66 +795,86 @@ class GetTaskResultTool(BaseTool):
                 if celery_state == "SUCCESS":
                     res_data = result.result
                     # 检测结构化 FAILURE 结果（任务内捕获异常并返回错误详情）
-                    if isinstance(res_data, dict) and res_data.get("status") == "FAILURE":
-                        error_msg = res_data.get("error_message", res_data.get("error", "未知错误"))
+                    if (
+                        isinstance(res_data, dict)
+                        and res_data.get("status") == "FAILURE"
+                    ):
+                        error_msg = res_data.get(
+                            "error_message", res_data.get("error", "未知错误")
+                        )
                         error_type = res_data.get("error_type", "Exception")
                         return ToolResult(
                             success=True,
-                            data=_add_short_id({
-                                "task_id": actual_task_id,
-                                "status": "FAILURE",
-                                "error_type": error_type,
-                                "error": error_msg,
-                            }),
+                            data=_add_short_id(
+                                {
+                                    "task_id": actual_task_id,
+                                    "status": "FAILURE",
+                                    "error_type": error_type,
+                                    "error": error_msg,
+                                }
+                            ),
                         )
                     # 检测 CANCELLED 状态
-                    if isinstance(res_data, dict) and res_data.get("status") == "CANCELLED":
+                    if (
+                        isinstance(res_data, dict)
+                        and res_data.get("status") == "CANCELLED"
+                    ):
                         return ToolResult(
                             success=True,
-                            data=_add_short_id({
-                                "task_id": actual_task_id,
-                                "status": "CANCELLED",
-                                "cancelled": res_data.get("cancelled", True),
-                                "completed": res_data.get("completed", 0),
-                                "message": res_data.get("message", "任务已被取消"),
-                            }),
+                            data=_add_short_id(
+                                {
+                                    "task_id": actual_task_id,
+                                    "status": "CANCELLED",
+                                    "cancelled": res_data.get("cancelled", True),
+                                    "completed": res_data.get("completed", 0),
+                                    "message": res_data.get("message", "任务已被取消"),
+                                }
+                            ),
                         )
                     return ToolResult(
                         success=True,
-                        data=_add_short_id({
-                            "task_id": actual_task_id,
-                            "status": "SUCCESS",
-                            "result": res_data,
-                        }),
+                        data=_add_short_id(
+                            {
+                                "task_id": actual_task_id,
+                                "status": "SUCCESS",
+                                "result": res_data,
+                            }
+                        ),
                     )
                 if celery_state == "FAILURE":
                     error_info = str(result.result) if result.result else "未知错误"
                     return ToolResult(
                         success=True,
-                        data=_add_short_id({
-                            "task_id": actual_task_id,
-                            "status": "FAILURE",
-                            "error": error_info,
-                        }),
+                        data=_add_short_id(
+                            {
+                                "task_id": actual_task_id,
+                                "status": "FAILURE",
+                                "error": error_info,
+                            }
+                        ),
                     )
 
                 return ToolResult(
                     success=True,
-                    data=_add_short_id({
-                        "task_id": actual_task_id,
-                        "status": "NOT_FOUND",
-                        "message": (
-                            "该任务 ID 不存在或已过期（超过 24 小时）。"
-                            "请重新提交任务。"
-                        ),
-                    }),
+                    data=_add_short_id(
+                        {
+                            "task_id": actual_task_id,
+                            "status": "NOT_FOUND",
+                            "message": (
+                                "该任务 ID 不存在或已过期（超过 24 小时）。"
+                                "请重新提交任务。"
+                            ),
+                        }
+                    ),
                 )
 
             if celery_state == "SUCCESS":
                 res_data = result.result
                 # 检测结构化 FAILURE 结果（任务内捕获异常并返回错误详情）
                 if isinstance(res_data, dict) and res_data.get("status") == "FAILURE":
-                    error_msg = res_data.get("error_message", res_data.get("error", "未知错误"))
+                    error_msg = res_data.get(
+                        "error_message", res_data.get("error", "未知错误")
+                    )
                     error_type = res_data.get("error_type", "Exception")
                     task_params = res_data.get("task_params", {})
 
@@ -848,48 +894,56 @@ class GetTaskResultTool(BaseTool):
                     )
                     return ToolResult(
                         success=True,
-                        data=_add_short_id({
-                            "task_id": actual_task_id,
-                            "status": "FAILURE",
-                            "error_type": error_type,
-                            "error": error_msg,
-                            "task_params": task_params,
-                            "actionable_error": error_detail,
-                        }),
+                        data=_add_short_id(
+                            {
+                                "task_id": actual_task_id,
+                                "status": "FAILURE",
+                                "error_type": error_type,
+                                "error": error_msg,
+                                "task_params": task_params,
+                                "actionable_error": error_detail,
+                            }
+                        ),
                     )
 
                 # 检测 CANCELLED 状态（任务被用户取消）
                 if isinstance(res_data, dict) and res_data.get("status") == "CANCELLED":
                     return ToolResult(
                         success=True,
-                        data=_add_short_id({
-                            "task_id": actual_task_id,
-                            "status": "CANCELLED",
-                            "cancelled": res_data.get("cancelled", True),
-                            "completed": res_data.get("completed", 0),
-                            "message": res_data.get("message", "任务已被取消"),
-                        }),
+                        data=_add_short_id(
+                            {
+                                "task_id": actual_task_id,
+                                "status": "CANCELLED",
+                                "cancelled": res_data.get("cancelled", True),
+                                "completed": res_data.get("completed", 0),
+                                "message": res_data.get("message", "任务已被取消"),
+                            }
+                        ),
                     )
 
                 return ToolResult(
                     success=True,
-                    data=_add_short_id({
-                        "task_id": actual_task_id,
-                        "status": "SUCCESS",
-                        "result": res_data,
-                    }),
+                    data=_add_short_id(
+                        {
+                            "task_id": actual_task_id,
+                            "status": "SUCCESS",
+                            "result": res_data,
+                        }
+                    ),
                 )
 
             if celery_state == "FAILURE":
                 error_info = str(result.result) if result.result else "未知错误"
                 return ToolResult(
                     success=True,
-                    data=_add_short_id({
-                        "task_id": actual_task_id,
-                        "status": "FAILURE",
-                        "error": error_info,
-                        "note": "此错误为 Celery 层面异常，请检查日志以获取详细信息。",
-                    }),
+                    data=_add_short_id(
+                        {
+                            "task_id": actual_task_id,
+                            "status": "FAILURE",
+                            "error": error_info,
+                            "note": "此错误为 Celery 层面异常，请检查日志以获取详细信息。",
+                        }
+                    ),
                 )
 
             if tracker_status in ("completed", "failed", "zombie"):
@@ -903,26 +957,34 @@ class GetTaskResultTool(BaseTool):
                     return ToolResult(success=True, data=_add_short_id(archived))
                 return ToolResult(
                     success=True,
-                    data=_add_short_id({
-                        "task_id": actual_task_id,
-                        "status": tracker_status.upper(),
-                        "message": f"任务已结束（{tracker_status}）",
-                    }),
+                    data=_add_short_id(
+                        {
+                            "task_id": actual_task_id,
+                            "status": tracker_status.upper(),
+                            "message": f"任务已结束（{tracker_status}）",
+                        }
+                    ),
                 )
 
             # PENDING / STARTED / RUNNING / SUBMITTED / RETRY
             info: Any = None
             if celery_state == "STARTED" and result.info:
                 info = result.info
-            display_state = tracker_status if tracker_status in ("submitted", "running") else celery_state
+            display_state = (
+                tracker_status
+                if tracker_status in ("submitted", "running")
+                else celery_state
+            )
             return ToolResult(
                 success=True,
-                data=_add_short_id({
-                    "task_id": actual_task_id,
-                    "status": display_state,
-                    "info": info,
-                    "message": f"任务仍在运行中（{display_state}），请稍后再次查询。",
-                }),
+                data=_add_short_id(
+                    {
+                        "task_id": actual_task_id,
+                        "status": display_state,
+                        "info": info,
+                        "message": f"任务仍在运行中（{display_state}），请稍后再次查询。",
+                    }
+                ),
             )
         except Exception as e:
             logger.error("[GetTaskResultTool] query failed task_id=%s: %s", task_id, e)

@@ -45,9 +45,7 @@ async def test_string_limit_does_not_crash():
         mock_order.objects.filter.return_value = _fake_queryset(count=0)
         result = await ListOrdersTool().execute(user_id=user_uuid, limit="50")
 
-    assert result.success is True, (
-        f"字符串 limit 导致查询失败：error={result.error!r}"
-    )
+    assert result.success is True, f"字符串 limit 导致查询失败：error={result.error!r}"
     # 正常应返回空结果而不是抛 TypeError
     assert result.data["total"] == 0
 

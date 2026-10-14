@@ -152,7 +152,9 @@ async def ack_by_id(user_id: str, delivery_id: str) -> None:
                 await r.lrem(k, 1, raw)
                 return
     except Exception:
-        logger.warning("[WSPending] ack_by_id failed for user %s", user_id, exc_info=True)
+        logger.warning(
+            "[WSPending] ack_by_id failed for user %s", user_id, exc_info=True
+        )
 
 
 async def drain(user_id: str) -> list[dict]:

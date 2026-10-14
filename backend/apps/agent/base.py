@@ -27,7 +27,9 @@ class AgentMessage:
     payload: dict = field(default_factory=dict)
     timeout_ms: int = 30000
     user_id: str = "anonymous"
-    origin: str = ""  # 下达命令的 gateway: web | api | lark | telegram | tui | scheduler | ""
+    origin: str = (
+        ""  # 下达命令的 gateway: web | api | lark | telegram | tui | scheduler | ""
+    )
 
 
 @dataclass
@@ -76,12 +78,8 @@ class BaseAgent(ABC):
     # `rsi_macd_short_strategy.py` 已写入，实际文件不存在）。
     # 两个方向：`xxx.py` 已写入 / 已写入 `xxx.py`
     _WRITTEN_FILE_CLAIMS = (
-        re.compile(
-            r"([~\w][\w./\-]*\.py)`?\s*(?:已写入|已生成|已保存|已创建|已落盘)"
-        ),
-        re.compile(
-            r"(?:已写入|已生成|已保存|已创建|已落盘)\s*`?([~\w][\w./\-]*\.py)"
-        ),
+        re.compile(r"([~\w][\w./\-]*\.py)`?\s*(?:已写入|已生成|已保存|已创建|已落盘)"),
+        re.compile(r"(?:已写入|已生成|已保存|已创建|已落盘)\s*`?([~\w][\w./\-]*\.py)"),
     )
 
     # summary 轮成功声明（比 _TASK_CLAIM_PATTERNS 更宽：09-18 事故报告的
@@ -204,6 +202,7 @@ class BaseAgent(ABC):
         try:
             # Push tool call notification
             from .task_tracker import tracker_context
+
             tracker = tracker_context.get(None)
             if tracker is not None:
                 tracker.tool_call(tc.name, tc.arguments)
@@ -592,9 +591,7 @@ class BaseAgent(ABC):
 
         # --- 3. 无标记形式（文本中没有 DSML 标记，服务端可能剥掉了它们） ---
         work = text
-        bare_m = re.search(
-            r"<function_calls>(.*?)</function_calls>", work, re.DOTALL
-        )
+        bare_m = re.search(r"<function_calls>(.*?)</function_calls>", work, re.DOTALL)
         if not bare_m:
             return None
         invokes = re.findall(
@@ -680,7 +677,8 @@ class BaseAgent(ABC):
                 if is_fallback(content):
                     logger.warning(
                         "[%s] _run_tool_loop round %d: detected fallback marker",
-                        self.name, round_idx + 1,
+                        self.name,
+                        round_idx + 1,
                     )
                     return ("", True)
 
@@ -699,7 +697,10 @@ class BaseAgent(ABC):
                             "[%s] _run_tool_loop round %d: tool channel degraded "
                             "(%s), no tool executed this turn; refusing to relay "
                             "degraded answer (content_len=%d)",
-                            self.name, round_idx + 1, degraded_reason, content_len,
+                            self.name,
+                            round_idx + 1,
+                            degraded_reason,
+                            content_len,
                         )
                         return (
                             self._TOOL_CHANNEL_DOWN_REPLY.format(
@@ -752,7 +753,8 @@ class BaseAgent(ABC):
                             logger.warning(
                                 "[%s] _run_tool_loop round %d: degraded round "
                                 "after executed tool result(s); appending notice",
-                                self.name, round_idx + 1,
+                                self.name,
+                                round_idx + 1,
                             )
                             return (
                                 content
@@ -774,7 +776,9 @@ class BaseAgent(ABC):
                     logger.debug(
                         "[%s] _run_tool_loop round %d: empty content, no tool calls, "
                         "skipping (had_tool_results=%s)",
-                        self.name, round_idx + 1, had_tool_results,
+                        self.name,
+                        round_idx + 1,
+                        had_tool_results,
                     )
                     continue
 
@@ -848,6 +852,7 @@ class BaseAgent(ABC):
                 had_tool_results = True
                 # Update last_alive so watchdog knows task is still making progress
                 from .task_tracker import tracker_context
+
                 tracker = tracker_context.get(None)
                 if tracker is not None:
                     tracker.alive()
@@ -878,7 +883,8 @@ class BaseAgent(ABC):
                 logger.warning(
                     "[%s] _run_tool_loop round %d: all tool calls hit circuit "
                     "breaker (%s); breaking out to summary",
-                    self.name, round_idx + 1,
+                    self.name,
+                    round_idx + 1,
                     ", ".join(sorted(disabled_tools)),
                 )
                 break
@@ -887,7 +893,9 @@ class BaseAgent(ABC):
         logger.info(
             "[%s] _run_tool_loop exiting loop: had_tool_results=%s, "
             "message_count=%d, requesting summary from LLM",
-            self.name, had_tool_results, len(messages),
+            self.name,
+            had_tool_results,
+            len(messages),
         )
         history_text = "\n".join(
             f"[{m.get('role', 'user')}]: {m.get('content', '')}" for m in messages
@@ -900,7 +908,8 @@ class BaseAgent(ABC):
         total_tool_failures = sum(tool_failure_counts.values())
         if total_tool_failures > 0:
             fail_desc = "、".join(
-                f"{name} 失败 {cnt} 次" for name, cnt in sorted(tool_failure_counts.items())
+                f"{name} 失败 {cnt} 次"
+                for name, cnt in sorted(tool_failure_counts.items())
             )
             summary_user += (
                 "\n\n【系统提示 · 必须遵守】工具循环因达到轮次上限被强制终止，"
@@ -929,7 +938,8 @@ class BaseAgent(ABC):
             logger.error(
                 "[%s] _run_tool_loop summary LLM unavailable (fallback marker, "
                 "had_tool_results=%s)",
-                self.name, had_tool_results,
+                self.name,
+                had_tool_results,
             )
             tail = (
                 "已执行的工具结果仍然有效（可在回测记录中查看）。"
@@ -946,7 +956,10 @@ class BaseAgent(ABC):
             logger.warning(
                 "[%s] _run_tool_loop summary returned empty content "
                 "(final_len=%d, had_tool_results=%s, messages=%d)",
-                self.name, final_len, had_tool_results, len(messages),
+                self.name,
+                final_len,
+                had_tool_results,
+                len(messages),
             )
         # ── 防虚构守卫（summary 轮）──
         # 有工具失败 + summary 仍含任务完成声明 + 声称写入的文件经磁盘验证不存在
@@ -958,13 +971,15 @@ class BaseAgent(ABC):
             and self._claims_unwritten_file(final)
         ):
             fail_desc = "、".join(
-                f"{name} 失败 {cnt} 次" for name, cnt in sorted(tool_failure_counts.items())
+                f"{name} 失败 {cnt} 次"
+                for name, cnt in sorted(tool_failure_counts.items())
             )
             logger.error(
                 "[%s] _run_tool_loop summary after failed tool run still claims "
                 "task success with unwritten file (failures=%s); refusing to relay "
                 "fabricated report",
-                self.name, tool_failure_counts,
+                self.name,
+                tool_failure_counts,
             )
             return (
                 "⚠️ 本次总结已被系统拦截：工具循环达到轮次上限被强制终止，"

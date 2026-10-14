@@ -41,7 +41,9 @@ POSITION_PAYLOAD = [
 ]
 BALANCE_PAYLOAD = [{"asset": "USDT", "balance": "1000", "walletBalance": "1010"}]
 ORDER_PAYLOAD = {"orderId": 12345, "status": "NEW", "executedQty": "0", "avgPrice": "0"}
-_1021_TEXT = '{"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}'
+_1021_TEXT = (
+    '{"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}'
+)
 
 
 class _Resp:
@@ -114,9 +116,13 @@ class TestTransportSelfHeal(unittest.IsolatedAsyncioTestCase):
     """传输层故障 → 重建客户端并重试一次。"""
 
     async def test_positions_transport_timeout_reconnects_and_retries_once(self):
-        a, old, new = _adapter([httpx.ConnectTimeout("")], [_Resp(200, POSITION_PAYLOAD)])
+        a, old, new = _adapter(
+            [httpx.ConnectTimeout("")], [_Resp(200, POSITION_PAYLOAD)]
+        )
         with patch.object(
-            BinanceAdapter, "connect", AsyncMock(side_effect=lambda: _set_client(a, new))
+            BinanceAdapter,
+            "connect",
+            AsyncMock(side_effect=lambda: _set_client(a, new)),
         ) as recon:
             positions = await a.get_positions()
 
@@ -140,7 +146,9 @@ class TestTransportSelfHeal(unittest.IsolatedAsyncioTestCase):
             [_Resp(200, POSITION_PAYLOAD)],
         )
         with patch.object(
-            BinanceAdapter, "connect", AsyncMock(side_effect=lambda: _set_client(a, new))
+            BinanceAdapter,
+            "connect",
+            AsyncMock(side_effect=lambda: _set_client(a, new)),
         ) as recon:
             positions = await a.get_positions()
 
@@ -152,7 +160,9 @@ class TestTransportSelfHeal(unittest.IsolatedAsyncioTestCase):
     async def test_positions_timeout_after_reconnect_raises_and_retries_only_once(self):
         a, old, new = _adapter([httpx.ConnectTimeout("")], [httpx.ConnectTimeout("")])
         with patch.object(
-            BinanceAdapter, "connect", AsyncMock(side_effect=lambda: _set_client(a, new))
+            BinanceAdapter,
+            "connect",
+            AsyncMock(side_effect=lambda: _set_client(a, new)),
         ) as recon:
             with self.assertRaises(httpx.ConnectTimeout):
                 await a.get_positions()
@@ -162,9 +172,13 @@ class TestTransportSelfHeal(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(old.requests), 1)
 
     async def test_retry_request_is_resigned_with_fresh_timestamp(self):
-        a, old, new = _adapter([httpx.ConnectTimeout("")], [_Resp(200, POSITION_PAYLOAD)])
+        a, old, new = _adapter(
+            [httpx.ConnectTimeout("")], [_Resp(200, POSITION_PAYLOAD)]
+        )
         with patch.object(
-            BinanceAdapter, "connect", AsyncMock(side_effect=lambda: _set_client(a, new))
+            BinanceAdapter,
+            "connect",
+            AsyncMock(side_effect=lambda: _set_client(a, new)),
         ):
             await a.get_positions()
 
@@ -179,9 +193,13 @@ class TestTransportSelfHeal(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_balance_transport_timeout_reconnects_and_returns_balance(self):
-        a, old, new = _adapter([httpx.ConnectTimeout("")], [_Resp(200, BALANCE_PAYLOAD)])
+        a, old, new = _adapter(
+            [httpx.ConnectTimeout("")], [_Resp(200, BALANCE_PAYLOAD)]
+        )
         with patch.object(
-            BinanceAdapter, "connect", AsyncMock(side_effect=lambda: _set_client(a, new))
+            BinanceAdapter,
+            "connect",
+            AsyncMock(side_effect=lambda: _set_client(a, new)),
         ):
             balance = await a.get_balance()
 
@@ -201,7 +219,9 @@ class TestTransportSelfHeal(unittest.IsolatedAsyncioTestCase):
         request = _order_request()
 
         with patch.object(
-            BinanceAdapter, "connect", AsyncMock(side_effect=lambda: _set_client(a, new))
+            BinanceAdapter,
+            "connect",
+            AsyncMock(side_effect=lambda: _set_client(a, new)),
         ) as recon:
             resp = await a.place_order(request)
 
@@ -223,7 +243,10 @@ class TestTimestampResync(unittest.IsolatedAsyncioTestCase):
 
     async def test_1021_triggers_clock_resync_and_retry(self):
         a, old, _ = _adapter(
-            [_Resp(400, {"code": -1021, "msg": "..."}, text=_1021_TEXT), _Resp(200, POSITION_PAYLOAD)]
+            [
+                _Resp(400, {"code": -1021, "msg": "..."}, text=_1021_TEXT),
+                _Resp(200, POSITION_PAYLOAD),
+            ]
         )
         with patch.object(BinanceAdapter, "_sync_time", AsyncMock()) as sync:
             positions = await a.get_positions()
@@ -234,7 +257,9 @@ class TestTimestampResync(unittest.IsolatedAsyncioTestCase):
         self.assertIs(a._client, old, "-1021 不需要换客户端")
 
     async def test_other_400_is_not_retried(self):
-        a, old, _ = _adapter([_Resp(400, {"code": -2015, "msg": "Invalid API-key"}, text="x")])
+        a, old, _ = _adapter(
+            [_Resp(400, {"code": -2015, "msg": "Invalid API-key"}, text="x")]
+        )
         with patch.object(BinanceAdapter, "_sync_time", AsyncMock()) as sync:
             with self.assertRaises(httpx.HTTPStatusError):
                 await a.get_positions()

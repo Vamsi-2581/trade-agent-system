@@ -245,9 +245,16 @@ class TestTheDispatcher:
 
     def test_arguments_reach_the_handler(self):
         fake = self._fake_agent()
-        _run(SupervisorAgent.handle(fake, _msg("/event add 高 全市场 2026-09-25 20:30 FOMC")))
+        _run(
+            SupervisorAgent.handle(
+                fake, _msg("/event add 高 全市场 2026-09-25 20:30 FOMC")
+            )
+        )
         fake._handle_event.assert_awaited_once()
-        assert fake._handle_event.await_args.args[1] == "add 高 全市场 2026-09-25 20:30 FOMC"
+        assert (
+            fake._handle_event.await_args.args[1]
+            == "add 高 全市场 2026-09-25 20:30 FOMC"
+        )
 
     def test_the_argument_free_commands_are_still_called_with_one_argument(self):
         # 无参数命令只收一个参数——`message` 本身，不多给一个 `args` 占位。这里钉的是

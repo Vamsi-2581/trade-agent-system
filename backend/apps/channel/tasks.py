@@ -24,7 +24,7 @@ def _get_oauth_client():
 
 
 @app.task(
-    name='apps.channel.tasks.refresh_feishu_user_tokens',
+    name="apps.channel.tasks.refresh_feishu_user_tokens",
     bind=True,
     max_retries=3,
     default_retry_delay=300,
@@ -38,10 +38,12 @@ def refresh_feishu_user_tokens(self):
 
     soon = datetime.now(timezone.utc) + timedelta(minutes=30)
     with transaction.atomic():
-        tokens = list(FeishuUserToken.objects.filter(
-            is_active=True,
-            expires_at__lte=soon,
-        ).select_for_update(skip_locked=True))
+        tokens = list(
+            FeishuUserToken.objects.filter(
+                is_active=True,
+                expires_at__lte=soon,
+            ).select_for_update(skip_locked=True)
+        )
 
     refreshed = 0
     failed = 0
@@ -71,9 +73,16 @@ def refresh_feishu_user_tokens(self):
                 token.refresh_token_enc = token.encrypt_refresh_token(
                     token_data["refresh_token"]
                 )
-                token.expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+                token.expires_at = datetime.now(timezone.utc) + timedelta(
+                    seconds=expires_in
+                )
                 token.save(
-                    update_fields=["access_token_enc", "refresh_token_enc", "expires_at", "updated_at"]
+                    update_fields=[
+                        "access_token_enc",
+                        "refresh_token_enc",
+                        "expires_at",
+                        "updated_at",
+                    ]
                 )
                 refreshed += 1
         except Exception as e:

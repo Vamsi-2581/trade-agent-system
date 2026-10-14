@@ -120,9 +120,7 @@ def load_tags(params: config.JudgementConfig | None = None) -> dict[date, BaseRe
     return slice_core.build_tags(load_candles(SYMBOL), params or config.JUDGEMENT)
 
 
-def tag_fingerprint(
-    tags: Mapping[date, BaseRegime], window: tuple[date, date]
-) -> str:
+def tag_fingerprint(tags: Mapping[date, BaseRegime], window: tuple[date, date]) -> str:
     """窗口内标签的指纹。按日期排序拼接，所以与构造顺序无关。
 
     取窗口内的标签而不是全量：见模块 docstring。空窗口（一天都没判定出来）的指纹是
@@ -172,7 +170,11 @@ def adapt_trades(rows: Iterable) -> tuple[list[slice_core.SliceTrade], int]:
     incomplete = 0
 
     for row in rows:
-        if row.trade_type == "close" and row.exit_time is not None and row.pnl is not None:
+        if (
+            row.trade_type == "close"
+            and row.exit_time is not None
+            and row.pnl is not None
+        ):
             trades.append(
                 slice_core.SliceTrade(
                     entry_time=_as_utc(row.entry_time),

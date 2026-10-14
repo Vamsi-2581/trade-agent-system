@@ -290,9 +290,7 @@ class DeactivationConfig:
 
     def __post_init__(self) -> None:
         if self.exemption_days < 1:
-            raise ValueError(
-                f"exemption_days 必须 >= 1，当前 {self.exemption_days}"
-            )
+            raise ValueError(f"exemption_days 必须 >= 1，当前 {self.exemption_days}")
 
 
 @dataclass(frozen=True)
@@ -345,11 +343,22 @@ class BoxConfig:
                 "——这是 detect_box_range 自己的要求，"
                 "而逐字誊抄它的默认值恰好会踩中这一条"
             )
-        for name in ("max_width_abs", "max_width_pct", "min_width_abs", "min_width_pct"):
+        for name in (
+            "max_width_abs",
+            "max_width_pct",
+            "min_width_abs",
+            "min_width_pct",
+        ):
             value = getattr(self, name)
             if value is not None and value <= 0:
                 raise ValueError(f"{name} 必须为正数，当前 {value}")
-        for name in ("pivot_window", "min_gap_bars", "min_pivots", "min_touches", "atr_period"):
+        for name in (
+            "pivot_window",
+            "min_gap_bars",
+            "min_pivots",
+            "min_touches",
+            "atr_period",
+        ):
             if getattr(self, name) < 1:
                 raise ValueError(f"{name} 必须 >= 1，当前 {getattr(self, name)}")
         if self.min_duration_bars is not None and self.min_duration_bars < 1:
@@ -426,7 +435,9 @@ class NewsSource:
         if not self.name.strip():
             raise ValueError("资讯源的 name 不能为空——它是条目与判定留痕里的来源标识")
         if not self.url.startswith(("http://", "https://")):
-            raise ValueError(f"资讯源 {self.name} 的 url 必须是 http(s)，当前 {self.url!r}")
+            raise ValueError(
+                f"资讯源 {self.name} 的 url 必须是 http(s)，当前 {self.url!r}"
+            )
         if self.kind not in NewsSourceKind:
             raise ValueError(
                 f"资讯源 {self.name} 的 kind 未登记：{self.kind!r}；"
@@ -454,17 +465,57 @@ NEWS_PARSERS = ("rss", "binance_announcements", "okx_announcements")
 #: 全部小写（匹配前会把标题与正文也小写化）；中文词不受大小写影响，一并列出。
 NEWS_KEYWORDS: tuple[str, ...] = (
     # 标的与市场
-    "bitcoin", "btc", "crypto", "stablecoin", "tether", "usdt", "etf",
-    "liquidation", "liquidations", "exchange", "custody",
+    "bitcoin",
+    "btc",
+    "crypto",
+    "stablecoin",
+    "tether",
+    "usdt",
+    "etf",
+    "liquidation",
+    "liquidations",
+    "exchange",
+    "custody",
     # 监管、法律与安全事件（最可能触发抬升的一类）
-    "regulation", "regulator", "lawsuit", "settlement", "ban", "sanction",
-    "tariff", "hack", "exploit", "halt", "delist", "bankruptcy",
+    "regulation",
+    "regulator",
+    "lawsuit",
+    "settlement",
+    "ban",
+    "sanction",
+    "tariff",
+    "hack",
+    "exploit",
+    "halt",
+    "delist",
+    "bankruptcy",
     # 宏观
-    "interest rate", "rate cut", "rate hike", "inflation", "cpi", "fomc",
-    "fed", "federal reserve", "recession", "liquidity",
+    "interest rate",
+    "rate cut",
+    "rate hike",
+    "inflation",
+    "cpi",
+    "fomc",
+    "fed",
+    "federal reserve",
+    "recession",
+    "liquidity",
     # 中文（宏观类源里有中文标题的站点）
-    "比特币", "加密", "监管", "禁止", "黑客", "被盗", "稳定币",
-    "清算", "降息", "加息", "通胀", "美联储", "衰退", "关税", "制裁",
+    "比特币",
+    "加密",
+    "监管",
+    "禁止",
+    "黑客",
+    "被盗",
+    "稳定币",
+    "清算",
+    "降息",
+    "加息",
+    "通胀",
+    "美联储",
+    "衰退",
+    "关税",
+    "制裁",
 )
 
 
@@ -981,5 +1032,8 @@ def full_snapshot() -> dict[str, dict]:
 
 def dumps(*names: str) -> str:
     """快照的 JSON 字面量（排序键，便于比对两条记录是否同参）。"""
-    return json.dumps(snapshot(*names) if names else full_snapshot(),
-                      ensure_ascii=False, sort_keys=True)
+    return json.dumps(
+        snapshot(*names) if names else full_snapshot(),
+        ensure_ascii=False,
+        sort_keys=True,
+    )

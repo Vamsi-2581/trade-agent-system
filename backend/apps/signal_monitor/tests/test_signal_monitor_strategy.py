@@ -38,7 +38,6 @@ class StrategyWithWatchSignals(BaseStrategy):
     name = "strategy_with_watch"
 
     def on_bar(self, kline, history):
-        close = float(kline["close"])
         return self.ctx.buy(
             quantity=self.ctx.balance,
             signal_name="entry",

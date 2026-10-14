@@ -77,7 +77,9 @@ def split_tags() -> dict[date, BaseRegime]:
 
 def trade(entry_offset: int, exit_offset: int, pnl: float, **kwargs) -> sl.SliceTrade:
     return sl.SliceTrade(
-        entry_time=at(entry_offset, **kwargs), exit_time=at(exit_offset, **kwargs), pnl=pnl
+        entry_time=at(entry_offset, **kwargs),
+        exit_time=at(exit_offset, **kwargs),
+        pnl=pnl,
     )
 
 
@@ -178,7 +180,11 @@ class TestAttributionByEntryTime(SimpleTestCase):
     def test_an_inverted_window_is_rejected(self):
         with self.assertRaises(ValueError):
             sl.slice_backtest(
-                [], split_tags(), initial_capital=CAP, window=(d(11), d(0)), params=SMALL
+                [],
+                split_tags(),
+                initial_capital=CAP,
+                window=(d(11), d(0)),
+                params=SMALL,
             )
 
 
@@ -187,7 +193,11 @@ class TestUnattributableSharesAreAccounted(SimpleTestCase):
 
     def _holed_tags(self):
         """`split_tags` 但挖掉 d6、d8 两天（模拟日线缺日或预热不够）。"""
-        return {day: regime for day, regime in split_tags().items() if day not in (d(6), d(8))}
+        return {
+            day: regime
+            for day, regime in split_tags().items()
+            if day not in (d(6), d(8))
+        }
 
     def test_a_share_landing_on_an_unjudged_day_is_reported_not_dropped(self):
         out = sl.slice_backtest(
@@ -502,11 +512,15 @@ class TestFitnessDecisionTable(SimpleTestCase):
 
     def test_a_smaller_drawdown_with_a_worse_calmar_is_sample_noise(self):
         state, reason = sl._fitness(_metrics(5.0, 0.5), _metrics(10.0, 1.0))
-        self.assertEqual((state, reason), (sl.STATE_NEUTRAL, sl.REASON_DIRECTION_CONFLICT))
+        self.assertEqual(
+            (state, reason), (sl.STATE_NEUTRAL, sl.REASON_DIRECTION_CONFLICT)
+        )
 
     def test_a_larger_drawdown_with_a_better_calmar_is_sample_noise(self):
         state, reason = sl._fitness(_metrics(20.0, 3.0), _metrics(10.0, 1.0))
-        self.assertEqual((state, reason), (sl.STATE_NEUTRAL, sl.REASON_DIRECTION_CONFLICT))
+        self.assertEqual(
+            (state, reason), (sl.STATE_NEUTRAL, sl.REASON_DIRECTION_CONFLICT)
+        )
 
     def test_never_drawing_down_is_the_strongest_form_of_not_worse(self):
         """零回撤让 Calmar 无从计算（分母为零），不该因此判成不可比。"""
@@ -560,7 +574,9 @@ class TestEndToEndStates(SimpleTestCase):
         rng = out["cells"]["range"]
         self.assertAlmostEqual(rng["max_drawdown_pct"], 12.0)
         self.assertAlmostEqual(rng["calmar"], -73.0)
-        self.assertAlmostEqual(out["full_sample"]["max_drawdown_pct"], 11.650485, places=6)
+        self.assertAlmostEqual(
+            out["full_sample"]["max_drawdown_pct"], 11.650485, places=6
+        )
         self.assertEqual(rng["state"], sl.STATE_UNFIT)
         self.assertEqual(rng["reason"], "")
 
@@ -607,7 +623,9 @@ class TestEndToEndStates(SimpleTestCase):
     def test_a_regime_present_but_untraded_is_neutral_not_unknown(self):
         out = self._run(
             same_day_trades([0, 2, 4], 100.0),
-            tags_of({**{i: DOWNTREND for i in range(6)}, **{i: RANGE for i in range(6, 12)}}),
+            tags_of(
+                {**{i: DOWNTREND for i in range(6)}, **{i: RANGE for i in range(6, 12)}}
+            ),
         )
         rng = out["cells"]["range"]
         self.assertEqual(rng["state"], sl.STATE_NEUTRAL)
@@ -662,7 +680,9 @@ class TestPayloadShape(SimpleTestCase):
 
     def test_regime_days_add_up_to_the_window(self):
         attribution = self._payload()["attribution"]
-        self.assertEqual(sum(attribution["regime_days"].values()), attribution["window_days"])
+        self.assertEqual(
+            sum(attribution["regime_days"].values()), attribution["window_days"]
+        )
 
     def test_the_payload_is_json_serialisable(self):
         """它要进 `BacktestResult.metrics`（JSONField）。"""
@@ -860,7 +880,9 @@ class TestBuildTags(SimpleTestCase):
         rows = candles(RAMP)
         tags = sl.build_tags(rows, QUANT_PARAMS)
         labels = {label.date: label for label in label_series(rows, QUANT_PARAMS)}
-        self.assertEqual(set(tags), {day for day, label in labels.items() if label.judged})
+        self.assertEqual(
+            set(tags), {day for day, label in labels.items() if label.judged}
+        )
         for day, regime in tags.items():
             self.assertIs(labels[day].regime, regime)
 
@@ -889,4 +911,6 @@ class TestBuildTags(SimpleTestCase):
             }
             for row in floats
         ]
-        self.assertEqual(sl.build_tags(floats, QUANT_PARAMS), sl.build_tags(decimals, QUANT_PARAMS))
+        self.assertEqual(
+            sl.build_tags(floats, QUANT_PARAMS), sl.build_tags(decimals, QUANT_PARAMS)
+        )

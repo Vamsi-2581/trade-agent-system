@@ -213,7 +213,8 @@ class DecimalTypeErrorStrategy(BaseStrategy):
             # 运行时错误信息应包含 Decimal 混用提示
             self.assertTrue(
                 any(
-                    "Decimal" in e and ("float" in e.lower() or "TypeError" in e or "类型" in e)
+                    "Decimal" in e
+                    and ("float" in e.lower() or "TypeError" in e or "类型" in e)
                     for e in result["errors"]
                 ),
                 f"错误信息未包含 Decimal 混用提示: {result['errors']}",

@@ -369,7 +369,8 @@ def notify_body(
         if others:
             lines.append(
                 _layers_line(
-                    f"⚠️ 本条已解除，但**仍被 {len(others)} 层拦住**，开新仓仍不可用", others
+                    f"⚠️ 本条已解除，但**仍被 {len(others)} 层拦住**，开新仓仍不可用",
+                    others,
                 )
             )
         else:

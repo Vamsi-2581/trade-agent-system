@@ -104,7 +104,9 @@ def current_generation() -> RegimePoolRebuild | None:
     )
 
 
-def current_cells(generation: RegimePoolRebuild | None = None) -> dict[tuple[int, str], dict]:
+def current_cells(
+    generation: RegimePoolRebuild | None = None,
+) -> dict[tuple[int, str], dict]:
     """一代池化表的全部格子，键为 `(策略 id, 阶段)`。默认读**当前代**。
 
     没有当前代（从没重算过）时给空字典而不是抛：冷启动下「没有任何适用性结论」是
@@ -180,7 +182,9 @@ def strategy_raw_texts(strategy_ids: Iterable[int]) -> tuple[dict[int, str], lis
             texts[strategy_id] = ""
             unresolved.append(strategy_id)
             continue
-        texts[strategy_id] = getattr(StrategyRegistry.get_class(name), "description", "") or ""
+        texts[strategy_id] = (
+            getattr(StrategyRegistry.get_class(name), "description", "") or ""
+        )
     return texts, unresolved
 
 
@@ -275,12 +279,18 @@ def _jsonable_sample(sample: pool.SliceSample) -> dict[str, Any]:
         "strategy_id": sample.strategy_id,
         "symbol": sample.symbol,
         "window": [sample.window[0].isoformat(), sample.window[1].isoformat()],
-        "cell_daily": {r: curve(sample.cell_daily.get(r, {})) for r in sorted(sample.cell_daily)},
+        "cell_daily": {
+            r: curve(sample.cell_daily.get(r, {})) for r in sorted(sample.cell_daily)
+        },
         "cell_trades": {
-            r: [[day.isoformat(), value] for day, value in sample.cell_trades.get(r, ())]
+            r: [
+                [day.isoformat(), value] for day, value in sample.cell_trades.get(r, ())
+            ]
             for r in sorted(sample.cell_trades)
         },
-        "cell_regime_days": {r: int(n) for r, n in sorted(sample.cell_regime_days.items())},
+        "cell_regime_days": {
+            r: int(n) for r, n in sorted(sample.cell_regime_days.items())
+        },
         "full_daily": curve(sample.full_daily),
     }
 
@@ -341,7 +351,8 @@ def input_fingerprint(
 
 
 def _cell_changes(
-    previous: Mapping[tuple[int, str], tuple], cells: Mapping[tuple[int, str], pool.PooledCell]
+    previous: Mapping[tuple[int, str], tuple],
+    cells: Mapping[tuple[int, str], pool.PooledCell],
 ) -> int:
     """相对上一代变了多少格。
 
@@ -357,7 +368,9 @@ def _cell_changes(
         key: (cell.state, cell.reason, cell.source) for key, cell in cells.items()
     }
     return sum(
-        1 for key in set(previous) | set(current) if previous.get(key) != current.get(key)
+        1
+        for key in set(previous) | set(current)
+        if previous.get(key) != current.get(key)
     )
 
 
@@ -368,7 +381,10 @@ def _previous_triples() -> dict[tuple[int, str], tuple]:
     rows = RegimePoolCell.objects.filter(rebuild=generation).values_list(
         "strategy_id", "regime", "state", "reason", "source"
     )
-    return {(sid, regime): (state, reason, source) for sid, regime, state, reason, source in rows}
+    return {
+        (sid, regime): (state, reason, source)
+        for sid, regime, state, reason, source in rows
+    }
 
 
 def _needs_review_count(cells: Mapping[Any, pool.PooledCell]) -> int:
@@ -394,7 +410,8 @@ def _generation_summary(generation: RegimePoolRebuild) -> tuple[list[int], int]:
         if review:
             needs_review += 1
         if source == pool.POOL_SOURCE_ARCHETYPE and (
-            (evidence or {}).get("archetype", {}).get("name") == pool.ARCHETYPE_UNCLASSIFIED
+            (evidence or {}).get("archetype", {}).get("name")
+            == pool.ARCHETYPE_UNCLASSIFIED
         ):
             unclassified.add(strategy_id)
     return sorted(unclassified), needs_review
@@ -473,7 +490,9 @@ def rebuild_pool(
             "同一输入指纹已有一代就绪：本次为重复触发，未替换当前代",
             now,
         )
-        logger.warning("[regime] 池化重算撞上同一指纹的就绪代，本次未替换 #%s", rebuild.pk)
+        logger.warning(
+            "[regime] 池化重算撞上同一指纹的就绪代，本次未替换 #%s", rebuild.pk
+        )
         return {
             "rebuild_id": rebuild.pk,
             "reused": False,
@@ -518,7 +537,9 @@ def rebuild_pool(
     return summary
 
 
-def _write_cells(rebuild: RegimePoolRebuild, cells: Mapping[Any, pool.PooledCell]) -> None:
+def _write_cells(
+    rebuild: RegimePoolRebuild, cells: Mapping[Any, pool.PooledCell]
+) -> None:
     """把格子分批写下去。顺序固定（策略 id、阶段优先级），只为了重算两次的行序一致。"""
     buffer: list[RegimePoolCell] = []
     for key in sorted(cells, key=lambda k: (k[0], k[1])):

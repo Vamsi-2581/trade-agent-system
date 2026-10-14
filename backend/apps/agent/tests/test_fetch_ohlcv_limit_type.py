@@ -35,7 +35,9 @@ async def test_string_limit_coerced_to_int_before_fetch():
     assert result.success is True, f"字符串 limit 导致获取失败：error={result.error!r}"
     limit_arg = fake_ex.fetch_ohlcv.call_args.kwargs["limit"]
     assert limit_arg == 100, f"limit 未被正确归一：{limit_arg!r}"
-    assert isinstance(limit_arg, int), f"传给交易所的 limit 必须是 int：{type(limit_arg)}"
+    assert isinstance(limit_arg, int), (
+        f"传给交易所的 limit 必须是 int：{type(limit_arg)}"
+    )
 
 
 @pytest.mark.asyncio

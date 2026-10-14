@@ -207,7 +207,9 @@ class TelegramChannel(BaseChannel):
 
         from apps.agent.bus import publish, build_agent_task, wait_reply, AGENT_TASKS
 
-        msg = build_agent_task(user_id=user_id, payload={"text": text}, origin="telegram")
+        msg = build_agent_task(
+            user_id=user_id, payload={"text": text}, origin="telegram"
+        )
         await publish(AGENT_TASKS, msg)
 
         reply = await wait_reply(msg["task_id"], timeout=3600)

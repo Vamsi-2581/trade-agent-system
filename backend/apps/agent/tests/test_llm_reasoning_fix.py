@@ -9,7 +9,6 @@ Fix: LLMClient now fallback to reasoning_content when content is empty.
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from apps.agent.llm_client import LLMClient
-import httpx
 
 
 @pytest.mark.asyncio

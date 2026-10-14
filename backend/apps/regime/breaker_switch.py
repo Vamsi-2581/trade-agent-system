@@ -178,9 +178,7 @@ def _window_line(data: Confirmation) -> str:
         )
     if data.next_event is not None:
         beyond = data.next_event.halt_at >= data.until
-        prefix = (
-            f"下次窗口在 {data.horizon_days} 天之外" if beyond else "下次窗口"
-        )
+        prefix = f"下次窗口在 {data.horizon_days} 天之外" if beyond else "下次窗口"
         return (
             f"{prefix}：{events.format_moment(data.next_event.halt_at)}"
             f"（{data.next_event.name}）"

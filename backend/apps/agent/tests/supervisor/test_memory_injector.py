@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 from apps.agent.memory_injector import MemoryInjector
 
@@ -127,6 +127,7 @@ class TestMemoryInjectorLazyInit(unittest.TestCase):
         ):
             # Patch via import path that MemoryInjector uses
             import apps.memory.manager as mm_mod
+
             original = mm_mod.MemoryManager
             mm_mod.MemoryManager = TrackingFakeMM
             try:

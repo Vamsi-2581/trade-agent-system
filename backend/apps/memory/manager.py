@@ -17,13 +17,18 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 from apps.memory.compressor import LLMCompressor
 from apps.memory.conversation import RedisConversationLog
 from apps.memory.facade import MemoryFacade
 from apps.memory.longterm import PgvectorLongTerm
-from apps.memory.protocols import Compressor, ConversationLog, LongTermMemory, WorkingMemory
+from apps.memory.protocols import (
+    Compressor,
+    ConversationLog,
+    LongTermMemory,
+    WorkingMemory,
+)
 from apps.memory.working import RedisWorkingMemory
 
 logger = logging.getLogger(__name__)

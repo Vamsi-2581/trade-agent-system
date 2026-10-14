@@ -33,14 +33,25 @@ class _LoopAgent(BaseAgent):
 
 
 def _tool_call_resp(i: int):
-    tc = type("ToolCall", (), {
-        "call_id": f"call_{i}", "name": "web_search",
-        "arguments": {"query": f"btc analysis try {i}"},
-    })
-    return type("Resp", (), {
-        "has_tool_calls": True, "content": "", "tool_calls": [tc],
-        "reasoning_content": "",
-    })
+    tc = type(
+        "ToolCall",
+        (),
+        {
+            "call_id": f"call_{i}",
+            "name": "web_search",
+            "arguments": {"query": f"btc analysis try {i}"},
+        },
+    )
+    return type(
+        "Resp",
+        (),
+        {
+            "has_tool_calls": True,
+            "content": "",
+            "tool_calls": [tc],
+            "reasoning_content": "",
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -77,8 +88,11 @@ async def test_failing_tool_circuit_breaks_before_max_rounds():
         mock_llm.chat = AsyncMock(side_effect=fake_chat)
         mock_get.return_value = mock_llm
 
-        msg = AgentMessage(sender="user", recipient="test_loop_agent",
-                           payload={"text": "分析一下 BTC 走势"})
+        msg = AgentMessage(
+            sender="user",
+            recipient="test_loop_agent",
+            payload={"text": "分析一下 BTC 走势"},
+        )
         result = await agent.handle(msg)
 
     # 熔断：真实执行次数 = 失败阈值，远小于 32 轮

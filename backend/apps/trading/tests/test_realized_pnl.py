@@ -67,16 +67,12 @@ class TestComputeRealizedPnl(unittest.TestCase):
 
     def test_two_buys_average_cost(self):
         history = [_buy("100", "0.1"), _buy("100", "0.2")]
-        pnl = compute_realized_pnl(
-            history, "sell", Decimal("100"), Decimal("0.2")
-        )
+        pnl = compute_realized_pnl(history, "sell", Decimal("100"), Decimal("0.2"))
         self.assertEqual(pnl, Decimal("5.0"))
 
     def test_partial_sell_reduces_position(self):
         history = [_buy("100", "0.1"), _sell("50", "0.12")]
-        pnl = compute_realized_pnl(
-            history, "sell", Decimal("50"), Decimal("0.13")
-        )
+        pnl = compute_realized_pnl(history, "sell", Decimal("50"), Decimal("0.13"))
         self.assertEqual(pnl, Decimal("1.5"))
 
     def test_over_close_caps_at_position(self):
@@ -105,9 +101,7 @@ class TestComputeRealizedPnl(unittest.TestCase):
 
     def test_no_avg_price_returns_none(self):
         self.assertIsNone(
-            compute_realized_pnl(
-                [_buy("100", "0.1")], "sell", Decimal("100"), None
-            )
+            compute_realized_pnl([_buy("100", "0.1")], "sell", Decimal("100"), None)
         )
 
     def test_real_donchian_case(self):
@@ -149,9 +143,7 @@ class TestComputeRealizedPnl(unittest.TestCase):
             _buy("4", "0.10"),  # 回补 4，仍空 6，成本仍是 0.20
             _buy("10", "0.30"),  # 回补 6 + 反手做多 4，做多成本 = 0.30
         ]
-        pnl = compute_realized_pnl(
-            history, "sell", Decimal("4"), Decimal("0.40")
-        )
+        pnl = compute_realized_pnl(history, "sell", Decimal("4"), Decimal("0.40"))
         self.assertEqual(pnl, Decimal("0.4"))
 
 
@@ -189,9 +181,7 @@ class TestApplyFillRealizedPnl(_ExecutorTestCase):
     @patch("apps.trading.models.Order.objects")
     def test_sell_filled_computes_pnl_and_bumps_equity(self, mock_order_mgr):
         order = _fake_order()
-        mock_update = self._mock_order_objects(
-            mock_order_mgr, [_buy("100", "0.1")]
-        )
+        mock_update = self._mock_order_objects(mock_order_mgr, [_buy("100", "0.1")])
         fill = OrderFill(
             status="filled",
             filled_quantity=Decimal("100"),
@@ -231,9 +221,7 @@ class TestApplyFillRealizedPnl(_ExecutorTestCase):
             avg_fill_price=Decimal("0.12"),
             realized_pnl=Decimal("1.0"),
         )
-        mock_update = self._mock_order_objects(
-            mock_order_mgr, [_buy("100", "0.1")]
-        )
+        mock_update = self._mock_order_objects(mock_order_mgr, [_buy("100", "0.1")])
         fill = OrderFill(
             status="filled",
             filled_quantity=Decimal("100"),
@@ -250,9 +238,7 @@ class TestApplyFillRealizedPnl(_ExecutorTestCase):
     @patch("apps.trading.models.Order.objects")
     def test_buy_order_skips_pnl(self, mock_order_mgr):
         order = _fake_order(side="buy")
-        mock_update = self._mock_order_objects(
-            mock_order_mgr, [_sell("100", "0.1")]
-        )
+        mock_update = self._mock_order_objects(mock_order_mgr, [_sell("100", "0.1")])
         fill = OrderFill(
             status="filled",
             filled_quantity=Decimal("100"),
@@ -273,9 +259,7 @@ class TestApplyFillRealizedPnl(_ExecutorTestCase):
             avg_fill_price=Decimal("0.11"),
             realized_pnl=Decimal("1.0"),
         )
-        mock_update = self._mock_order_objects(
-            mock_order_mgr, [_buy("100", "0.1")]
-        )
+        mock_update = self._mock_order_objects(mock_order_mgr, [_buy("100", "0.1")])
         fill = OrderFill(
             status="filled",
             filled_quantity=Decimal("100"),
@@ -311,9 +295,7 @@ class TestSubmitClosePnl(_ExecutorTestCase):
 
     @patch("apps.trading.models.LiveSession.objects")
     @patch("apps.trading.models.Order.objects")
-    def test_market_sell_filled_with_session(
-        self, mock_order_mgr, mock_ls_mgr
-    ):
+    def test_market_sell_filled_with_session(self, mock_order_mgr, mock_ls_mgr):
         self._mock_adapter()
         mock_update = self._mock_order_objects(
             mock_order_mgr, [_buy("100", "0.1")], need_create=True
@@ -367,9 +349,7 @@ class TestSubmitClosePnl(_ExecutorTestCase):
     @patch("apps.trading.models.Order.objects")
     def test_market_buy_no_pnl(self, mock_order_mgr):
         self._mock_adapter()
-        mock_update = self._mock_order_objects(
-            mock_order_mgr, [], need_create=True
-        )
+        mock_update = self._mock_order_objects(mock_order_mgr, [], need_create=True)
 
         self._run_submit(
             exchange="binance",
@@ -389,12 +369,8 @@ class TestSubmitClosePnl(_ExecutorTestCase):
     @patch("apps.trading.models.Order.objects")
     def test_pnl_query_failure_does_not_block_order(self, mock_order_mgr):
         self._mock_adapter()
-        mock_update = self._mock_order_objects(
-            mock_order_mgr, [], need_create=True
-        )
-        mock_order_mgr.filter.return_value.exclude.side_effect = RuntimeError(
-            "db down"
-        )
+        mock_update = self._mock_order_objects(mock_order_mgr, [], need_create=True)
+        mock_order_mgr.filter.return_value.exclude.side_effect = RuntimeError("db down")
 
         result = self._run_submit(
             exchange="binance",
@@ -421,9 +397,7 @@ class TestBumpSessionEquity(unittest.TestCase):
 
     @patch("apps.trading.models.LiveSession.objects")
     def test_bump_updates_equity_with_f_expression(self, mock_ls_mgr):
-        asyncio.run(
-            self.executor._bump_session_equity("session-1", Decimal("1.0"))
-        )
+        asyncio.run(self.executor._bump_session_equity("session-1", Decimal("1.0")))
 
         mock_ls_mgr.filter.assert_called_once_with(id="session-1")
         mock_update = mock_ls_mgr.filter.return_value.update
@@ -433,13 +407,9 @@ class TestBumpSessionEquity(unittest.TestCase):
 
     @patch("apps.trading.models.LiveSession.objects")
     def test_bump_swallows_db_error(self, mock_ls_mgr):
-        mock_ls_mgr.filter.return_value.update.side_effect = RuntimeError(
-            "db down"
-        )
+        mock_ls_mgr.filter.return_value.update.side_effect = RuntimeError("db down")
         # 不应抛出
-        asyncio.run(
-            self.executor._bump_session_equity("session-1", Decimal("1.0"))
-        )
+        asyncio.run(self.executor._bump_session_equity("session-1", Decimal("1.0")))
 
 
 if __name__ == "__main__":

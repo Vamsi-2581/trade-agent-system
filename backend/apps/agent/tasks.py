@@ -38,12 +38,14 @@ def _session_manager_reset() -> None:
 
     try:
         from apps.agent import ws_pending
+
         ws_pending._reset_client()
     except Exception:
         pass
 
     try:
         from apps.agent.session_manager import _session_manager
+
         old = _session_manager._redis
         _session_manager._redis = None
         if old is not None:
@@ -115,7 +117,11 @@ def execute_scheduled_agent_task(
                 "task not pending, skipping (idempency)",
                 scheduled_task_id,
             )
-            return {"status": "SKIPPED", "agent_name": agent_name, "reason": "not_pending"}
+            return {
+                "status": "SKIPPED",
+                "agent_name": agent_name,
+                "reason": "not_pending",
+            }
 
     # Use celery_task_id as tracker task_id, fallback to scheduled_task_id
     tracker_task_id = self.request.id or scheduled_task_id or str(uuid.uuid4())
@@ -253,10 +259,12 @@ def _update_task_status(
             id=scheduled_task_id, status="pending"
         ).update(status="running", executed_at=now)
     else:
-        return ScheduledOneTimeTask.objects.filter(
-            id=scheduled_task_id,
-        ).exclude(status__in=("completed", "failed", "revoked", "missed")).update(
-            status=new_status
+        return (
+            ScheduledOneTimeTask.objects.filter(
+                id=scheduled_task_id,
+            )
+            .exclude(status__in=("completed", "failed", "revoked", "missed"))
+            .update(status=new_status)
         )
 
 
@@ -272,13 +280,17 @@ def _finalize_task(
 
     now = datetime.now(timezone.utc)
     if task_status in ("SUCCESS",):
-        ScheduledOneTimeTask.objects.filter(id=scheduled_task_id, status="running").update(
+        ScheduledOneTimeTask.objects.filter(
+            id=scheduled_task_id, status="running"
+        ).update(
             status="completed",
             executed_at=now,
             result=_json.dumps(result) if result else "",
         )
     else:
-        ScheduledOneTimeTask.objects.filter(id=scheduled_task_id, status="running").update(
+        ScheduledOneTimeTask.objects.filter(
+            id=scheduled_task_id, status="running"
+        ).update(
             status="failed",
             executed_at=now,
             error=error if error else (str(result) if result else "Unknown error"),
@@ -288,6 +300,7 @@ def _finalize_task(
 # ---------------------------------------------------------------------------
 # System scheduler user resolution
 # ---------------------------------------------------------------------------
+
 
 def _resolve_scheduler_user_id(user_id: str) -> str:
     """Return the Django User UUID for scheduled tasks.
@@ -306,7 +319,9 @@ def _resolve_scheduler_user_id(user_id: str) -> str:
         logger.info("Resolved empty user_id to system_scheduler (%s)", scheduler.id)
         return str(scheduler.id)
     except Exception as exc:
-        logger.warning("Could not resolve system_scheduler user: %s — using empty user_id", exc)
+        logger.warning(
+            "Could not resolve system_scheduler user: %s — using empty user_id", exc
+        )
         return ""
 
 
@@ -366,7 +381,11 @@ def execute_recurring_agent_task(
     is_workflow = bool(workflow_steps)
     _wf_logger.info(
         "[TASK] task_name=%s agent=%s user_id=%s workflow=%s steps=%s",
-        task_name, agent_name, user_id, is_workflow, len(workflow_steps) if is_workflow else 0,
+        task_name,
+        agent_name,
+        user_id,
+        is_workflow,
+        len(workflow_steps) if is_workflow else 0,
     )
 
     logger.info(
@@ -406,12 +425,16 @@ def execute_recurring_agent_task(
         # 重置所有单例和缓存实例，防止跨任务复用绑定到旧事件循环的组件
         SupervisorAgent._instance = None
         from apps.agent.llm_client import LLMClient
+
         LLMClient._instance = None
         from apps.agent.frame_manager import FrameManager
+
         FrameManager._instance = None
         from apps.agent.registry import AgentRegistry
+
         AgentRegistry._registry.clear()  # 清除已实例化的 Agent（含旧 loop 绑定）
         from apps.agent.supervisor import IntentRouter
+
         IntentRouter._instance = None
         _session_manager_reset()
 
@@ -547,7 +570,6 @@ def check_task_health(self) -> dict:
         url = url.rsplit("/", 1)[0] + "/3"
 
     r = redis.from_url(url, decode_responses=True)
-    now_ts = time.time()
     zombie_ids: list[tuple[str, str, float]] = []
     heartbeat_ids: list[tuple[str, str, float]] = []
 
@@ -565,7 +587,9 @@ def check_task_health(self) -> dict:
         try:
             updated = datetime.fromisoformat(updated_str) if updated_str else None
             last_hb = datetime.fromisoformat(last_hb_str) if last_hb_str else None
-            last_alive = datetime.fromisoformat(last_alive_str) if last_alive_str else None
+            last_alive = (
+                datetime.fromisoformat(last_alive_str) if last_alive_str else None
+            )
         except ValueError:
             continue
 
@@ -649,7 +673,9 @@ def _handle_zombie_task(
                 # Celery task — resend via app.send_task
                 task_args = original_task.get("args", [])
                 task_kwargs = original_task.get("kwargs", {})
-                new_result = app.send_task(celery_task, args=task_args, kwargs=task_kwargs)
+                new_result = app.send_task(
+                    celery_task, args=task_args, kwargs=task_kwargs
+                )
                 new_task_id = new_result.id
             else:
                 # Stream task — republish to agent:tasks
@@ -799,7 +825,7 @@ def check_session_expiry(self) -> dict:
                 f"会话即将过期（{int(remaining)}秒）\n请继续对话以保持会话",
             )
             warned += 1
-    
+
     return {"warned": warned}
 
 
@@ -815,6 +841,7 @@ STALE_RUNNING_THRESHOLD = 600  # 10 min — running tasks older than this are "s
 def _get_grace_period() -> int:
     """Get grace period from Django settings, falling back to module default."""
     from django.conf import settings
+
     return getattr(settings, "SCHEDULED_TASK_GRACE_PERIOD", SCHEDULED_TASK_GRACE_PERIOD)
 
 
@@ -822,10 +849,12 @@ def _notify_user(user_id: str, message: str) -> None:
     """Send a notification to the user (Telegram/Web)."""
     try:
         from apps.agent.task_tracker import _send_notification_redis
+
         _send_notification_redis(user_id, message)
     except Exception:
         logger.warning(
-            "[startup_recovery_check] failed to notify user %s", user_id,
+            "[startup_recovery_check] failed to notify user %s",
+            user_id,
             exc_info=True,
         )
 
@@ -882,23 +911,17 @@ def startup_recovery_check(self) -> dict:
     - Stale running (crash residue): treat as pending for reconciliation
     Also confirms Beat has loaded all PeriodicTasks.
     """
-    import redis
-    from django.conf import settings
     from apps.agent.models import ScheduledOneTimeTask
     from django_celery_beat.models import PeriodicTask
 
     # Distributed lock: only one worker performs recovery
     lock_value = _acquire_recovery_lock()
     if lock_value is None:
-        logger.info(
-            "[startup_recovery_check] another worker holds lock, skipping"
-        )
+        logger.info("[startup_recovery_check] another worker holds lock, skipping")
         return {"skipped": True, "reason": "lock_held"}
 
     try:
-        logger.info(
-            "[startup_recovery_check] starting recovery (lock=%s)", lock_value
-        )
+        logger.info("[startup_recovery_check] starting recovery (lock=%s)", lock_value)
         now = datetime.now(timezone.utc)
         grace_cutoff = now - timedelta(seconds=_get_grace_period())
         stale_threshold = now - timedelta(seconds=STALE_RUNNING_THRESHOLD)
@@ -926,7 +949,8 @@ def startup_recovery_check(self) -> dict:
             except Exception:
                 stats["errors"] += 1
                 logger.error(
-                    "[startup_recovery_check] failed to recover %s", task.id,
+                    "[startup_recovery_check] failed to recover %s",
+                    task.id,
                     exc_info=True,
                 )
 
@@ -952,7 +976,8 @@ def startup_recovery_check(self) -> dict:
                     stats["future"] += 1
                     logger.info(
                         "[startup_recovery_check] re-queued future task %s eta=%s",
-                        task.id, task.run_at.isoformat(),
+                        task.id,
+                        task.run_at.isoformat(),
                     )
 
                 elif task.run_at >= grace_cutoff:
@@ -976,7 +1001,9 @@ def startup_recovery_check(self) -> dict:
                 else:
                     # Beyond grace: mark missed + notify
                     task.status = "missed"
-                    task.error = f"Missed: run_at={task.run_at.isoformat()}, beyond grace period"
+                    task.error = (
+                        f"Missed: run_at={task.run_at.isoformat()}, beyond grace period"
+                    )
                     task.save(update_fields=["status", "error", "updated_at"])
                     stats["missed"] += 1
                     if task.user_id:
@@ -986,12 +1013,14 @@ def startup_recovery_check(self) -> dict:
                             f"超出宽限窗口，未自动补执行。",
                         )
                     logger.info(
-                        "[startup_recovery_check] marked task %s as missed", task.id,
+                        "[startup_recovery_check] marked task %s as missed",
+                        task.id,
                     )
             except Exception:
                 stats["errors"] += 1
                 logger.error(
-                    "[startup_recovery_check] failed to reconcile task %s", task.id,
+                    "[startup_recovery_check] failed to reconcile task %s",
+                    task.id,
                     exc_info=True,
                 )
 
@@ -1005,7 +1034,9 @@ def startup_recovery_check(self) -> dict:
 
         logger.info(
             "[startup_recovery_check] done -- stats=%s, periodic_tasks=%d, beat_online=%s",
-            stats, periodic_count, beat_online,
+            stats,
+            periodic_count,
+            beat_online,
         )
 
         return {

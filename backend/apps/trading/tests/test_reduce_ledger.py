@@ -96,9 +96,7 @@ class TestGroupTradesByOrder(SimpleTestCase):
         assert entry["realized_pnl"] == Decimal("5.9296")
         assert entry["side"] == "buy"
         assert entry["symbol"] == _RAW
-        assert entry["time"] == datetime.fromtimestamp(
-            1_756_000_000, tz=timezone.utc
-        )
+        assert entry["time"] == datetime.fromtimestamp(1_756_000_000, tz=timezone.utc)
 
     def test_multiple_fills_aggregate_qty_weighted_price_and_sum_pnl(self):
         grouped = _group_trades_by_order(
@@ -113,9 +111,7 @@ class TestGroupTradesByOrder(SimpleTestCase):
         assert entry["price"] == Decimal("175")  # (100*1 + 200*3) / 4
         assert entry["realized_pnl"] == Decimal("3")
         # min time = 第一笔（回补行要靠它排在后续卖单之前）
-        assert entry["time"] == datetime.fromtimestamp(
-            1_000_000_000, tz=timezone.utc
-        )
+        assert entry["time"] == datetime.fromtimestamp(1_000_000_000, tz=timezone.utc)
 
     def test_two_orders_stay_separate(self):
         grouped = _group_trades_by_order(
@@ -182,7 +178,9 @@ def _make_user(email=None):
 _USER_SEQ = 0
 
 
-def _make_session(user, account, *, symbol=_SYMBOL, status="running", equity="10000.00"):
+def _make_session(
+    user, account, *, symbol=_SYMBOL, status="running", equity="10000.00"
+):
     strategy = Strategy.objects.create(name="s", code_path="strategies/s.py")
     return LiveSession.objects.create(
         user=user,
@@ -202,8 +200,15 @@ def _shard(side="sell", qty="1", cid="cid-1"):
     )
 
 
-def _result(*, status=reduce.SHARD_STATUS_FILLED, oid="123", filled="1",
-            price="100", cid="cid-1", side="sell"):
+def _result(
+    *,
+    status=reduce.SHARD_STATUS_FILLED,
+    oid="123",
+    filled="1",
+    price="100",
+    cid="cid-1",
+    side="sell",
+):
     return reduce.ShardResult(
         client_order_id=cid,
         symbol=_SYMBOL,
@@ -341,14 +346,10 @@ class TestPersistReduceOrder:
         account = _make_account()
         _make_session(_make_user(), account)
         first = _run(
-            persist_reduce_order(
-                account, _shard(), _result(), adapter=_FakeAdapter()
-            )
+            persist_reduce_order(account, _shard(), _result(), adapter=_FakeAdapter())
         )
         second = _run(
-            persist_reduce_order(
-                account, _shard(), _result(), adapter=_FakeAdapter()
-            )
+            persist_reduce_order(account, _shard(), _result(), adapter=_FakeAdapter())
         )
         assert first.id == second.id
         assert Order.objects.count() == 1
@@ -358,9 +359,7 @@ class TestPersistReduceOrder:
         session = _make_session(_make_user(), account, equity="10000.00")
         adapter = _FakeAdapter(trades=[_trade("123", pnl="12.03")])
 
-        _run(
-            persist_reduce_order(account, _shard(), _result(), adapter=adapter)
-        )
+        _run(persist_reduce_order(account, _shard(), _result(), adapter=adapter))
 
         session.refresh_from_db()
         assert session.current_equity == Decimal("10012.03")
@@ -373,14 +372,13 @@ class TestPersistReduceOrder:
         _make_session(_make_user(), account, equity="20000.00")
         adapter = _FakeAdapter(trades=[_trade("123", pnl="12.03")])
 
-        _run(
-            persist_reduce_order(account, _shard(), _result(), adapter=adapter)
-        )
+        _run(persist_reduce_order(account, _shard(), _result(), adapter=adapter))
 
         assert Order.objects.get().live_session_id is None
-        assert sorted(
-            s.current_equity for s in LiveSession.objects.all()
-        ) == [Decimal("10000.00"), Decimal("20000.00")]
+        assert sorted(s.current_equity for s in LiveSession.objects.all()) == [
+            Decimal("10000.00"),
+            Decimal("20000.00"),
+        ]
 
     def test_sell_pnl_prefers_local_cost_basis(self):
         """卖单有历史多头成本时本地算，不用交易所 rpnl（即时且可靠）。"""
@@ -462,10 +460,16 @@ class TestReconcileCommand:
             datetime(2026, 9, 28, 15, 43, tzinfo=timezone.utc).timestamp() * 1000
         )
         return [
-            _trade("sell-1", qty="1", price="700", pnl="-3.4959", side="SELL", ts=sell_ts),
             _trade(
-                "cover-1", qty="0.69", price="762.45", pnl="6.0996",
-                side="BUY", ts=cover_ts,
+                "sell-1", qty="1", price="700", pnl="-3.4959", side="SELL", ts=sell_ts
+            ),
+            _trade(
+                "cover-1",
+                qty="0.69",
+                price="762.45",
+                pnl="6.0996",
+                side="BUY",
+                ts=cover_ts,
             ),
         ]
 

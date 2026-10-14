@@ -50,7 +50,9 @@ def _make_kline(ts: str, close: float) -> dict:
     }
 
 
-def _make_engine(ohlcv: list[dict], capital: str = "1000000", **kwargs) -> BacktestEngine:
+def _make_engine(
+    ohlcv: list[dict], capital: str = "1000000", **kwargs
+) -> BacktestEngine:
     return BacktestEngine(
         strategy=_FakeStrategy(_make_ctx()),
         ohlcv_data=ohlcv,
@@ -89,7 +91,9 @@ def _sell_signal(price: float, qty: str = "0.1") -> OrderSignal:
 def ohlcv() -> list[dict]:
     base = datetime(2024, 1, 1, 0, 0)
     return [
-        _make_kline(ts=datetime.isoformat(base.replace(hour=i)), close=42000.0 + i * 100)
+        _make_kline(
+            ts=datetime.isoformat(base.replace(hour=i)), close=42000.0 + i * 100
+        )
         for i in range(10)
     ]
 
@@ -162,7 +166,9 @@ class TestSlippageCashBoundary:
         # And that the fill price used includes slippage
         assert Decimal(str(engine._trades[0]["entry_price"])) == fill
         # qty * fill * (1 + commission) <= cash, with commission 0.001
-        cost = Decimal(str(engine._trades[0]["quantity"])) * fill * (1 + Decimal("0.001"))
+        cost = (
+            Decimal(str(engine._trades[0]["quantity"])) * fill * (1 + Decimal("0.001"))
+        )
         assert Decimal(str(cost)) <= Decimal("1000000")
 
     def test_exact_cash_buy_succeeds_with_costs(self, ohlcv):

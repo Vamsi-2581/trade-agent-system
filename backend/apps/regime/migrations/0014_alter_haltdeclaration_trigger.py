@@ -4,15 +4,23 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0013_regimetruthinterval_and_more'),
+        ("regime", "0013_regimetruthinterval_and_more"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='haltdeclaration',
-            name='trigger',
-            field=models.CharField(choices=[('blanket', '保命档（高波动）'), ('event_breaker', '事件熔断'), ('deactivation', '策略停用决策'), ('manual', '手动熔断')], max_length=32, verbose_name='触发源'),
+            model_name="haltdeclaration",
+            name="trigger",
+            field=models.CharField(
+                choices=[
+                    ("blanket", "保命档（高波动）"),
+                    ("event_breaker", "事件熔断"),
+                    ("deactivation", "策略停用决策"),
+                    ("manual", "手动熔断"),
+                ],
+                max_length=32,
+                verbose_name="触发源",
+            ),
         ),
     ]

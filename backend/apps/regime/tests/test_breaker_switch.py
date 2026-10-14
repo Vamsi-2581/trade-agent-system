@@ -203,7 +203,11 @@ class TestWhatCountsAsAFiringWindow(_Fixture):
         数走 `triggers_halt`（它已经把「已排期 ∧ 档位高」写死在一处）。两个数的差就是
         在这里被看见的：页面会同时写着「库里 1 条（会开窗 0 条）」。
         """
-        _row("取消了的", halt_at=NOW + timedelta(days=1), status=EventStatus.CANCELLED.value)
+        _row(
+            "取消了的",
+            halt_at=NOW + timedelta(days=1),
+            status=EventStatus.CANCELLED.value,
+        )
         data = self.sweep()
         self.assertEqual((data.library_total, data.firing_total), (1, 0))
         self.assertEqual((data.overlapping, data.starting), (0, 0))
@@ -550,7 +554,9 @@ class TestTheManagementCommand(_CliFixture):
     def test_the_actor_defaults_to_the_system_user(self):
         """CLI 通路的「谁」是这台机器上的人，不是任务名。"""
         self.manage("--on")
-        self.assertEqual(RegimeMechanismSwitch.objects.get().actor_name, getpass.getuser())
+        self.assertEqual(
+            RegimeMechanismSwitch.objects.get().actor_name, getpass.getuser()
+        )
 
     def test_off_uses_the_closing_reason(self):
         """两个方向的 `reason` 由两个函数生成，不是同一份模板。"""

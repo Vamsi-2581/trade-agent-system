@@ -41,13 +41,21 @@ def chat(request: Request) -> Response:
         from apps.agent.reply_fanout import fan_out_reply
 
         content = (
-            result.data.get("content", str(result.data))
-            if isinstance(result.data, dict) else str(result.data)
-        ) if result.success else f"[错误] {result.error}"
+            (
+                result.data.get("content", str(result.data))
+                if isinstance(result.data, dict)
+                else str(result.data)
+            )
+            if result.success
+            else f"[错误] {result.error}"
+        )
         async_to_sync(fan_out_reply)(str(request.user.pk), content, origin="api")
     except Exception:
-        logger.warning("[AgentChat] fan_out_reply failed for user %s",
-                       request.user.pk, exc_info=True)
+        logger.warning(
+            "[AgentChat] fan_out_reply failed for user %s",
+            request.user.pk,
+            exc_info=True,
+        )
     if result.success:
         return Response({"data": result.data, "task_id": result.task_id})
     return Response({"error": result.error, "task_id": result.task_id}, status=500)
@@ -282,10 +290,7 @@ def list_scheduled_tasks(request: Request) -> Response:
     # 3. 一次性定时任务（ScheduledOneTimeTask）
     from apps.agent.models import ScheduledOneTimeTask
 
-    one_time_tasks = (
-        ScheduledOneTimeTask.objects.all()
-        .order_by("-run_at")
-    )
+    one_time_tasks = ScheduledOneTimeTask.objects.all().order_by("-run_at")
     for task in one_time_tasks:
         results.append(
             {
@@ -295,7 +300,9 @@ def list_scheduled_tasks(request: Request) -> Response:
                 "message": task.message,
                 "schedule": task.run_at.isoformat(),
                 "enabled": task.status not in ("revoked", "missed"),
-                "last_run_at": task.executed_at.isoformat() if task.executed_at else None,
+                "last_run_at": task.executed_at.isoformat()
+                if task.executed_at
+                else None,
                 "total_run_count": 1 if task.status in ("completed", "failed") else 0,
                 "expires": None,
                 "start_time": task.run_at.isoformat(),
@@ -373,6 +380,7 @@ def _format_celery_schedule(schedule) -> str:
 
 # ── Workflow History API ──
 
+
 class WorkflowHistoryPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = "page_size"
@@ -408,12 +416,14 @@ def list_workflow_history(request: Request) -> Response:
         for h in page
     ]
 
-    return Response({
-        "count": paginator.page.paginator.count,
-        "num_pages": paginator.page.paginator.num_pages,
-        "current_page": paginator.page.number,
-        "items": items,
-    })
+    return Response(
+        {
+            "count": paginator.page.paginator.count,
+            "num_pages": paginator.page.paginator.num_pages,
+            "current_page": paginator.page.number,
+            "items": items,
+        }
+    )
 
 
 @api_view(["GET"])
@@ -425,16 +435,18 @@ def get_workflow_history(request: Request, workflow_id: str) -> Response:
     except WorkflowHistory.DoesNotExist:
         return Response({"error": "工作流记录不存在"}, status=404)
 
-    return Response({
-        "id": str(h.id),
-        "workflow_id": h.workflow_id,
-        "summary": h.summary,
-        "status": h.status,
-        "total_steps": h.total_steps,
-        "completed_steps": h.completed_steps,
-        "step_results": h.step_results,
-        "elapsed_seconds": round(h.elapsed_seconds, 1),
-        "error": h.error,
-        "created_at": h.created_at.isoformat(),
-        "completed_at": h.completed_at.isoformat() if h.completed_at else None,
-    })
+    return Response(
+        {
+            "id": str(h.id),
+            "workflow_id": h.workflow_id,
+            "summary": h.summary,
+            "status": h.status,
+            "total_steps": h.total_steps,
+            "completed_steps": h.completed_steps,
+            "step_results": h.step_results,
+            "elapsed_seconds": round(h.elapsed_seconds, 1),
+            "error": h.error,
+            "created_at": h.created_at.isoformat(),
+            "completed_at": h.completed_at.isoformat() if h.completed_at else None,
+        }
+    )

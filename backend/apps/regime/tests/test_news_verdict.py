@@ -94,7 +94,12 @@ def never_called_llm() -> FakeLLM:
 def ask(escalate=True, reason="某交易所被监管起诉", cited=(1,), **extra) -> FakeLLM:
     """一个固定答案的 LLM 替身。`extra` 用来塞进多余字段，验证它们会被丢掉。"""
     return FakeLLM(
-        lambda user: {"escalate": escalate, "reason": reason, "cited": list(cited), **extra}
+        lambda user: {
+            "escalate": escalate,
+            "reason": reason,
+            "cited": list(cited),
+            **extra,
+        }
     )
 
 
@@ -181,7 +186,9 @@ class TestValidateVerdict(SimpleTestCase):
     """`response_format` 只保证语法合法，不保证 schema——这一层就是「严格校验」。"""
 
     def test_a_well_formed_verdict_passes(self):
-        verdict = validate_verdict({"escalate": True, "reason": "监管起诉", "cited": [1, 2]}, 3)
+        verdict = validate_verdict(
+            {"escalate": True, "reason": "监管起诉", "cited": [1, 2]}, 3
+        )
         self.assertIs(verdict.escalate, True)
         self.assertEqual(verdict.reason, "监管起诉")
         self.assertEqual(verdict.cited, (1, 2))
@@ -219,12 +226,15 @@ class TestValidateVerdict(SimpleTestCase):
         for reason in (None, 5, "", "   "):
             with self.subTest(reason=reason):
                 with self.assertRaises(NewsVerdictError):
-                    validate_verdict({"escalate": False, "reason": reason, "cited": []}, 3)
+                    validate_verdict(
+                        {"escalate": False, "reason": reason, "cited": []}, 3
+                    )
 
     def test_a_long_reason_is_truncated_not_rejected(self):
         """这段文字要进日报第①段，长度上限是排版约束，不是判据。"""
         verdict = validate_verdict(
-            {"escalate": False, "reason": "长" * (REASON_MAX_CHARS + 50), "cited": []}, 3
+            {"escalate": False, "reason": "长" * (REASON_MAX_CHARS + 50), "cited": []},
+            3,
         )
         self.assertEqual(len(verdict.reason), REASON_MAX_CHARS)
 
@@ -232,26 +242,34 @@ class TestValidateVerdict(SimpleTestCase):
         for cited in (None, "1,2", 1, {}):
             with self.subTest(cited=cited):
                 with self.assertRaises(NewsVerdictError):
-                    validate_verdict({"escalate": False, "reason": "r", "cited": cited}, 3)
+                    validate_verdict(
+                        {"escalate": False, "reason": "r", "cited": cited}, 3
+                    )
 
     def test_a_non_integer_citation_is_rejected(self):
         """`True` 也是整数（`isinstance(True, int)` 为真），所以这里用 `type is int`。"""
         for cited in (["2"], [2.0], [True], [None]):
             with self.subTest(cited=cited):
                 with self.assertRaises(NewsVerdictError):
-                    validate_verdict({"escalate": False, "reason": "r", "cited": cited}, 3)
+                    validate_verdict(
+                        {"escalate": False, "reason": "r", "cited": cited}, 3
+                    )
 
     def test_an_out_of_range_citation_is_treated_as_fabrication(self):
         """编号格式对但条目不存在，与凭空说出一个事件是同一件事。"""
         for cited in ([0], [4], [-1]):
             with self.subTest(cited=cited):
                 with self.assertRaises(NewsVerdictError) as ctx:
-                    validate_verdict({"escalate": True, "reason": "r", "cited": cited}, 3)
+                    validate_verdict(
+                        {"escalate": True, "reason": "r", "cited": cited}, 3
+                    )
                 self.assertIn("越界", str(ctx.exception))
 
     def test_a_duplicate_citation_is_deduped_not_rejected(self):
         """重复引用不是编造——它只是同一条被说两遍。"""
-        verdict = validate_verdict({"escalate": True, "reason": "r", "cited": [2, 2, 1]}, 3)
+        verdict = validate_verdict(
+            {"escalate": True, "reason": "r", "cited": [2, 2, 1]}, 3
+        )
         self.assertEqual(verdict.cited, (2, 1))
 
     def test_escalate_without_any_citation_is_refused(self):
@@ -260,7 +278,9 @@ class TestValidateVerdict(SimpleTestCase):
         self.assertIn("cited 为空", str(ctx.exception))
 
     def test_not_escalating_may_cite_nothing(self):
-        verdict = validate_verdict({"escalate": False, "reason": "没看出风险", "cited": []}, 0)
+        verdict = validate_verdict(
+            {"escalate": False, "reason": "没看出风险", "cited": []}, 0
+        )
         self.assertEqual(verdict.cited, ())
 
 
@@ -284,13 +304,17 @@ class TestThePrompt(SimpleTestCase):
 
     def test_it_carries_the_window_the_count_and_every_title(self):
         items = [
-            make_item(url="https://media.test/a", title="Bitcoin ETF inflows hit a record"),
+            make_item(
+                url="https://media.test/a", title="Bitcoin ETF inflows hit a record"
+            ),
             make_item(url="https://media.test/b", title="Exchange halts withdrawals"),
         ]
         start, end = NOW - timedelta(hours=24), NOW
         system, user = build_messages(items, (start, end))
 
-        self.assertEqual(system, SYSTEM_PROMPT, "system 是静态的，当天的变量全在 user 里")
+        self.assertEqual(
+            system, SYSTEM_PROMPT, "system 是静态的，当天的变量全在 user 里"
+        )
         self.assertIn(start.isoformat(), user)
         self.assertIn(end.isoformat(), user)
         self.assertIn("共 2 条候选（N = 2）", user)
@@ -341,9 +365,7 @@ class TestQuietIsNotFailed(TestCase):
         self.assertTrue(outcome.ok, "安静的今天是**可信的判定输入**，不是故障")
 
     def test_zero_items_with_a_dead_source_is_failed(self):
-        with collecting(
-            report(sources=[source_result(ok=False, error="连接超时")])
-        ):
+        with collecting(report(sources=[source_result(ok=False, error="连接超时")])):
             outcome = run_news_judgement(SYMBOL, NOW, llm=never_called_llm())
 
         self.assertEqual(outcome.escalation, "")
@@ -355,7 +377,10 @@ class TestQuietIsNotFailed(TestCase):
 
     def test_one_dead_source_among_working_ones_still_produces_a_verdict(self):
         """七个源挂一个：剩下的条目照常送去判，只是 `failed_sources` 里记着它。"""
-        sources = [source_result("media"), source_result("binance", ok=False, error="超时")]
+        sources = [
+            source_result("media"),
+            source_result("binance", ok=False, error="超时"),
+        ]
         with collecting(report([make_item()], sources=sources)):
             outcome = run_news_judgement(SYMBOL, NOW, llm=ask(escalate=False, cited=[]))
 
@@ -385,7 +410,9 @@ class TestAVerdict(TestCase):
             make_item(url="https://media.test/a"),
             make_item(url="https://media.test/b", title="Exchange halts withdrawals"),
         ]
-        llm = ask(escalate=True, reason="头部交易所暂停提现", cited=(2,), strength="medium")
+        llm = ask(
+            escalate=True, reason="头部交易所暂停提现", cited=(2,), strength="medium"
+        )
         with collecting(report(items)):
             outcome = run_news_judgement(SYMBOL, NOW, llm=llm)
 
@@ -448,7 +475,9 @@ class TestTheChannelNeverRaises(TestCase):
     """
 
     def test_a_dead_chain_is_a_failed_ref_not_an_exception(self):
-        llm = FakeLLM(lambda user: LLMResponseError("两条降级链都失败：OpenAI 500；DeepSeek 503"))
+        llm = FakeLLM(
+            lambda user: LLMResponseError("两条降级链都失败：OpenAI 500；DeepSeek 503")
+        )
         with collecting(report([make_item()])):
             outcome = run_news_judgement(SYMBOL, NOW, llm=llm)
 
@@ -484,7 +513,8 @@ class TestTheChannelNeverRaises(TestCase):
         """校验器自己写错、线程桥出问题：处置相同，但那是事故，必须带栈。"""
         with collecting(report([make_item()])):
             with patch(
-                "apps.regime.news_verdict.judge_news", side_effect=TypeError("参数写错了")
+                "apps.regime.news_verdict.judge_news",
+                side_effect=TypeError("参数写错了"),
             ):
                 with self.assertLogs("apps.regime.news_verdict", level="ERROR") as logs:
                     outcome = run_news_judgement(SYMBOL, NOW)
@@ -632,7 +662,9 @@ class FakeFetcher:
 def rss(*items: str) -> str:
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<rss version="2.0"><channel><title>Feed</title>' + "".join(items) + "</channel></rss>"
+        '<rss version="2.0"><channel><title>Feed</title>'
+        + "".join(items)
+        + "</channel></rss>"
     )
 
 
@@ -652,7 +684,9 @@ class TestOneRoundEndToEnd(TestCase):
 
             async def chat_json(self, *, system, user, validate):
                 order.append("llm")
-                return await super().chat_json(system=system, user=user, validate=validate)
+                return await super().chat_json(
+                    system=system, user=user, validate=validate
+                )
 
         real_persist = news._persist
 
@@ -666,13 +700,17 @@ class TestOneRoundEndToEnd(TestCase):
         fetch = FakeFetcher({"https://media.test/rss": rss(rss_item())})
 
         with patch("apps.regime.news._persist", side_effect=persisting):
-            outcome = run_news_judgement(SYMBOL, NOW, fetch=fetch, llm=llm, news=MEDIA_ONLY)
+            outcome = run_news_judgement(
+                SYMBOL, NOW, fetch=fetch, llm=llm, news=MEDIA_ONLY
+            )
 
         self.assertEqual(outcome.escalation, Escalation.NEWS.value)
         self.assertEqual(outcome.ref["status"], STATUS_OK)
         self.assertEqual(outcome.ref["collected"], 1)
         self.assertEqual(outcome.ref["cited"][0]["url"], "https://media.test/a")
-        self.assertEqual(outcome.ref["cited"][0]["title"], "Bitcoin ETF inflows hit a record")
+        self.assertEqual(
+            outcome.ref["cited"][0]["title"], "Bitcoin ETF inflows hit a record"
+        )
         self.assertEqual(NewsItem.objects.count(), 1)
         # 顺序用一个两边都留记号的共用清单来钉，而不是在协程里查一次库：判定链路从同步
         # 上下文跨到 `asyncio.run`，那次查询落在一个看不见测试事务的连接上，查到 0 行

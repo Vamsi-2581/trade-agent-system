@@ -185,9 +185,7 @@ class TestStateOf(_Fixture):
         在期，一条还没生效的豁免会立刻开始挡停用。两端各偏一点，恰好是「命令说在期、
         推导说不在期」的第二个入口。
         """
-        self.assertEqual(
-            manage.state_of(self.exemption(days=0), now=NOW), EXPIRED
-        )
+        self.assertEqual(manage.state_of(self.exemption(days=0), now=NOW), EXPIRED)
         self.assertEqual(
             manage.state_of(
                 self.exemption(granted_at=NOW + timedelta(seconds=1)), now=NOW
@@ -268,7 +266,9 @@ class TestGrantExpiry(_Fixture):
         )
         first = DeactivationExemption.objects.get()
 
-        with patch.object(config, "DEACTIVATION", replace(config.DEACTIVATION, exemption_days=3)):
+        with patch.object(
+            config, "DEACTIVATION", replace(config.DEACTIVATION, exemption_days=3)
+        ):
             self.manage(
                 "--grant", "--strategy", "BetaStem", "--regime", BaseRegime.RANGE.value
             )

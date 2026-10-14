@@ -43,9 +43,13 @@ class TestGuardFailureDiagnostics(unittest.IsolatedAsyncioTestCase):
         adapter.get_positions = AsyncMock(side_effect=httpx.ConnectTimeout(""))
         executor = _executor_with(adapter)
 
-        with patch(
-            "apps.trading.executor.OrderExecutor.get_instance", return_value=executor
-        ), self.assertLogs("apps.riskguard.guard", level="ERROR") as cm:
+        with (
+            patch(
+                "apps.trading.executor.OrderExecutor.get_instance",
+                return_value=executor,
+            ),
+            self.assertLogs("apps.riskguard.guard", level="ERROR") as cm,
+        ):
             await guard._check_floating_pnl()
 
         msg = "\n".join(cm.output)
@@ -60,9 +64,13 @@ class TestGuardFailureDiagnostics(unittest.IsolatedAsyncioTestCase):
         adapter.get_balance = AsyncMock(side_effect=httpx.ConnectTimeout(""))
         executor = _executor_with(adapter)
 
-        with patch(
-            "apps.trading.executor.OrderExecutor.get_instance", return_value=executor
-        ), self.assertLogs("apps.riskguard.guard", level="ERROR") as cm:
+        with (
+            patch(
+                "apps.trading.executor.OrderExecutor.get_instance",
+                return_value=executor,
+            ),
+            self.assertLogs("apps.riskguard.guard", level="ERROR") as cm,
+        ):
             await guard._check_floating_pnl()
 
         msg = "\n".join(cm.output)
@@ -75,9 +83,13 @@ class TestGuardFailureDiagnostics(unittest.IsolatedAsyncioTestCase):
         adapter.get_positions = AsyncMock(side_effect=httpx.ConnectTimeout(""))
         executor = _executor_with(adapter)
 
-        with patch(
-            "apps.trading.executor.OrderExecutor.get_instance", return_value=executor
-        ), self.assertLogs("apps.riskguard.guard", level="ERROR") as cm:
+        with (
+            patch(
+                "apps.trading.executor.OrderExecutor.get_instance",
+                return_value=executor,
+            ),
+            self.assertLogs("apps.riskguard.guard", level="ERROR") as cm,
+        ):
             await guard._check_floating_pnl()
             await guard._check_floating_pnl()
 
@@ -92,9 +104,7 @@ class TestGuardFailureDiagnostics(unittest.IsolatedAsyncioTestCase):
             "apps.trading.executor.OrderExecutor.get_instance", return_value=executor
         ):
             await guard._check_floating_pnl()
-        self.assertEqual(
-            guard._position_fetch_failures, 0, "成功后计数必须归零"
-        )
+        self.assertEqual(guard._position_fetch_failures, 0, "成功后计数必须归零")
 
 
 class TestFloatingPnlCoversEveryAccount(unittest.IsolatedAsyncioTestCase):
@@ -125,9 +135,13 @@ class TestFloatingPnlCoversEveryAccount(unittest.IsolatedAsyncioTestCase):
         # 标签里的那一段只能从这里来。
         executor._account_exchanges = {"acct-1": "binance", "acct-2": "binance"}
 
-        with patch(
-            "apps.trading.executor.OrderExecutor.get_instance", return_value=executor
-        ), self.assertLogs("apps.riskguard.guard", level="ERROR") as cm:
+        with (
+            patch(
+                "apps.trading.executor.OrderExecutor.get_instance",
+                return_value=executor,
+            ),
+            self.assertLogs("apps.riskguard.guard", level="ERROR") as cm,
+        ):
             await guard._check_floating_pnl()
 
         msg = "\n".join(cm.output)

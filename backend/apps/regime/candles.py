@@ -148,9 +148,9 @@ def latest_complete_date(now: datetime) -> date:
     日线 D 在 (D+1) 00:00 UTC 收盘，故 D 已收盘 ⟺ D <= (now + 宽容带) - 1 天。
     与 `_is_closed()` 是同一条规则的两种写法，测试钉住两者一致。
     """
-    return (now + config.CANDLES.close_tolerance).astimezone(timezone.utc).date() - timedelta(
-        days=1
-    )
+    return (now + config.CANDLES.close_tolerance).astimezone(
+        timezone.utc
+    ).date() - timedelta(days=1)
 
 
 def _is_closed(open_time: datetime, now: datetime) -> bool:
@@ -187,9 +187,7 @@ def _ccxt_fetch_page(
 
         ex = exchange_class(options)
         try:
-            return await ex.fetch_ohlcv(
-                symbol, timeframe, since=since_ms, limit=limit
-            )
+            return await ex.fetch_ohlcv(symbol, timeframe, since=since_ms, limit=limit)
         finally:
             await ex.close()
 
@@ -233,7 +231,7 @@ def _to_candle(raw: Sequence[float]) -> Candle:
         )
 
     open_time = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-    o, h, l, c = (_to_decimal(raw[i]) for i in (1, 2, 3, 4))
+    o, h, l, c = (_to_decimal(raw[i]) for i in (1, 2, 3, 4))  # noqa: E741
     volume = _to_decimal(raw[5])
 
     if h < l:

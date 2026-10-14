@@ -4,31 +4,78 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0002_regimejudgement'),
+        ("regime", "0002_regimejudgement"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='NewsItem',
+            name="NewsItem",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('source', models.CharField(db_index=True, max_length=64, verbose_name='来源（白名单源名）')),
-                ('kind', models.CharField(choices=[('exchange', '交易所公告'), ('crypto_media', '主流加密媒体'), ('macro', '宏观类站点')], max_length=16, verbose_name='来源类别')),
-                ('url', models.URLField(max_length=2048, unique=True, verbose_name='链接')),
-                ('title', models.CharField(max_length=512, verbose_name='标题')),
-                ('published_at', models.DateTimeField(blank=True, db_index=True, null=True, verbose_name='发布时刻')),
-                ('body', models.TextField(blank=True, default='', verbose_name='正文（截断后，送给 LLM 的原文）')),
-                ('body_truncated', models.BooleanField(default=False, verbose_name='正文是否被截断')),
-                ('fetched_at', models.DateTimeField(db_index=True, verbose_name='采集时刻')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "source",
+                    models.CharField(
+                        db_index=True, max_length=64, verbose_name="来源（白名单源名）"
+                    ),
+                ),
+                (
+                    "kind",
+                    models.CharField(
+                        choices=[
+                            ("exchange", "交易所公告"),
+                            ("crypto_media", "主流加密媒体"),
+                            ("macro", "宏观类站点"),
+                        ],
+                        max_length=16,
+                        verbose_name="来源类别",
+                    ),
+                ),
+                (
+                    "url",
+                    models.URLField(max_length=2048, unique=True, verbose_name="链接"),
+                ),
+                ("title", models.CharField(max_length=512, verbose_name="标题")),
+                (
+                    "published_at",
+                    models.DateTimeField(
+                        blank=True, db_index=True, null=True, verbose_name="发布时刻"
+                    ),
+                ),
+                (
+                    "body",
+                    models.TextField(
+                        blank=True,
+                        default="",
+                        verbose_name="正文（截断后，送给 LLM 的原文）",
+                    ),
+                ),
+                (
+                    "body_truncated",
+                    models.BooleanField(default=False, verbose_name="正文是否被截断"),
+                ),
+                (
+                    "fetched_at",
+                    models.DateTimeField(db_index=True, verbose_name="采集时刻"),
+                ),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
             ],
             options={
-                'verbose_name': '资讯条目（原始，永久保留）',
-                'verbose_name_plural': '资讯条目（原始，永久保留）',
-                'db_table': 'regime_news_items',
-                'ordering': ['-fetched_at', '-id'],
+                "verbose_name": "资讯条目（原始，永久保留）",
+                "verbose_name_plural": "资讯条目（原始，永久保留）",
+                "db_table": "regime_news_items",
+                "ordering": ["-fetched_at", "-id"],
             },
         ),
     ]

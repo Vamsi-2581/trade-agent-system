@@ -98,7 +98,9 @@ def resolve_scope(kind: str, value: str | None = None) -> str:
         return halt.global_scope()
     if kind == "symbol":
         if not (value or "").strip():
-            raise ManualHaltError("symbol 作用域必须给出品种（例如 --symbol DOGE/USDT）")
+            raise ManualHaltError(
+                "symbol 作用域必须给出品种（例如 --symbol DOGE/USDT）"
+            )
         return halt.symbol_scope(value.strip())
     if kind == "strategy":
         given = (value or "").strip()
@@ -264,9 +266,7 @@ def lift(
     row.closed_reason = CLOSE_REASON_LIFTED
     row.actor_kind = ActorKind(actor_kind).value
     row.actor_name = actor_name
-    row.save(
-        update_fields=["closed_at", "closed_reason", "actor_kind", "actor_name"]
-    )
+    row.save(update_fields=["closed_at", "closed_reason", "actor_kind", "actor_name"])
     logger.info("[regime] 手动熔断解除（作用域 %s，actor=%s）", scope, actor_name)
     return row
 

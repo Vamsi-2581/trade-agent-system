@@ -92,7 +92,9 @@ class BinanceAdapter(BaseExchangeAdapter):
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
         self._time_offset: int = 0  # ms: local_time = server_time + offset
         self._leverage_set: set[str] = set()  # 已设置杠杆的交易对
-        self._symbol_rules: Optional[dict[str, dict]] = None  # exchangeInfo 精度规则缓存
+        self._symbol_rules: Optional[dict[str, dict]] = (
+            None  # exchangeInfo 精度规则缓存
+        )
 
     async def connect(self) -> None:
         """建立**当前 loop** 专用的 HTTP 客户端（不负责处置本 loop 已有的那个）。"""
@@ -164,9 +166,7 @@ class BinanceAdapter(BaseExchangeAdapter):
                 else:
                     logger.info(f"Binance clock synced (drift={drift_s:.2f}s)")
             else:
-                logger.warning(
-                    f"Binance time sync failed: HTTP {resp.status_code}"
-                )
+                logger.warning(f"Binance time sync failed: HTTP {resp.status_code}")
         except Exception as e:
             logger.warning(f"Binance time sync failed: {e}")
 
@@ -449,7 +449,9 @@ class BinanceAdapter(BaseExchangeAdapter):
             self._leverage_set.add(symbol)
             logger.info(f"Leverage set for {symbol}: {self.DEFAULT_LEVERAGE}x")
         else:
-            logger.warning(f"Failed to set leverage for {symbol}: {resp.status_code} - {resp.text}")
+            logger.warning(
+                f"Failed to set leverage for {symbol}: {resp.status_code} - {resp.text}"
+            )
 
     async def _load_symbol_rules(self) -> None:
         """拉取并缓存 exchangeInfo 精度规则（stepSize / tickSize / minQty / minNotional）。"""
@@ -459,9 +461,7 @@ class BinanceAdapter(BaseExchangeAdapter):
                 logger.error(
                     f"exchangeInfo fetch failed: {resp.status_code} - {resp.text[:200]}"
                 )
-                raise RuntimeError(
-                    f"exchangeInfo fetch failed: {resp.status_code}"
-                )
+                raise RuntimeError(f"exchangeInfo fetch failed: {resp.status_code}")
             data = resp.json()
             rules: dict[str, dict] = {}
             for s in data.get("symbols", []):
@@ -550,7 +550,11 @@ class BinanceAdapter(BaseExchangeAdapter):
 
         # 精度归一化：数量按 stepSize 向下取整，价格按 tickSize 对齐
         quantity = self._normalize_quantity(symbol, request.quantity)
-        price = self._normalize_price(symbol, request.price) if request.price is not None else None
+        price = (
+            self._normalize_price(symbol, request.price)
+            if request.price is not None
+            else None
+        )
         self._validate_quantity(symbol, quantity)
 
         # 下单前设置杠杆（Futures 必须）
@@ -728,9 +732,7 @@ class BinanceAdapter(BaseExchangeAdapter):
             return None
         return SymbolRules(step_size=rule["stepSize"], min_qty=rule["minQty"])
 
-    async def fetch_order(
-        self, exchange_order_id: str, symbol: str
-    ) -> OrderFill:
+    async def fetch_order(self, exchange_order_id: str, symbol: str) -> OrderFill:
         """查询订单当前状态与成交情况（/fapi/v1/order）。"""
         resp = await self._request(
             "GET",
@@ -747,17 +749,13 @@ class BinanceAdapter(BaseExchangeAdapter):
                 raise OrderNotFoundError(
                     f"Order {exchange_order_id} does not exist on exchange"
                 )
-            raise RuntimeError(
-                f"Binance API {resp.status_code}: {resp.text[:300]}"
-            )
+            raise RuntimeError(f"Binance API {resp.status_code}: {resp.text[:300]}")
         resp.raise_for_status()
 
         data = resp.json()
         status = self._STATUS_MAP.get(data.get("status"), "submitted")
         filled_qty = Decimal(data.get("executedQty", "0"))
-        avg_price = (
-            Decimal(data["avgPrice"]) if data.get("avgPrice") else None
-        )
+        avg_price = Decimal(data["avgPrice"]) if data.get("avgPrice") else None
         if status == "submitted" and filled_qty > 0:
             status = "partial"
 

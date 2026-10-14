@@ -4,15 +4,18 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('backtest', '0006_add_trade_type'),
+        ("backtest", "0006_add_trade_type"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='backtestresult',
-            name='metrics',
-            field=models.JSONField(blank=True, default=dict, help_text='Advanced stats: sortino/calmar/annualized/profit_factor/etc.'),
+            model_name="backtestresult",
+            name="metrics",
+            field=models.JSONField(
+                blank=True,
+                default=dict,
+                help_text="Advanced stats: sortino/calmar/annualized/profit_factor/etc.",
+            ),
         ),
     ]

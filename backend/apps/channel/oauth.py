@@ -62,10 +62,13 @@ class FeishuOAuthClient:
         )
         data = resp.json()
         # 打印完整响应结构（WARNING 级别确保可见）
-        logger.warning("[FeishuOAuth] exchange_code response: code=%s, msg=%s, data_keys=%s, data=%s",
-                       data.get("code"), data.get("msg"),
-                       list(data.get("data", {}).keys()) if "data" in data else [],
-                       data)
+        logger.warning(
+            "[FeishuOAuth] exchange_code response: code=%s, msg=%s, data_keys=%s, data=%s",
+            data.get("code"),
+            data.get("msg"),
+            list(data.get("data", {}).keys()) if "data" in data else [],
+            data,
+        )
         code_val = data.get("code")
         if code_val != 0:
             raise RuntimeError(f"Feishu OAuth exchange failed: {data}")
@@ -81,7 +84,9 @@ class FeishuOAuthClient:
         return {
             "access_token": inner.get("access_token", ""),
             "refresh_token": inner.get("refresh_token", ""),
-            "expires_in": inner.get("expires_in", inner.get("refresh_expires_in", 7200)),
+            "expires_in": inner.get(
+                "expires_in", inner.get("refresh_expires_in", 7200)
+            ),
             "open_id": inner.get("open_id", inner.get("openid", "")),
             "name": inner.get("name", ""),
             "avatar_url": inner.get("avatar_url", ""),
@@ -103,8 +108,12 @@ class FeishuOAuthClient:
         data = resp.json()
         code_val = data.get("code")
         if code_val != 0:
-            logger.warning("[FeishuOAuth] get_user_info failed: code=%s, msg=%s, data=%s",
-                           code_val, data.get("msg"), data)
+            logger.warning(
+                "[FeishuOAuth] get_user_info failed: code=%s, msg=%s, data=%s",
+                code_val,
+                data.get("msg"),
+                data,
+            )
             raise RuntimeError(f"Feishu get_user_info failed: {data}")
 
         user_data = data.get("data", {})

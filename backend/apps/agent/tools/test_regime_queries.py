@@ -247,7 +247,9 @@ class TestQueryRegime(TestCase):
         self.assertIn("【待生效】", text)
         self.assertIn("库中还没有任何生效过的判定（冷启动）", text)
         self.assertIn("没有待生效的判定", text)
-        self.assertNotIn("最近写下的一条是", text, "一条都没有时不该谈「最近写下的一条」")
+        self.assertNotIn(
+            "最近写下的一条是", text, "一条都没有时不该谈「最近写下的一条」"
+        )
 
     def test_the_two_groups_are_two_states_not_one_sentence(self):
         """生效中那条**不许**带第①段那句「本条要到生效时刻才咬人」——它已经咬了。
@@ -279,7 +281,8 @@ class TestQueryRegime(TestCase):
         这里**刻意不去断言「最近那条已经生效」**——那句话在补写情形下是假的。
         """
         backfilled = _judgement(
-            effective_at=business_midnight(RUN_DAY + timedelta(days=1)) - timedelta(days=2),
+            effective_at=business_midnight(RUN_DAY + timedelta(days=1))
+            - timedelta(days=2),
             attribute_date=date(2026, 9, 20),
         )
         in_force = _judgement(
@@ -440,7 +443,9 @@ class TestQueryHalt(TestCase):
         # 层标题 = `halt.layer_of(row).text` = 「触发源名称（触发源档，作用域 人话）」。
         # 在这里写死一遍，让措辞漂移在**工具这一侧**也红一次；同一句话的
         # `pre_trade_check` 那一侧由 `test_halt.py::TestVerdict` 钉。
-        self.assertIn("【第 1 层｜FOMC 议息（事件熔断，作用域 全市场（global））】", text)
+        self.assertIn(
+            "【第 1 层｜FOMC 议息（事件熔断，作用域 全市场（global））】", text
+        )
         # 正文第一段是生效期，两个绝对时刻都写出来（`events.format_moment`，与事件库、
         # 日报第③段同口径）。这里只钉「北京时间」那半句的换算：事件窗口起于 UTC 03:00。
         self.assertIn("生效期：北京时间 2026-09-23 11:00", text)
@@ -510,7 +515,9 @@ class TestQueryHalt(TestCase):
 
         self.assertEqual(RegimeMechanismSwitch.objects.count(), 0)
         self.assertIn("当前在拦的层：1 层", text)
-        self.assertIn("【第 1 层｜高波动（保命档（高波动），作用域 全市场（global））】", text)
+        self.assertIn(
+            "【第 1 层｜高波动（保命档（高波动），作用域 全市场（global））】", text
+        )
         self.assertIn("保命档不做适用性判断，与证据无关", text)
         # 不定 = 没有预先知道的截止时刻（`_layer_block` 用 `events.format_moment` 渲染，
         # None → 「未定」）。保命档的失效由「阶段离开高波动」那一轮写 `closed_at`。
@@ -538,7 +545,9 @@ class TestQueryHalt(TestCase):
         # `order_by("opened_at", "id")`）：保命档这一行的 `opened_at` 是日界（UTC 00:00），
         # 比事件窗口的起点（UTC 03:00）早，所以它在第 1 层。顺序是稳定的，用户两次问到的
         # 编号不会翻面——这正是不按类型排的意义。
-        self.assertIn("【第 1 层｜高波动（保命档（高波动），作用域 全市场（global））】", text)
+        self.assertIn(
+            "【第 1 层｜高波动（保命档（高波动），作用域 全市场（global））】", text
+        )
         self.assertIn("【第 2 层｜非农（事件熔断，作用域 全市场（global））】", text)
 
     # -- 不成为层的事件：每一条都拨了开关，否则会因为别的原因通过 ------------- #
@@ -712,7 +721,9 @@ class TestQueryDeactivationDecisions(TestCase):
         user = _user("applied@test.local")
         strategy = _strategy("甲")
         _session(user, strategy)
-        _decision(strategy, status=DecisionStatus.APPLIED.value, evidence=_frozen_evidence())
+        _decision(
+            strategy, status=DecisionStatus.APPLIED.value, evidence=_frozen_evidence()
+        )
 
         with _frozen():
             text = QueryDeactivationDecisionsTool()._render(str(user.pk))
@@ -745,7 +756,9 @@ class TestQueryDeactivationDecisions(TestCase):
             text = QueryDeactivationDecisionsTool()._render(str(user.pk))
 
         self.assertIn("池化结论：不适用：证据不足", text)
-        self.assertIn("12 笔 / 4 个月 / 该阶段 30 个交易日（门槛 20 笔 / 6 个月，未达）", text)
+        self.assertIn(
+            "12 笔 / 4 个月 / 该阶段 30 个交易日（门槛 20 笔 / 6 个月，未达）", text
+        )
         self.assertIn("Calmar -0.500", text)
         self.assertIn("分段最大回撤 23.456%", text)
         self.assertIn("品种 BTC/USDT", text)
@@ -831,7 +844,9 @@ class TestQueryEvents(TestCase):
 
     def test_it_is_the_daily_report_third_section_verbatim(self):
         _event("CPI 公布", event_time=NOW + timedelta(days=2))
-        _event("低影响事件", impact=EventImpact.MEDIUM, event_time=NOW + timedelta(days=1))
+        _event(
+            "低影响事件", impact=EventImpact.MEDIUM, event_time=NOW + timedelta(days=1)
+        )
         CandidateEvent.objects.create(
             name="疑似议息",
             origin=CandidateOrigin.NEWS.value,
@@ -887,9 +902,13 @@ class TestTheBreak(TestCase):
         ):
             params = inspect.signature(tool_cls()._render).parameters
             if tool_cls in cropped:
-                self.assertEqual(list(params), ["user_id"], f"{tool_cls.name} 该按人裁剪")
+                self.assertEqual(
+                    list(params), ["user_id"], f"{tool_cls.name} 该按人裁剪"
+                )
             else:
-                self.assertEqual(list(params), [], f"{tool_cls.name} 是系统级状态，不许按人裁剪")
+                self.assertEqual(
+                    list(params), [], f"{tool_cls.name} 是系统级状态，不许按人裁剪"
+                )
 
     def test_every_tool_has_an_empty_schema_and_a_read_only_execute(self):
         for tool_cls in (
@@ -899,7 +918,10 @@ class TestTheBreak(TestCase):
             QueryEventsTool,
         ):
             tool = tool_cls()
-            self.assertEqual(tool.parameters_schema, {"type": "object", "properties": {}, "required": []})
+            self.assertEqual(
+                tool.parameters_schema,
+                {"type": "object", "properties": {}, "required": []},
+            )
             self.assertIn("**kwargs", str(inspect.signature(tool.execute)))
 
     def test_all_four_are_registered(self):
@@ -926,5 +948,7 @@ class TestTheAsyncEdges(TestCase):
         self.assertEqual(result.error, "无法确定用户身份")
 
     def test_the_identity_is_still_required_with_other_arguments(self):
-        result = asyncio.run(QueryDeactivationDecisionsTool().execute(user_id="", limit=10))
+        result = asyncio.run(
+            QueryDeactivationDecisionsTool().execute(user_id="", limit=10)
+        )
         self.assertFalse(result.success)

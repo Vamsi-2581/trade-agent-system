@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 
 
 class LiveStrategyRunner:
-
     # 持仓同步的最小间隔（秒）。同一根 K 线的多次 tick 推送、以及高频验证事件
     # 都按此节流；**新 K 线到来时强制刷新**（每 bar 至少一次真值）。
     POSITION_SYNC_MIN_INTERVAL = 15.0
@@ -99,9 +98,7 @@ class LiveStrategyRunner:
             try:
                 last_close = self._kline_history[-1].get("close")
                 if last_close is not None:
-                    self.strategy.ctx.set_price(
-                        self.symbol, Decimal(str(last_close))
-                    )
+                    self.strategy.ctx.set_price(self.symbol, Decimal(str(last_close)))
             except Exception as e:
                 logger.warning(
                     f"[LiveStrategyRunner] failed to seed ctx.price from history: {e}"
@@ -178,7 +175,9 @@ class LiveStrategyRunner:
                 )
                 return
 
-        logger.debug(f"[SF-01][LiveStrategy] on_kline: {self.symbol} close={kline.get('close')}")
+        logger.debug(
+            f"[SF-01][LiveStrategy] on_kline: {self.symbol} close={kline.get('close')}"
+        )
 
         # 更新历史：同一根 K 线（相同 open_time）更新最后一条，新周期才 append
         kline_ts = kline.get("timestamp")
@@ -221,9 +220,7 @@ class LiveStrategyRunner:
     async def _process_kline(self, kline: dict) -> None:
         """单根 kline 的策略管线（在 _signal_lock 保护下执行）。"""
         # 同步当前价格到 context
-        self.strategy.ctx.set_price(
-            self.symbol, Decimal(str(kline.get("close", "0")))
-        )
+        self.strategy.ctx.set_price(self.symbol, Decimal(str(kline.get("close", "0"))))
 
         # 决策前同步真实持仓（C 修复）：ctx 只在启动时同步过一次，持仓被其他会话/
         # 手工改变后若沿用旧值，close_position() 会按旧数量下单（2026-09-20 事故：
@@ -234,9 +231,7 @@ class LiveStrategyRunner:
         if bar_ts is not None:
             self._last_bar_ts = bar_ts
         if not await self._refresh_position_before_decision(force=is_new_bar):
-            logger.debug(
-                f"[LiveStrategyRunner] 持仓未知 → 跳过本轮 {self.symbol} 决策"
-            )
+            logger.debug(f"[LiveStrategyRunner] 持仓未知 → 跳过本轮 {self.symbol} 决策")
             return
 
         # 调试：记录当前持仓状态
@@ -564,8 +559,7 @@ class LiveStrategyRunner:
             )()
         except Exception as e:  # noqa: BLE001 - 通知失败不得影响主流程
             logger.error(
-                f"[LiveStrategyRunner] 外部持仓通知写入失败 "
-                f"(user={self.user_id}): {e}"
+                f"[LiveStrategyRunner] 外部持仓通知写入失败 (user={self.user_id}): {e}"
             )
 
     async def _refresh_position_before_decision(self, *, force: bool) -> bool:
@@ -694,6 +688,7 @@ class LiveStrategyRunner:
                 )
             except Exception:
                 pass
+
     async def _dispatch_signal(self, signal: "OrderSignal") -> bool:
         """分发策略信号到 Redis Stream，返回是否成功分发。"""
         if not self._dispatcher:
@@ -806,8 +801,7 @@ class LiveStrategyRunner:
         count = 0
         for target in targets:
             direction = (
-                "buy" if target.target_quantity > self.strategy.ctx.position
-                else "sell"
+                "buy" if target.target_quantity > self.strategy.ctx.position else "sell"
             )
             prev = self._entry_direction.get(target.symbol)
             if prev is not None and direction == prev and target.target_quantity > 0:
@@ -1100,8 +1094,7 @@ class LiveStrategyRunner:
             # 持仓同步（C 修复）：验证事件可能高频触发，按最小间隔节流
             if not await self._refresh_position_before_decision(force=False):
                 logger.debug(
-                    "[LiveStrategyRunner] 持仓未知 → 跳过本轮验证触发 "
-                    f"({self.symbol})"
+                    f"[LiveStrategyRunner] 持仓未知 → 跳过本轮验证触发 ({self.symbol})"
                 )
                 return
 

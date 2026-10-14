@@ -124,9 +124,11 @@ def register_intent(intent: str, agent_name: str):
     class AnalystAgent(BaseAgent):
         ...
     """
+
     def decorator(target):
         IntentRouter.get_instance().register_intent(intent, agent_name)
         return target
+
     return decorator
 
 
@@ -137,9 +139,11 @@ def register_frame_intent(intent: str, frame_type: str, action: str):
     class FrameManagerAgent(BaseAgent):
         ...
     """
+
     def decorator(target):
         IntentRouter.get_instance().register_frame_intent(intent, frame_type, action)
         return target
+
     return decorator
 
 
@@ -150,7 +154,9 @@ def register_fallback_rule(pattern: str, intent: str):
     def some_handler():
         ...
     """
+
     def decorator(target):
         IntentRouter.get_instance().register_fallback_rule(pattern, intent)
         return target
+
     return decorator

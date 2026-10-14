@@ -264,7 +264,9 @@ class TestConfirmedCoercion:
     真实资金单。与 ``cb010a2`` 修的七处同根因，但这一处的代价是下单本身。
     """
 
-    @pytest.mark.parametrize("raw", ["false", "False", "FALSE", "no", "0", "", "  ", "nope"])
+    @pytest.mark.parametrize(
+        "raw", ["false", "False", "FALSE", "no", "0", "", "  ", "nope"]
+    )
     def test_negative_strings_do_not_confirm(self, raw):
         assert _confirmed(raw) is False
 
@@ -406,9 +408,12 @@ class TestReducePositionGuards:
         first, second = _account(label="A"), _account(label="B")
         adapter = _FakeAdapter(positions=[_position()])
         patches = _patch_accounts([first, second])
-        with patches[0], patches[1], patch(ADAPTER_FACTORY, _adapter_factory(adapter)), patch(
-            "apps.trading.reduce.place_reduce_shard", AsyncMock()
-        ) as place:
+        with (
+            patches[0],
+            patches[1],
+            patch(ADAPTER_FACTORY, _adapter_factory(adapter)),
+            patch("apps.trading.reduce.place_reduce_shard", AsyncMock()) as place,
+        ):
             result = _run(
                 ReducePositionTool().execute(symbol="BNB", confirmed=True, user_id="u1")
             )
@@ -433,9 +438,13 @@ class TestReducePositionGuards:
         async def _resolve(raw):
             return str(caller.id)
 
-        with patches[0], patches[1], patch(ADAPTER_FACTORY, _adapter_factory(adapter)), patch(
-            "apps.agent.tools.positions._resolve_owner_id", _resolve
-        ), patch("apps.trading.reduce.place_reduce_shard", AsyncMock()) as place:
+        with (
+            patches[0],
+            patches[1],
+            patch(ADAPTER_FACTORY, _adapter_factory(adapter)),
+            patch("apps.agent.tools.positions._resolve_owner_id", _resolve),
+            patch("apps.trading.reduce.place_reduce_shard", AsyncMock()) as place,
+        ):
             result = _run(
                 ReducePositionTool().execute(
                     symbol="BNB", confirmed=True, user_id=str(caller.id)
@@ -451,13 +460,18 @@ class TestReducePositionGuards:
         adapter = _FakeAdapter(positions=[_position()])
         result_shard = _shard_result()
         patches = _patch_accounts([account])
-        with patches[0], patches[1], patch(ADAPTER_FACTORY, _adapter_factory(adapter)), patch(
-            "apps.trading.reduce.place_reduce_shard", AsyncMock(return_value=result_shard)
-        ) as place, patch.object(ReducePositionTool, "_notify", AsyncMock()):
+        with (
+            patches[0],
+            patches[1],
+            patch(ADAPTER_FACTORY, _adapter_factory(adapter)),
+            patch(
+                "apps.trading.reduce.place_reduce_shard",
+                AsyncMock(return_value=result_shard),
+            ) as place,
+            patch.object(ReducePositionTool, "_notify", AsyncMock()),
+        ):
             result = _run(
-                ReducePositionTool().execute(
-                    symbol="BNB", confirmed=True, user_id="u1"
-                )
+                ReducePositionTool().execute(symbol="BNB", confirmed=True, user_id="u1")
             )
 
         assert result.success is True, result.error
@@ -471,9 +485,12 @@ class TestReducePositionDryRun:
         account = _account(label="主账户")
         adapter = _FakeAdapter(positions=[_position()])
         patches = _patch_accounts([account])
-        with patches[0], patches[1], patch(ADAPTER_FACTORY, _adapter_factory(adapter)), patch(
-            "apps.trading.reduce.place_reduce_shard", AsyncMock()
-        ) as place:
+        with (
+            patches[0],
+            patches[1],
+            patch(ADAPTER_FACTORY, _adapter_factory(adapter)),
+            patch("apps.trading.reduce.place_reduce_shard", AsyncMock()) as place,
+        ):
             result = _run(ReducePositionTool().execute(symbol="BNB", user_id="u1"))
 
         assert result.success is True
@@ -491,9 +508,12 @@ class TestReducePositionDryRun:
         account = _account(label="主账户")
         adapter = _FakeAdapter(positions=[_position(qty="10")])
         patches = _patch_accounts([account])
-        with patches[0], patches[1], patch(ADAPTER_FACTORY, _adapter_factory(adapter)), patch(
-            "apps.trading.reduce.place_reduce_shard", AsyncMock()
-        ) as place:
+        with (
+            patches[0],
+            patches[1],
+            patch(ADAPTER_FACTORY, _adapter_factory(adapter)),
+            patch("apps.trading.reduce.place_reduce_shard", AsyncMock()) as place,
+        ):
             result = _run(
                 ReducePositionTool().execute(symbol="BNB", fraction=0.5, user_id="u1")
             )
@@ -511,9 +531,12 @@ class TestReducePositionDryRun:
         account = _account(label="主账户")
         adapter = _FakeAdapter(positions=[_position(qty="10")])
         patches = _patch_accounts([account])
-        with patches[0], patches[1], patch(ADAPTER_FACTORY, _adapter_factory(adapter)), patch(
-            "apps.trading.reduce.place_reduce_shard", AsyncMock()
-        ) as place:
+        with (
+            patches[0],
+            patches[1],
+            patch(ADAPTER_FACTORY, _adapter_factory(adapter)),
+            patch("apps.trading.reduce.place_reduce_shard", AsyncMock()) as place,
+        ):
             result = _run(
                 ReducePositionTool().execute(
                     symbol="BNB", confirmed="false", user_id="u1"
@@ -529,10 +552,16 @@ class TestReducePositionDryRun:
         account = _account(label="主账户")
         adapter = _FakeAdapter(positions=[_position(qty="10")])
         patches = _patch_accounts([account])
-        with patches[0], patches[1], patch(ADAPTER_FACTORY, _adapter_factory(adapter)), patch(
-            "apps.trading.reduce.place_reduce_shard",
-            AsyncMock(return_value=_shard_result()),
-        ) as place, patch.object(ReducePositionTool, "_notify", AsyncMock()):
+        with (
+            patches[0],
+            patches[1],
+            patch(ADAPTER_FACTORY, _adapter_factory(adapter)),
+            patch(
+                "apps.trading.reduce.place_reduce_shard",
+                AsyncMock(return_value=_shard_result()),
+            ) as place,
+            patch.object(ReducePositionTool, "_notify", AsyncMock()),
+        ):
             result = _run(
                 ReducePositionTool().execute(
                     symbol="BNB", confirmed="true", user_id="u1"
@@ -550,9 +579,13 @@ class TestReducePositionExecution:
         adapter = _FakeAdapter(positions=positions)
         patches = _patch_accounts([account])
         place = AsyncMock(return_value=shard)
-        with patches[0], patches[1], patch(ADAPTER_FACTORY, _adapter_factory(adapter)), patch(
-            "apps.trading.reduce.place_reduce_shard", place
-        ), patch.object(ReducePositionTool, "_notify", AsyncMock()) as notify:
+        with (
+            patches[0],
+            patches[1],
+            patch(ADAPTER_FACTORY, _adapter_factory(adapter)),
+            patch("apps.trading.reduce.place_reduce_shard", place),
+            patch.object(ReducePositionTool, "_notify", AsyncMock()) as notify,
+        ):
             result = _run(
                 ReducePositionTool().execute(
                     symbol=symbol,
@@ -610,9 +643,7 @@ class TestReducePositionExecution:
 
     def test_positions_unavailable_refuses_to_order(self):
         """不知道持有多少时绝不下单（``reduce_run`` 第 3 步的 fail-closed）。"""
-        result, place, _, _ = self._execute(
-            positions=[], shard=_shard_result()
-        )
+        result, place, _, _ = self._execute(positions=[], shard=_shard_result())
         # 空持仓 = 找不到匹配品种 → 拒（而不是下一张 0 数量的单）
         assert result.success is False
         place.assert_not_called()
@@ -655,7 +686,9 @@ class TestReducePositionExecution:
     def test_rejected_says_confirmed_no_fill(self):
         result, place, adapter, _ = self._execute(
             positions=[_position(qty="10")],
-            shard=_shard_result(status="rejected", filled="0", avg=None, error="below minQty"),
+            shard=_shard_result(
+                status="rejected", filled="0", avg=None, error="below minQty"
+            ),
         )
         assert result.success is True
         assert "rejected" in result.data
@@ -666,7 +699,9 @@ class TestReducePositionExecution:
     def test_partial_says_partial_with_avg_price(self):
         result, place, _, _ = self._execute(
             positions=[_position(qty="10")],
-            shard=_shard_result(status="partial", requested="10", filled="4", avg="609"),
+            shard=_shard_result(
+                status="partial", requested="10", filled="4", avg="609"
+            ),
         )
         assert result.success is True
         assert "partial" in result.data

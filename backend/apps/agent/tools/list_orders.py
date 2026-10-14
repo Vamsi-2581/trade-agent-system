@@ -39,6 +39,7 @@ def _query_orders(user_id: str, filters: dict) -> tuple[list[dict], int]:
     except (ValueError, TypeError):
         # 如果不是 UUID，尝试按 username 查找
         from django.contrib.auth import get_user_model
+
         User = get_user_model()
         user_obj = User.objects.filter(username=user_id).first()
         if user_obj:
@@ -61,10 +62,14 @@ def _query_orders(user_id: str, filters: dict) -> tuple[list[dict], int]:
 
     if filters.get("backtest_id"):
         # Order → LiveSession → BacktestResult 链路过滤
-        queryset = queryset.filter(live_session__backtest_result_id=filters["backtest_id"])
+        queryset = queryset.filter(
+            live_session__backtest_result_id=filters["backtest_id"]
+        )
 
     # 排序：按创建时间倒序
-    queryset = queryset.select_related("exchange_account", "live_session").order_by("-created_at")
+    queryset = queryset.select_related("exchange_account", "live_session").order_by(
+        "-created_at"
+    )
 
     # 计算总数
     total = queryset.count()
@@ -77,22 +82,30 @@ def _query_orders(user_id: str, filters: dict) -> tuple[list[dict], int]:
     # 转换为字典列表（字段转换）
     results = []
     for obj in queryset:
-        results.append({
-            "id": str(obj.id),  # UUID → 字符串（完整）
-            "symbol": obj.symbol,
-            "side": obj.side,
-            "order_type": obj.order_type,
-            "quantity": float(obj.quantity),  # Decimal → float
-            "price": float(obj.price) if obj.price else None,
-            "status": obj.status,
-            "filled_quantity": float(obj.filled_quantity),
-            "avg_fill_price": float(obj.avg_fill_price) if obj.avg_fill_price else None,
-            "realized_pnl": float(obj.realized_pnl) if obj.realized_pnl else None,
-            "exchange_order_id": obj.exchange_order_id,
-            "exchange_label": obj.exchange_account.label if obj.exchange_account else "",
-            "live_session_id": str(obj.live_session.id) if obj.live_session else None,
-            "created_at": obj.created_at.isoformat(),  # datetime → ISO 8601
-        })
+        results.append(
+            {
+                "id": str(obj.id),  # UUID → 字符串（完整）
+                "symbol": obj.symbol,
+                "side": obj.side,
+                "order_type": obj.order_type,
+                "quantity": float(obj.quantity),  # Decimal → float
+                "price": float(obj.price) if obj.price else None,
+                "status": obj.status,
+                "filled_quantity": float(obj.filled_quantity),
+                "avg_fill_price": float(obj.avg_fill_price)
+                if obj.avg_fill_price
+                else None,
+                "realized_pnl": float(obj.realized_pnl) if obj.realized_pnl else None,
+                "exchange_order_id": obj.exchange_order_id,
+                "exchange_label": obj.exchange_account.label
+                if obj.exchange_account
+                else "",
+                "live_session_id": str(obj.live_session.id)
+                if obj.live_session
+                else None,
+                "created_at": obj.created_at.isoformat(),  # datetime → ISO 8601
+            }
+        )
 
     return results, total
 

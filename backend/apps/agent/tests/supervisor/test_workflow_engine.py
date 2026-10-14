@@ -14,7 +14,6 @@ from apps.agent.base import AgentMessage, AgentResult
 from apps.agent.workflow_engine import (
     WorkflowContext,
     WorkflowEngine,
-    WorkflowStep,
 )
 
 
@@ -33,13 +32,17 @@ class _MockSessionManager:
     async def get_session_context(self, user_id):
         return None
 
-    async def set_session_context(self, user_id, state, active_agent=None, task_id=None, ttl=1800):
+    async def set_session_context(
+        self, user_id, state, active_agent=None, task_id=None, ttl=1800
+    ):
         self.calls.append(("set", user_id, state, active_agent))
 
     async def clear_session_context(self, user_id):
         self.calls.append(("clear", user_id))
 
-    async def pause_session(self, user_id, active_agent, pause_ttl=300, pause_context=""):
+    async def pause_session(
+        self, user_id, active_agent, pause_ttl=300, pause_context=""
+    ):
         self.calls.append(("pause", user_id))
 
 
@@ -69,7 +72,9 @@ class TestExecuteWorkflowEmpty(unittest.TestCase):
     def test_empty_steps_returns_error(self):
         engine, _, _ = _make_engine()
         result = asyncio.run(
-            engine.execute_workflow({"summary": "x", "steps": []}, AgentMessage(user_id="u"))
+            engine.execute_workflow(
+                {"summary": "x", "steps": []}, AgentMessage(user_id="u")
+            )
         )
         self.assertFalse(result.success)
         self.assertIn("空", result.error)

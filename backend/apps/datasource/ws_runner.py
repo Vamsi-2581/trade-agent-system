@@ -98,9 +98,7 @@ class _WSEngine:
         finally:
             loop.close()
 
-    def run(
-        self, coro: Coroutine[Any, Any, T], timeout: Optional[float] = None
-    ) -> T:
+    def run(self, coro: Coroutine[Any, Any, T], timeout: Optional[float] = None) -> T:
         """在持久循环上运行协程（线程安全，阻塞至完成）。"""
         loop = self._loop
         if loop is None or loop.is_closed():
@@ -132,7 +130,9 @@ def run_ws_coroutine(
     return get_engine().run(coro, timeout)
 
 
-def _feed_data_age(store: Any, data_type: DataType, symbols: List[str]) -> Optional[float]:
+def _feed_data_age(
+    store: Any, data_type: DataType, symbols: List[str]
+) -> Optional[float]:
     """本供给负责符号的最新数据龄（秒）；尚无数据返回 None。
 
     存储键可能是 Binance 原始符号（``BTCUSDT``）或斜杠形式（``BTC/USDT``），
@@ -181,7 +181,9 @@ async def _supervise_feed(
                     market_type.value,
                 )
         except Exception as e:
-            logger.warning("[WSRunner] ensure_market_type(%s) failed: %s", market_type.value, e)
+            logger.warning(
+                "[WSRunner] ensure_market_type(%s) failed: %s", market_type.value, e
+            )
 
         # 1) (重)连接
         try:
@@ -219,9 +221,7 @@ async def _supervise_feed(
                     failed_subs.append(sym)
             except Exception as e:
                 failed_subs.append(sym)
-                logger.error(
-                    "[WSRunner] %s subscribe %s error: %s", source, sym, e
-                )
+                logger.error("[WSRunner] %s subscribe %s error: %s", source, sym, e)
         backoff = 2.0
         if failed_subs:
             logger.warning(
@@ -292,9 +292,7 @@ async def _supervise_feed(
                     # 兼容未实现 preserve_subs 参数的数据源
                     await ds.disconnect_websocket()
                 except Exception as e:
-                    logger.warning(
-                        "[WSRunner] %s disconnect error: %s", source, e
-                    )
+                    logger.warning("[WSRunner] %s disconnect error: %s", source, e)
                 # 换全新 HTTP 会话兜底：长运行进程中被跨循环调用/反复 RST
                 # 污染的 aiohttp 连接池，重连后可能持续"假活"（握手成功但
                 # transport 已死）。丢弃会话让下次 connect 惰性重建。

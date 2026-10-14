@@ -518,7 +518,9 @@ class BacktestEngine:
         sell_commission = gross_proceeds * self.commission_rate
         final_value = gross_proceeds - sell_commission
 
-        bh_return = float((final_value - self.initial_capital) / self.initial_capital * 100)
+        bh_return = float(
+            (final_value - self.initial_capital) / self.initial_capital * 100
+        )
 
         # 生成基准权益曲线
         bh_curve = []
@@ -526,10 +528,12 @@ class BacktestEngine:
         for point in self._equity_curve:
             ts = point["timestamp"]
             # 找到对应时间的价格（用收盘价线性近似）
-            bh_curve.append({
-                "timestamp": ts,
-                "equity": float(self.initial_capital * (1 + bh_return_decimal)),
-            })
+            bh_curve.append(
+                {
+                    "timestamp": ts,
+                    "equity": float(self.initial_capital * (1 + bh_return_decimal)),
+                }
+            )
 
         return {
             "name": "Buy & Hold",
@@ -578,6 +582,7 @@ async def _resolve_strategy_id(strategy_name: str) -> str | None:
     def _get_or_create():
         # sync_to_async 在独立线程中执行，连接刷新必须在函数内部
         from django.db import close_old_connections
+
         close_old_connections()
         obj, created = Strategy.objects.get_or_create(
             name=canonical,
@@ -640,6 +645,7 @@ async def _get_strategy_id_from_result(result_id: str) -> str | None:
     def _lookup():
         # sync_to_async 在独立线程中执行，连接刷新必须在函数内部
         from django.db import close_old_connections
+
         close_old_connections()
         result = BacktestResult.objects.get(id=result_id)
         return str(result.strategy_id)
@@ -754,12 +760,14 @@ async def save_backtest_result(
     """
     from apps.backtest.models import BacktestResult, BacktestTrade
     from apps.trading.models import Strategy
+
     @sync_to_async
     def _save():
         # 必须在 _save 内部刷新连接，因为 sync_to_async 在独立线程中执行，
         # 线程池线程的 DB 连接可能在长时间回测后被 pgbouncer 关闭。
         # 外部调用 close_old_connections() 只能刷新主线程的连接，对此线程无效。
         from django.db import close_old_connections
+
         close_old_connections()
         strategy = Strategy.objects.get(id=strategy_id)
 

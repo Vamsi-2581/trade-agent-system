@@ -4,14 +4,13 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('signal_monitor', '0002_add_strategy_fields'),
+        ("signal_monitor", "0002_add_strategy_fields"),
     ]
 
     operations = [
         migrations.RemoveIndex(
-            model_name='signalmonitor',
-            name='signal_moni_strateg_c4e166_idx',
+            model_name="signalmonitor",
+            name="signal_moni_strateg_c4e166_idx",
         ),
     ]

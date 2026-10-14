@@ -52,7 +52,11 @@ _RAW = "DOGEUSDT"
 
 
 def _resp(
-    *, status: str = "FILLED", filled: str = "100", avg: str | None = "1", oid: str = "77"
+    *,
+    status: str = "FILLED",
+    filled: str = "100",
+    avg: str | None = "1",
+    oid: str = "77",
 ) -> OrderResponse:
     return OrderResponse(
         exchange_order_id=oid,
@@ -65,7 +69,9 @@ def _resp(
 
 
 def _order(qty: str = "100", side: str = "sell", cid: str = "cid-1") -> ShardOrder:
-    return ShardOrder(client_order_id=cid, symbol=_SYMBOL, side=side, quantity=Decimal(qty))
+    return ShardOrder(
+        client_order_id=cid, symbol=_SYMBOL, side=side, quantity=Decimal(qty)
+    )
 
 
 def _order_fill(
@@ -202,7 +208,12 @@ class TestIsOpeningOrder(SimpleTestCase):
 
     def test_unknown_side_or_position_side_fails_closed(self):
         """认不出的方向按开仓处理：漏撤一张开仓单的代价比误撤一张平仓单大。"""
-        for side, pos in (("", "long"), ("buy_stop", "long"), ("buy", ""), ("buy", "flat")):
+        for side, pos in (
+            ("", "long"),
+            ("buy_stop", "long"),
+            ("buy", ""),
+            ("buy", "flat"),
+        ):
             with self.subTest(side=side, pos=pos):
                 self.assertTrue(is_opening_order(side, pos))
 
@@ -228,13 +239,13 @@ class TestPlaceReduceShard(SimpleTestCase):
 
     def test_retry_reuses_the_identical_client_order_id(self):
         """重发不消耗新的幂等配额，靠的就是单号**逐字相同**（CONTEXT.md:125）。"""
-        adapter = _FakeAdapter(
-            place_script=[RuntimeError("read timeout"), _resp()]
-        )
+        adapter = _FakeAdapter(place_script=[RuntimeError("read timeout"), _resp()])
 
         result = asyncio.run(place_reduce_shard(adapter, _order()))
 
-        self.assertEqual([r.client_order_id for r in adapter.placed], ["cid-1", "cid-1"])
+        self.assertEqual(
+            [r.client_order_id for r in adapter.placed], ["cid-1", "cid-1"]
+        )
         self.assertEqual(result.sends, 2)
         self.assertEqual(result.status, SHARD_STATUS_FILLED)
 
@@ -569,7 +580,9 @@ class TestCancelOpeningOrders(SimpleTestCase):
 
         report = asyncio.run(cancel_opening_orders(adapter, [_SYMBOL]))
 
-        self.assertEqual([r.order.exchange_order_id for r in report.cancelled], ["11", "12"])
+        self.assertEqual(
+            [r.order.exchange_order_id for r in report.cancelled], ["11", "12"]
+        )
         self.assertEqual(adapter.cancelled, [("11", _RAW), ("12", _RAW)])
 
     def test_a_raising_cancel_is_recorded_and_does_not_stop_the_rest(self):
@@ -744,16 +757,22 @@ class TestVolumeWeightedPrice(SimpleTestCase):
 class TestSlippagePct(SimpleTestCase):
     def test_selling_below_the_reference_is_adverse_positive(self):
         """平多成交低于基准 = 不利，记正。"""
-        self.assertEqual(slippage_pct(Decimal("100"), Decimal("99"), "sell"), Decimal("0.01"))
+        self.assertEqual(
+            slippage_pct(Decimal("100"), Decimal("99"), "sell"), Decimal("0.01")
+        )
 
     def test_selling_above_the_reference_is_favourable_negative(self):
-        self.assertEqual(slippage_pct(Decimal("100"), Decimal("101"), "sell"), Decimal("-0.01"))
+        self.assertEqual(
+            slippage_pct(Decimal("100"), Decimal("101"), "sell"), Decimal("-0.01")
+        )
 
     def test_buying_above_the_reference_is_adverse_positive(self):
         """平空成交高于基准 = 不利，同样记正——两边的「不利」必须同号，
         否则「要不要暂停自动减仓」这一问在两个方向上会得到相反的答案。
         """
-        self.assertEqual(slippage_pct(Decimal("100"), Decimal("101"), "buy"), Decimal("0.01"))
+        self.assertEqual(
+            slippage_pct(Decimal("100"), Decimal("101"), "buy"), Decimal("0.01")
+        )
 
     def test_missing_inputs_read_as_no_judgement(self):
         for ref, vwap in (

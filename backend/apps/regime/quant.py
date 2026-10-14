@@ -223,9 +223,7 @@ def label_series(
 
     # 三数组形式显式传 period：K 线 dict 形式下 `atr(history, period)` 在同时给了
     # `period=` 关键字时会静默取默认值，是个不该踩的坑。
-    atr = _pad_to(
-        _atr(highs, lows, closes, period=params.atr_period), n
-    )
+    atr = _pad_to(_atr(highs, lows, closes, period=params.atr_period), n)
     ema_fast = _pad_to(_ema(closes, params.ema_fast_period), n)
     ema_slow = _pad_to(_ema(closes, params.ema_slow_period), n)
 
@@ -255,7 +253,11 @@ def label_series(
         )
         slope_idx = i - lookback
         slope = None
-        if slope_idx >= 0 and np.isfinite(ema_fast[i]) and np.isfinite(ema_fast[slope_idx]):
+        if (
+            slope_idx >= 0
+            and np.isfinite(ema_fast[i])
+            and np.isfinite(ema_fast[slope_idx])
+        ):
             slope = float(ema_fast[i] - ema_fast[slope_idx])
 
         separation = None
@@ -272,7 +274,11 @@ def label_series(
 
         window_full = i + 1 >= qw and sample == qw
         rank = None
-        if window_full and available["atr_pct"] is not None and available["atr_pct"] > 0:
+        if (
+            window_full
+            and available["atr_pct"] is not None
+            and available["atr_pct"] > 0
+        ):
             rank = percentile_rank(atr_pct[start : i + 1], atr_pct[i])
 
         # 三个条件缺一不可：分位够长、斜率可算、间距可算。缺任何一项都落到未判定，

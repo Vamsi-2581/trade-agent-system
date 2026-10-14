@@ -126,9 +126,7 @@ class TestReconcileBranch(unittest.TestCase):
 
     def test_exchange_confirms_absent_marks_failed_and_alerts(self):
         """交易所确定没有这张单 → failed + 告警（这是唯一允许写 failed 的分支）"""
-        order, outcome, alert, captures = self._run(
-            _FakeAdapter(result=None)
-        )
+        order, outcome, alert, captures = self._run(_FakeAdapter(result=None))
 
         self.assertEqual(outcome.kind, "failed")
         self.assertEqual(captures.last.get("status"), "failed")
@@ -254,8 +252,12 @@ class TestSweepScope(unittest.TestCase):
         """两个账户同交易所 → 各查各的（按交易所名索引会互相顶掉，把活单查成不存在）"""
         acc_a = SimpleNamespace(id="acc-a", exchange="binance")
         acc_b = SimpleNamespace(id="acc-b", exchange="binance")
-        order_a = _order(id="order-a", exchange_account_id="acc-a", exchange_account=acc_a)
-        order_b = _order(id="order-b", exchange_account_id="acc-b", exchange_account=acc_b)
+        order_a = _order(
+            id="order-a", exchange_account_id="acc-a", exchange_account=acc_a
+        )
+        order_b = _order(
+            id="order-b", exchange_account_id="acc-b", exchange_account=acc_b
+        )
         adapter_a = _FakeAdapter(tag="acc-a", result=None)
         adapter_b = _FakeAdapter(tag="acc-b", error=OrderLookupUnavailableError("x"))
 
@@ -271,9 +273,7 @@ class TestSweepScope(unittest.TestCase):
                     "apps.trading.pending_reconcile.alert_order_anomaly",
                     new=AsyncMock(return_value=True),
                 ) as alert:
-                    result = asyncio.run(
-                        sweep_dangling_orders(accounts=[acc_a, acc_b])
-                    )
+                    result = asyncio.run(sweep_dangling_orders(accounts=[acc_a, acc_b]))
 
         self.assertEqual(result.scanned, 2)
         self.assertEqual(adapter_a.queries, [str(order_a.request_id)])
@@ -473,9 +473,7 @@ class TestAlertSeam(unittest.TestCase):
     def test_order_without_user_is_not_reported_as_delivered(self):
         from apps.trading.alerts import alert_order_anomaly
 
-        delivered = asyncio.run(
-            alert_order_anomaly(_order(user_id=None), "原因")
-        )
+        delivered = asyncio.run(alert_order_anomaly(_order(user_id=None), "原因"))
 
         self.assertFalse(delivered)
 
@@ -484,9 +482,7 @@ class TestAlertSeam(unittest.TestCase):
 
         with patch.object(alerts, "_persist", new=AsyncMock()) as persist:
             with patch.object(alerts, "_publish", new=AsyncMock()) as publish:
-                delivered = asyncio.run(
-                    alerts.alert_order_anomaly(_order(), "原因")
-                )
+                delivered = asyncio.run(alerts.alert_order_anomaly(_order(), "原因"))
 
         persist.assert_awaited_once()
         publish.assert_awaited_once()
@@ -500,9 +496,7 @@ class TestAlertSeam(unittest.TestCase):
             with patch.object(
                 alerts, "_publish", new=AsyncMock(side_effect=RuntimeError("down"))
             ):
-                delivered = asyncio.run(
-                    alerts.alert_order_anomaly(_order(), "原因")
-                )
+                delivered = asyncio.run(alerts.alert_order_anomaly(_order(), "原因"))
 
         self.assertFalse(delivered)
 

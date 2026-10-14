@@ -111,8 +111,14 @@ class TestMissingPublishedTimeIsNotADropReason(TestCase):
 class TestOrderingIsNewestFirst(TestCase):
     def test_default_ordering_is_newest_fetched_first(self):
         """默认排序钉住：预筛取「来得及反应」的那批时按时间倒序，靠的就是这里。"""
-        make(url="https://example.com/old", fetched_at=datetime(2026, 9, 20, tzinfo=timezone.utc))
-        make(url="https://example.com/new", fetched_at=datetime(2026, 9, 22, tzinfo=timezone.utc))
+        make(
+            url="https://example.com/old",
+            fetched_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
+        )
+        make(
+            url="https://example.com/new",
+            fetched_at=datetime(2026, 9, 22, tzinfo=timezone.utc),
+        )
         self.assertEqual(
             [i.url for i in NewsItem.objects.all()],
             ["https://example.com/new", "https://example.com/old"],

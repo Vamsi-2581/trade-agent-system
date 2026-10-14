@@ -356,13 +356,13 @@ class LLMClient:
             TOOL_CALL_MAX_RETRIES,
             degradation_reason,
         )
-        
+
         # 降级：拼接工具描述到system prompt，让LLM输出JSON
         tool_desc = json.dumps(tools, ensure_ascii=False)
         fallback_system = (
-            f'{system}\n\n可用工具（如需使用，必须以 JSON 输出 '
+            f"{system}\n\n可用工具（如需使用，必须以 JSON 输出 "
             f'{{"tool": "name", "args": {{...}}}}。'
-            f'禁止输出 XML/DSML 等标记格式的工具调用。）:\n{tool_desc}'
+            f"禁止输出 XML/DSML 等标记格式的工具调用。）:\n{tool_desc}"
         )
         # 将完整对话历史格式化（不仅取最后一条），让LLM在多轮工具调用中也能看到上下文
         conversation_parts = []
@@ -820,8 +820,11 @@ class LLMToolResponse:
     """chat_with_tools的返回值"""
 
     def __init__(
-        self, content: str = "", tool_calls: list[ToolCallRequest] | None = None,
-        reasoning_content: str = "", degraded: bool = False,
+        self,
+        content: str = "",
+        tool_calls: list[ToolCallRequest] | None = None,
+        reasoning_content: str = "",
+        degraded: bool = False,
         degradation_reason: str = "",
     ):
         self.content = content

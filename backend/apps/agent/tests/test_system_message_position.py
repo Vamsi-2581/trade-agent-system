@@ -36,9 +36,9 @@ async def _compressed_history() -> list[dict]:
         entries.append({"role": "agent", "text": f"A{i} " + "y" * 20, "ts": i + 1})
     await log.append(entries)
     history = await log.get()
-    assert any(
-        e.get("role") == "system" and e.get("compressed") for e in history
-    ), "前置条件：历史中应存在压缩摘要条目"
+    assert any(e.get("role") == "system" and e.get("compressed") for e in history), (
+        "前置条件：历史中应存在压缩摘要条目"
+    )
     return history
 
 

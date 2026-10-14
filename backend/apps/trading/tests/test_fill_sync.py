@@ -196,7 +196,8 @@ class TestFillSyncLoop(unittest.TestCase):
     def test_sync_no_change_skips_update(self, mock_order_mgr):
         """状态与数量无变化 → 不写库（避免无意义更新）。"""
         order = _fake_order(
-            status="filled", filled_quantity=Decimal("100"),
+            status="filled",
+            filled_quantity=Decimal("100"),
             avg_fill_price=Decimal("0.1099"),
         )
         mock_order_mgr.filter.return_value.select_related.return_value = [order]

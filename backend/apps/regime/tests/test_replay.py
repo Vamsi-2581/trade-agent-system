@@ -79,7 +79,9 @@ def row(
     }
 
 
-def ref(decision_id: int, strategy_id: int = 1, regime: str = DOWNTREND) -> replay.DecisionRef:
+def ref(
+    decision_id: int, strategy_id: int = 1, regime: str = DOWNTREND
+) -> replay.DecisionRef:
     return replay.DecisionRef(id=decision_id, strategy_id=strategy_id, regime=regime)
 
 
@@ -111,9 +113,7 @@ class TestReviewVerdict(SimpleTestCase):
 
     def test_missing_cell_is_still_neutral(self):
         """那一格没了（整条策略的回测全被排除）不是「变成适用了」。"""
-        self.assertEqual(
-            replay.review_verdict(None), ReviewVerdict.STILL_NEUTRAL.value
-        )
+        self.assertEqual(replay.review_verdict(None), ReviewVerdict.STILL_NEUTRAL.value)
 
     def test_unknown_state_value_falls_back_to_still_neutral(self):
         """性质 3：词表漂移（出现一个没见过的状态）时绝不能读成「依据失效」。"""
@@ -169,9 +169,7 @@ class TestReviewVerdict(SimpleTestCase):
 
     def test_needs_review_keeps_still_unfit(self):
         """性质 5：冲突格子照常判「仍不适用」，只是标记如实带出来。"""
-        conflicts = row(
-            sl.STATE_UNFIT, reason="direction_conflict", needs_review=True
-        )
+        conflicts = row(sl.STATE_UNFIT, reason="direction_conflict", needs_review=True)
         self.assertEqual(
             replay.review_verdict(conflicts), ReviewVerdict.STILL_UNFIT.value
         )
@@ -257,7 +255,9 @@ class TestPlanReviews(SimpleTestCase):
         cells = {(1, DOWNTREND): row(sl.STATE_FIT)}
         (review,) = replay.plan_reviews([ref(11)], cells)
         self.assertTrue(review.invalidated)
-        unchanged = replay.plan_reviews([ref(11)], {(1, DOWNTREND): row(sl.STATE_UNFIT)})
+        unchanged = replay.plan_reviews(
+            [ref(11)], {(1, DOWNTREND): row(sl.STATE_UNFIT)}
+        )
         self.assertFalse(unchanged[0].invalidated)
 
 
@@ -311,9 +311,7 @@ class TestFormatAlert(SimpleTestCase):
         self.assertNotIn(DOWNTREND, message)
 
     def test_falls_back_to_the_id_when_there_is_no_name(self):
-        message = replay.format_alert(
-            [{"strategy_id": "abc", "regime": DOWNTREND}]
-        )
+        message = replay.format_alert([{"strategy_id": "abc", "regime": DOWNTREND}])
         self.assertIn("abc", message)
 
     def test_counts_the_invalidated_ones(self):

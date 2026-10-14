@@ -116,18 +116,24 @@ def snapshot_daily_equity(self) -> dict:
         # 而「今日判定缺失」正是日报要写出来的话；保持上一有效状态的降级由判定的
         # stale_candles / no_candles 收场承担（见 apps.regime.judgement）。
         logger.error(
-            "[snapshot_daily_equity] 日线续拉失败，判定按库内现状继续: %s", e, exc_info=True
+            "[snapshot_daily_equity] 日线续拉失败，判定按库内现状继续: %s",
+            e,
+            exc_info=True,
         )
     except ValueError as e:
         # 表为空：冷启动回填还没跑，是状态问题不是故障；判定的 no_candles 收场会说出来
-        logger.warning("[snapshot_daily_equity] 日线表为空，跳过续拉（需人工回填）: %s", e)
+        logger.warning(
+            "[snapshot_daily_equity] 日线表为空，跳过续拉（需人工回填）: %s", e
+        )
     else:
         # 日期序列化成 ISO 字符串：返回值进 Celery 结果，须恒为 JSON 安全
         payload["candles"] = {
             "created": candle_report.created,
             "updated": candle_report.updated,
             "unchanged": candle_report.unchanged,
-            "last_date": candle_report.last_date.isoformat() if candle_report.last_date else None,
+            "last_date": candle_report.last_date.isoformat()
+            if candle_report.last_date
+            else None,
         }
         # 无新数据的一轮（日频运行最常见的一支）不落日志，免得 5 分钟一条刷屏
         if candle_report.wrote:
@@ -215,7 +221,9 @@ def _record_shadow(payload: dict) -> dict:
             payload.get("regime") or {}, payload.get("deactivation") or {}
         )
     except Exception as e:  # noqa: BLE001
-        logger.error("[snapshot_daily_equity] Shadow 记录写入失败: %s", e, exc_info=True)
+        logger.error(
+            "[snapshot_daily_equity] Shadow 记录写入失败: %s", e, exc_info=True
+        )
         raise
     finally:
         # 长时间运行/反复调度的任务必须自己收掉 DB 连接，否则连接会攒在 worker 上

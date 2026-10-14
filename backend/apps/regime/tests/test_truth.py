@@ -64,7 +64,9 @@ class TestInterval(SimpleTestCase):
         """档位只认枚举。传字符串进来的话，`==` 在 str Enum 上会「碰巧」成立一部分，
         而那正是最难查的一类错。"""
         with self.assertRaises(truth.TruthInputError):
-            truth.Interval(start=_d("2024-01-05"), end=_d("2024-01-06"), regime="downtrend")
+            truth.Interval(
+                start=_d("2024-01-05"), end=_d("2024-01-06"), regime="downtrend"
+            )
 
     def test_each_day_is_inclusive(self):
         self.assertEqual(
@@ -152,7 +154,9 @@ class TestSystematicMisdirection(SimpleTestCase):
     """性质 3：单向，一次即不达标（第 164 条）。"""
 
     def _one(self, human: BaseRegime, algo: BaseRegime):
-        return truth.tally([_iv("2024-01-05", "2024-01-05", human)], {_d("2024-01-05"): algo})
+        return truth.tally(
+            [_iv("2024-01-05", "2024-01-05", human)], {_d("2024-01-05"): algo}
+        )
 
     def test_extreme_read_as_calm_is_misdirection(self):
         for extreme in (VOL, DOWN):
@@ -216,7 +220,8 @@ class TestNewsEscalatedDays(SimpleTestCase):
         self.assertEqual(data.counted, 2, "只有没被抬升的那两天进分母")
         self.assertEqual(data.days, 3)
         self.assertEqual(
-            data.days, data.conflict_days + data.escalated + data.counted,
+            data.days,
+            data.conflict_days + data.escalated + data.counted,
             "四摊互斥：这几个数会被人加起来验算",
         )
 
@@ -226,7 +231,9 @@ class TestNewsEscalatedDays(SimpleTestCase):
         tags = {_d("2024-01-05"): CALM}
         before = truth.tally(intervals, tags)
         self.assertEqual(before.misdirected, 1)
-        after = truth.tally(intervals, tags, in_force={_d("2024-01-05"): self.ESCALATED})
+        after = truth.tally(
+            intervals, tags, in_force={_d("2024-01-05"): self.ESCALATED}
+        )
         self.assertEqual(after.misdirected, 0)
         self.assertEqual(after.counted, 0)
 
@@ -272,7 +279,10 @@ class TestNewsEscalatedDays(SimpleTestCase):
     def test_a_conflict_day_is_not_also_an_escalated_day(self):
         """冲突优先：人工真值自己都没定义的那天，说「不能比」的理由更强，也只该记一次。"""
         data = truth.tally(
-            [_iv("2024-01-05", "2024-01-05", VOL), _iv("2024-01-05", "2024-01-05", CALM)],
+            [
+                _iv("2024-01-05", "2024-01-05", VOL),
+                _iv("2024-01-05", "2024-01-05", CALM),
+            ],
             {},
             in_force={_d("2024-01-05"): self.ESCALATED},
         )
@@ -291,7 +301,9 @@ class TestNewsEscalatedDays(SimpleTestCase):
 
     def test_by_default_nothing_is_excluded(self):
         """不传 `in_force` 就是没有判定链的时代：与抬升这件事被引入之前逐字一致。"""
-        data = truth.tally([_iv("2024-01-05", "2024-01-05", VOL)], {_d("2024-01-05"): VOL})
+        data = truth.tally(
+            [_iv("2024-01-05", "2024-01-05", VOL)], {_d("2024-01-05"): VOL}
+        )
         self.assertEqual((data.escalated, data.matched, data.met), (0, 1, True))
 
 

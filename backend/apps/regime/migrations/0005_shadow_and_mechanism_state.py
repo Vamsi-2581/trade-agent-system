@@ -5,57 +5,192 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0004_pool_and_decisions'),
+        ("regime", "0004_pool_and_decisions"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='RegimeMechanismSwitch',
+            name="RegimeMechanismSwitch",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('from_mode', models.CharField(choices=[('shadow', 'Shadow（只记录，不执行）'), ('executing', '执行态')], max_length=16, verbose_name='切换前档位')),
-                ('to_mode', models.CharField(choices=[('shadow', 'Shadow（只记录，不执行）'), ('executing', '执行态')], max_length=16, verbose_name='切换后档位')),
-                ('at', models.DateTimeField(db_index=True, verbose_name='切换时刻（UTC）')),
-                ('actor_kind', models.CharField(choices=[('cli', '命令行'), ('task', '定时任务')], max_length=16, verbose_name='触发方类别')),
-                ('actor_name', models.CharField(max_length=128, verbose_name='触发方')),
-                ('reason', models.TextField(verbose_name='切换原因（必填）')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "from_mode",
+                    models.CharField(
+                        choices=[
+                            ("shadow", "Shadow（只记录，不执行）"),
+                            ("executing", "执行态"),
+                        ],
+                        max_length=16,
+                        verbose_name="切换前档位",
+                    ),
+                ),
+                (
+                    "to_mode",
+                    models.CharField(
+                        choices=[
+                            ("shadow", "Shadow（只记录，不执行）"),
+                            ("executing", "执行态"),
+                        ],
+                        max_length=16,
+                        verbose_name="切换后档位",
+                    ),
+                ),
+                (
+                    "at",
+                    models.DateTimeField(db_index=True, verbose_name="切换时刻（UTC）"),
+                ),
+                (
+                    "actor_kind",
+                    models.CharField(
+                        choices=[("cli", "命令行"), ("task", "定时任务")],
+                        max_length=16,
+                        verbose_name="触发方类别",
+                    ),
+                ),
+                ("actor_name", models.CharField(max_length=128, verbose_name="触发方")),
+                ("reason", models.TextField(verbose_name="切换原因（必填）")),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
             ],
             options={
-                'verbose_name': '机制档位切换记录',
-                'verbose_name_plural': '机制档位切换记录',
-                'db_table': 'regime_mechanism_switches',
-                'ordering': ['-at', '-id'],
+                "verbose_name": "机制档位切换记录",
+                "verbose_name_plural": "机制档位切换记录",
+                "db_table": "regime_mechanism_switches",
+                "ordering": ["-at", "-id"],
             },
         ),
         migrations.CreateModel(
-            name='ShadowDailyRecord',
+            name="ShadowDailyRecord",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('symbol', models.CharField(max_length=32, verbose_name='标的')),
-                ('run_day', models.DateField(db_index=True, verbose_name='运行日（业务时区的自然日）')),
-                ('base_regime', models.CharField(blank=True, choices=[('high_vol', '高波动'), ('downtrend', '下行趋势'), ('uptrend', '上行趋势'), ('range', '箱体震荡')], default='', max_length=16, verbose_name='基础阶段（内联副本）')),
-                ('escalation', models.CharField(blank=True, choices=[('', '无'), ('news', '资讯抬升')], default='', max_length=16, verbose_name='抬升标志（内联副本）')),
-                ('effective_regime', models.CharField(blank=True, choices=[('high_vol', '高波动'), ('downtrend', '下行趋势'), ('uptrend', '上行趋势'), ('range', '箱体震荡')], default='', max_length=16, verbose_name='生效阶段（内联副本）')),
-                ('derivation_skipped', models.CharField(blank=True, default='', max_length=32, verbose_name='推导收场（空 = 正常推导）')),
-                ('note', models.TextField(blank=True, default='', verbose_name='给人看的一句话（为什么这一行是这样）')),
-                ('suggestions', models.JSONField(default=list, verbose_name='当天的建议清单（冻结）')),
-                ('suggested_count', models.IntegerField(default=0, verbose_name='建议条数（本行清单长度的副本）')),
-                ('executed', models.BooleanField(default=False, verbose_name='实际是否执行（第①段恒为否）')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
-                ('judgement', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='shadow_records', to='regime.regimejudgement', verbose_name='三值所抄的那条判定（下钻用）')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("symbol", models.CharField(max_length=32, verbose_name="标的")),
+                (
+                    "run_day",
+                    models.DateField(
+                        db_index=True, verbose_name="运行日（业务时区的自然日）"
+                    ),
+                ),
+                (
+                    "base_regime",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("high_vol", "高波动"),
+                            ("downtrend", "下行趋势"),
+                            ("uptrend", "上行趋势"),
+                            ("range", "箱体震荡"),
+                        ],
+                        default="",
+                        max_length=16,
+                        verbose_name="基础阶段（内联副本）",
+                    ),
+                ),
+                (
+                    "escalation",
+                    models.CharField(
+                        blank=True,
+                        choices=[("", "无"), ("news", "资讯抬升")],
+                        default="",
+                        max_length=16,
+                        verbose_name="抬升标志（内联副本）",
+                    ),
+                ),
+                (
+                    "effective_regime",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("high_vol", "高波动"),
+                            ("downtrend", "下行趋势"),
+                            ("uptrend", "上行趋势"),
+                            ("range", "箱体震荡"),
+                        ],
+                        default="",
+                        max_length=16,
+                        verbose_name="生效阶段（内联副本）",
+                    ),
+                ),
+                (
+                    "derivation_skipped",
+                    models.CharField(
+                        blank=True,
+                        default="",
+                        max_length=32,
+                        verbose_name="推导收场（空 = 正常推导）",
+                    ),
+                ),
+                (
+                    "note",
+                    models.TextField(
+                        blank=True,
+                        default="",
+                        verbose_name="给人看的一句话（为什么这一行是这样）",
+                    ),
+                ),
+                (
+                    "suggestions",
+                    models.JSONField(
+                        default=list, verbose_name="当天的建议清单（冻结）"
+                    ),
+                ),
+                (
+                    "suggested_count",
+                    models.IntegerField(
+                        default=0, verbose_name="建议条数（本行清单长度的副本）"
+                    ),
+                ),
+                (
+                    "executed",
+                    models.BooleanField(
+                        default=False, verbose_name="实际是否执行（第①段恒为否）"
+                    ),
+                ),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
+                (
+                    "judgement",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="shadow_records",
+                        to="regime.regimejudgement",
+                        verbose_name="三值所抄的那条判定（下钻用）",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': 'Shadow 每日记录',
-                'verbose_name_plural': 'Shadow 每日记录',
-                'db_table': 'regime_shadow_daily_records',
-                'ordering': ['symbol', '-run_day'],
+                "verbose_name": "Shadow 每日记录",
+                "verbose_name_plural": "Shadow 每日记录",
+                "db_table": "regime_shadow_daily_records",
+                "ordering": ["symbol", "-run_day"],
             },
         ),
         migrations.AddConstraint(
-            model_name='shadowdailyrecord',
-            constraint=models.UniqueConstraint(fields=('symbol', 'run_day'), name='uniq_shadow_daily_symbol_run_day'),
+            model_name="shadowdailyrecord",
+            constraint=models.UniqueConstraint(
+                fields=("symbol", "run_day"), name="uniq_shadow_daily_symbol_run_day"
+            ),
         ),
     ]

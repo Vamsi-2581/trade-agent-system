@@ -121,9 +121,7 @@ class Command(BaseCommand):
         # 又要按账户+品种过滤），而这张表在单账户量级下面是几百行——直接全取再按
         # (account, symbol) 分组，比让数据库做几百次小查询便宜得多。
         all_rows = list(
-            Order.objects.filter(
-                status="filled", avg_fill_price__isnull=False
-            )
+            Order.objects.filter(status="filled", avg_fill_price__isnull=False)
             .order_by("created_at")
             .values(
                 "id",
@@ -179,9 +177,7 @@ class Command(BaseCommand):
 
         if not apply_:
             self.stdout.write(
-                self.style.WARNING(
-                    "空跑：一行都没写。确认清单无误后加 --apply 重跑"
-                )
+                self.style.WARNING("空跑：一行都没写。确认清单无误后加 --apply 重跑")
             )
             return
 
@@ -195,9 +191,7 @@ class Command(BaseCommand):
             self.stdout.write("没有需要改写的行——库中值已与当前成本法一致")
             return
 
-        self.stdout.write(
-            f"{'改写' if apply_ else '将改写'} {len(changed)} 笔平仓单："
-        )
+        self.stdout.write(f"{'改写' if apply_ else '将改写'} {len(changed)} 笔平仓单：")
         self.stdout.write(
             f"  {'成交时刻':<20} {'品种':<10} {'数量':>14} {'平仓价':>10} "
             f"{'库中':>16} {'重算':>16} {'Δ':>14}"
@@ -226,9 +220,7 @@ class Command(BaseCommand):
 
         sessions = {c[0].live_session_id for c in changed if c[0].live_session_id}
         if len(sessions) > 1:
-            self.stdout.write(
-                "  涉及多条会话，逐条列出："
-            )
+            self.stdout.write("  涉及多条会话，逐条列出：")
             for sid in sorted(sessions, key=str):
                 n = sum(1 for c in changed if c[0].live_session_id == sid)
                 self.stdout.write(f"    {sid}：{n} 笔")
@@ -238,9 +230,7 @@ class Command(BaseCommand):
     def _apply(self, changed: list[tuple]) -> None:
         for order, _old, new in changed:
             Order.objects.filter(id=order.id).update(realized_pnl=new)
-        self.stdout.write(
-            self.style.SUCCESS(f"已更新 {len(changed)} 笔 realized_pnl")
-        )
+        self.stdout.write(self.style.SUCCESS(f"已更新 {len(changed)} 笔 realized_pnl"))
 
     def _reset_equity(self, changed: list[tuple]) -> None:
         """把受影响的会话权益按「本次重算的增量」调整。
@@ -273,9 +263,7 @@ class Command(BaseCommand):
             if delta == 0:
                 continue
             session = (
-                LiveSession.objects.select_related("strategy")
-                .filter(id=sid)
-                .first()
+                LiveSession.objects.select_related("strategy").filter(id=sid).first()
             )
             if session is None:
                 self.stdout.write(

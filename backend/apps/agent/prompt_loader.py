@@ -116,7 +116,9 @@ class PromptLoader:
             if meta and "name" in meta:
                 # frontmatter 中没有 description 时，fallback 到 body 前 5 行
                 if "description" not in meta:
-                    description_lines = [line for line in body.splitlines() if line.strip()][:5]
+                    description_lines = [
+                        line for line in body.splitlines() if line.strip()
+                    ][:5]
                     meta["description"] = "\n".join(description_lines)
                 agents.append(meta)
         return agents

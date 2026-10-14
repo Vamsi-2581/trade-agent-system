@@ -56,7 +56,10 @@ class TestRiskCheckIsScopedToTheOrderAccount(unittest.IsolatedAsyncioTestCase):
         self.small = _adapter("100000")  # 5 万 / 10 万 = 50% > 20% → 拒
         self.big = _adapter("1000000")  # 5 万 / 100 万 = 5%  → 过
         self.executor = OrderExecutor()
-        self.executor._account_adapters = {"acct-small": self.small, "acct-big": self.big}
+        self.executor._account_adapters = {
+            "acct-small": self.small,
+            "acct-big": self.big,
+        }
 
     def tearDown(self):
         OrderExecutor._instance = None

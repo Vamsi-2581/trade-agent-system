@@ -155,7 +155,9 @@ class MemoryDataStore:
         Returns:
             是否成功存储
         """
-        logger.debug(f"[DataStore] store {data_type} {symbol} ts={data.get('timestamp')}")
+        logger.debug(
+            f"[DataStore] store {data_type} {symbol} ts={data.get('timestamp')}"
+        )
         # 生成键
         if key is None:
             timestamp = data.get("timestamp", datetime.now())

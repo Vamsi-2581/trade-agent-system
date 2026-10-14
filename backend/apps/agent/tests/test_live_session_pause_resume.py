@@ -151,7 +151,9 @@ class TestPauseResumeViews:
         assert resp.status_code == 200
         session.refresh_from_db()
         assert session.status == "paused"
-        fm.stop_strategy_runner.assert_awaited_once_with(live_session_id=str(session.id))
+        fm.stop_strategy_runner.assert_awaited_once_with(
+            live_session_id=str(session.id)
+        )
 
     def test_resume_starts_runner_again(self):
         user = _user("resume-owner")

@@ -1,4 +1,5 @@
 """Celery signal handlers for automatic Django DB connection cleanup."""
+
 from celery.signals import task_postrun, task_prerun, worker_process_init
 from django.db import close_old_connections, connections
 

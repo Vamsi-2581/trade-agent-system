@@ -467,11 +467,19 @@ class TestTheSuggestionWritten(_Fixture):
     def test_rerunning_confirms_without_rewriting_the_frozen_evidence(self):
         """同一个结论第二次推导出来：不新建行、不改证据、不动 `first_decided_at`。"""
         generation = make_generation(
-            cells=((self.alpha, DOWNTREND, {"state": sl.STATE_UNFIT, "evidence": {"trades": 7}}),)
+            cells=(
+                (
+                    self.alpha,
+                    DOWNTREND,
+                    {"state": sl.STATE_UNFIT, "evidence": {"trades": 7}},
+                ),
+            )
         )
         self.decide()
         # 换代之后那一格的依据变了，但已经冻下的那一行不该跟着动。
-        RegimePoolCell.objects.filter(rebuild=generation).update(evidence={"trades": 999})
+        RegimePoolCell.objects.filter(rebuild=generation).update(
+            evidence={"trades": 999}
+        )
 
         later = days(1)
         summary = dru.run_deactivation(now=later, params=LIFE)
@@ -485,8 +493,16 @@ class TestTheSuggestionWritten(_Fixture):
     def test_a_cell_from_another_strategy_does_not_leak_into_the_decision(self):
         make_generation(
             cells=(
-                (self.alpha, DOWNTREND, {"state": sl.STATE_UNFIT, "evidence": {"trades": 1}}),
-                (self.beta, DOWNTREND, {"state": sl.STATE_UNFIT, "evidence": {"trades": 2}}),
+                (
+                    self.alpha,
+                    DOWNTREND,
+                    {"state": sl.STATE_UNFIT, "evidence": {"trades": 1}},
+                ),
+                (
+                    self.beta,
+                    DOWNTREND,
+                    {"state": sl.STATE_UNFIT, "evidence": {"trades": 2}},
+                ),
             )
         )
         self.decide()
@@ -503,11 +519,23 @@ class TestTheSuggestionWritten(_Fixture):
         """
         gen1 = make_generation(
             finished_at=days(-1),
-            cells=((self.alpha, DOWNTREND, {"state": sl.STATE_UNFIT, "evidence": {"trades": 1}}),),
+            cells=(
+                (
+                    self.alpha,
+                    DOWNTREND,
+                    {"state": sl.STATE_UNFIT, "evidence": {"trades": 1}},
+                ),
+            ),
         )
         gen2 = make_generation(
             finished_at=NOW,
-            cells=((self.alpha, DOWNTREND, {"state": sl.STATE_UNFIT, "evidence": {"trades": 2}}),),
+            cells=(
+                (
+                    self.alpha,
+                    DOWNTREND,
+                    {"state": sl.STATE_UNFIT, "evidence": {"trades": 2}},
+                ),
+            ),
         )
         with patch.object(pool_rebuild, "current_generation", side_effect=[gen1, gen2]):
             summary = self.decide()
@@ -633,7 +661,9 @@ class TestExemptionClosing(_Fixture):
         写成「阶段离开」——那会把一条正常到期的记录说成一次观测。"""
         self.judged()
         make_generation(cells=((self.alpha, DOWNTREND, {"state": sl.STATE_FIT}),))
-        exemption = self.exempt(self.alpha, regime=UPTREND, granted_at=days(-20), expires_at=days(-1))
+        exemption = self.exempt(
+            self.alpha, regime=UPTREND, granted_at=days(-20), expires_at=days(-1)
+        )
         summary = self.decide()
         exemption.refresh_from_db()
         self.assertIsNone(exemption.closed_at)

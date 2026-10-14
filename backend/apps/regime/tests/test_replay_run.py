@@ -50,7 +50,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import OutputWrapper
 from django.test import TestCase
 
-from apps.regime import pool, pool_rebuild, replay_run
+from apps.regime import pool, replay_run
 from apps.regime import slice as sl
 from apps.regime.models import (
     DecisionStatus,
@@ -181,7 +181,9 @@ class _Fixture(TestCase):
             reviewed_at=at,
         )
 
-    def session(self, strategy, user=None, *, mode: str = "live", status: str = "running"):
+    def session(
+        self, strategy, user=None, *, mode: str = "live", status: str = "running"
+    ):
         from apps.trading.models import LiveSession
 
         return LiveSession.objects.create(
@@ -211,7 +213,9 @@ class TestNothingToReplay(_Fixture):
     def test_no_generation_is_its_own_outcome(self):
         """一代池化表都没有 = **没法问**，与「没有要问的决策」分开。"""
         summary = self.replay()
-        self.assertEqual(summary["skipped"], replay_run.deactivation_run.SKIPPED_NO_GENERATION)
+        self.assertEqual(
+            summary["skipped"], replay_run.deactivation_run.SKIPPED_NO_GENERATION
+        )
         self.assertTrue(summary["note"])
         self.assertEqual((summary["written"], summary["already"]), (0, 0))
 
@@ -457,7 +461,9 @@ class TestWhatIsWritten(_Fixture):
         summary = self.replay()
         self.assertEqual(summary["generation_id"], current.id)
         # 读到的是当前代（unfit）而不是 building 那代（fit）——否则会误报「依据失效」。
-        self.assertEqual(DeactivationReview.objects.get().verdict, ReviewVerdict.STILL_UNFIT.value)
+        self.assertEqual(
+            DeactivationReview.objects.get().verdict, ReviewVerdict.STILL_UNFIT.value
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -627,8 +633,14 @@ class TestTheCommandAlerts(_Fixture):
         self.session(self.alpha, user=self.other)
         send = AsyncMock(return_value=True)
         cmd = self.command()
-        with patch.object(replay_run, "run_replay", return_value=self.summary([self.item(self.alpha)])), \
-                patch("apps.trading.alerts.notify_user", send):
+        with (
+            patch.object(
+                replay_run,
+                "run_replay",
+                return_value=self.summary([self.item(self.alpha)]),
+            ),
+            patch("apps.trading.alerts.notify_user", send),
+        ):
             cmd._replay_decisions()
         self.assertEqual(send.await_count, 2)
         self.assertEqual(
@@ -644,8 +656,14 @@ class TestTheCommandAlerts(_Fixture):
         否则一次没送出去的告警与一次送出去的告警长得一模一样。"""
         send = AsyncMock(return_value=True)
         cmd = self.command()
-        with patch.object(replay_run, "run_replay", return_value=self.summary([self.item(self.alpha)])), \
-                patch("apps.trading.alerts.notify_user", send):
+        with (
+            patch.object(
+                replay_run,
+                "run_replay",
+                return_value=self.summary([self.item(self.alpha)]),
+            ),
+            patch("apps.trading.alerts.notify_user", send),
+        ):
             cmd._replay_decisions()
         send.assert_not_awaited()
         out = cmd.stdout.getvalue()
@@ -656,8 +674,17 @@ class TestTheCommandAlerts(_Fixture):
     def test_a_failed_delivery_is_reported_and_does_not_raise(self):
         self.session(self.alpha, user=self.user)
         cmd = self.command()
-        with patch.object(replay_run, "run_replay", return_value=self.summary([self.item(self.alpha)])), \
-                patch("apps.trading.alerts.notify_user", AsyncMock(side_effect=RuntimeError("boom"))):
+        with (
+            patch.object(
+                replay_run,
+                "run_replay",
+                return_value=self.summary([self.item(self.alpha)]),
+            ),
+            patch(
+                "apps.trading.alerts.notify_user",
+                AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+        ):
             cmd._replay_decisions()  # 不抛
         self.assertIn("投递异常", cmd.stderr.getvalue())
 
@@ -665,8 +692,14 @@ class TestTheCommandAlerts(_Fixture):
         """`notify_user` 拿不到接收人时返回 `False`（「没有接收人就不算告警」）。"""
         self.session(self.alpha, user=self.user)
         cmd = self.command()
-        with patch.object(replay_run, "run_replay", return_value=self.summary([self.item(self.alpha)])), \
-                patch("apps.trading.alerts.notify_user", AsyncMock(return_value=False)):
+        with (
+            patch.object(
+                replay_run,
+                "run_replay",
+                return_value=self.summary([self.item(self.alpha)]),
+            ),
+            patch("apps.trading.alerts.notify_user", AsyncMock(return_value=False)),
+        ):
             cmd._replay_decisions()
         self.assertIn("未送达", cmd.stderr.getvalue())
         self.assertNotIn("已通知", cmd.stdout.getvalue())
@@ -674,8 +707,10 @@ class TestTheCommandAlerts(_Fixture):
     def test_nothing_invalidated_means_no_alert_at_all(self):
         send = AsyncMock(return_value=True)
         cmd = self.command()
-        with patch.object(replay_run, "run_replay", return_value=self.summary([])), \
-                patch("apps.trading.alerts.notify_user", send):
+        with (
+            patch.object(replay_run, "run_replay", return_value=self.summary([])),
+            patch("apps.trading.alerts.notify_user", send),
+        ):
             cmd._replay_decisions()
         send.assert_not_awaited()
         self.assertIn("本轮没有新的重放", cmd.stdout.getvalue())
@@ -686,8 +721,10 @@ class TestTheCommandAlerts(_Fixture):
         summary["skipped"] = replay_run.deactivation_run.SKIPPED_NO_GENERATION
         summary["note"] = "还没有任何一代池化表，本轮没有新表可重放"
         cmd = self.command()
-        with patch.object(replay_run, "run_replay", return_value=summary), \
-                patch("apps.trading.alerts.notify_user", send):
+        with (
+            patch.object(replay_run, "run_replay", return_value=summary),
+            patch("apps.trading.alerts.notify_user", send),
+        ):
             cmd._replay_decisions()
         send.assert_not_awaited()
         self.assertIn("还没有任何一代池化表", cmd.stdout.getvalue())

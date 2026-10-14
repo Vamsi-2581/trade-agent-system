@@ -13,7 +13,6 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
 
 from apps.memory.protocols import Compressor
 from apps.memory.keys import MemoryKey
@@ -50,7 +49,9 @@ class RedisConversationLog:
         try:
             self._redis = RedisPool.get_client()
         except Exception as e:
-            logger.warning("RedisConversationLog: Redis unavailable, degenerate mode: %s", e)
+            logger.warning(
+                "RedisConversationLog: Redis unavailable, degenerate mode: %s", e
+            )
 
     # ====== 核心接口 ======
     async def append(
@@ -139,7 +140,9 @@ class RedisConversationLog:
         await self._save(compressed)
         logger.info(
             "ConversationLog compressed | user=%s | turns=%d → %d",
-            self._user_id, len(conv), len(compressed),
+            self._user_id,
+            len(conv),
+            len(compressed),
         )
         return compressed
 

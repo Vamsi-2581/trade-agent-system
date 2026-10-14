@@ -298,7 +298,9 @@ def test_close_never_enters_box():
 
 def test_min_duration_bars_gate_default_12():
     """默认门槛：11 根箱体被否且给出原因，12 根箱体通过。"""
-    short = [_OUT_HIGH] * 5 + [_IN] * 11 + [_OUT_LOW] * 10  # start 5 → end 15，duration 11
+    short = (
+        [_OUT_HIGH] * 5 + [_IN] * 11 + [_OUT_LOW] * 10
+    )  # start 5 → end 15，duration 11
     rejected = _detect(short)
     assert rejected["is_ranging"] is False
     assert "持续时间不足" in rejected["reason"]
@@ -345,14 +347,16 @@ def _tight_klines(closes, hi=100.40, lo=100.00):
     for i, c in enumerate(closes):
         m = i % 4
         if m == 0:  # 上沿 pivot
-            h, l = hi, 100.25
+            h, l = hi, 100.25  # noqa: E741
         elif m == 1:  # 下沿 pivot
-            h, l = 100.28, lo
+            h, l = 100.28, lo  # noqa: E741
         elif m == 2:
-            h, l = 100.22, 100.20
+            h, l = 100.22, 100.20  # noqa: E741
         else:
-            h, l = 100.25, 100.18
-        out.append({"open": (h + l) / 2, "high": h, "low": l, "close": c, "volume": 1000})
+            h, l = 100.25, 100.18  # noqa: E741
+        out.append(
+            {"open": (h + l) / 2, "high": h, "low": l, "close": c, "volume": 1000}
+        )
     return out
 
 

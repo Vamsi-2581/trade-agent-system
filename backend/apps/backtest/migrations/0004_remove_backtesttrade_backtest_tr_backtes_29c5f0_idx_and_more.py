@@ -35,7 +35,6 @@ def _no_reverse(apps, schema_editor):
     pass
 
 
-
 class Migration(migrations.Migration):
     dependencies = [
         ("backtest", "0003_add_ohlcv_and_indicators"),

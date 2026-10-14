@@ -5,160 +5,476 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0003_newsitem'),
-        ('trading', '0005_alter_order_status'),
+        ("regime", "0003_newsitem"),
+        ("trading", "0005_alter_order_status"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='RegimePoolRebuild',
+            name="RegimePoolRebuild",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('status', models.CharField(choices=[('building', '重算中'), ('ready', '已就绪'), ('failed', '失败')], max_length=16, verbose_name='状态')),
-                ('actor_kind', models.CharField(choices=[('cli', '命令行'), ('task', '定时任务')], max_length=16, verbose_name='触发方类别')),
-                ('actor_name', models.CharField(max_length=128, verbose_name='触发方')),
-                ('pool_version', models.IntegerField(verbose_name='池化口径版本')),
-                ('input_fingerprint', models.CharField(db_index=True, max_length=64, verbose_name='输入指纹')),
-                ('candidates', models.IntegerField(default=0, verbose_name='候选切片数')),
-                ('results_used', models.IntegerField(default=0, verbose_name='实际采用数')),
-                ('cells_total', models.IntegerField(default=0, verbose_name='格子总数')),
-                ('cells_changed', models.IntegerField(default=0, verbose_name='相对上一代变化的格子数')),
-                ('exclusions', models.JSONField(default=dict, verbose_name='排除计数（按原因）')),
-                ('started_at', models.DateTimeField(verbose_name='开始时刻')),
-                ('finished_at', models.DateTimeField(blank=True, null=True, verbose_name='结束时刻')),
-                ('failure', models.TextField(blank=True, default='', verbose_name='失败原因')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("building", "重算中"),
+                            ("ready", "已就绪"),
+                            ("failed", "失败"),
+                        ],
+                        max_length=16,
+                        verbose_name="状态",
+                    ),
+                ),
+                (
+                    "actor_kind",
+                    models.CharField(
+                        choices=[("cli", "命令行"), ("task", "定时任务")],
+                        max_length=16,
+                        verbose_name="触发方类别",
+                    ),
+                ),
+                ("actor_name", models.CharField(max_length=128, verbose_name="触发方")),
+                ("pool_version", models.IntegerField(verbose_name="池化口径版本")),
+                (
+                    "input_fingerprint",
+                    models.CharField(
+                        db_index=True, max_length=64, verbose_name="输入指纹"
+                    ),
+                ),
+                (
+                    "candidates",
+                    models.IntegerField(default=0, verbose_name="候选切片数"),
+                ),
+                (
+                    "results_used",
+                    models.IntegerField(default=0, verbose_name="实际采用数"),
+                ),
+                (
+                    "cells_total",
+                    models.IntegerField(default=0, verbose_name="格子总数"),
+                ),
+                (
+                    "cells_changed",
+                    models.IntegerField(
+                        default=0, verbose_name="相对上一代变化的格子数"
+                    ),
+                ),
+                (
+                    "exclusions",
+                    models.JSONField(default=dict, verbose_name="排除计数（按原因）"),
+                ),
+                ("started_at", models.DateTimeField(verbose_name="开始时刻")),
+                (
+                    "finished_at",
+                    models.DateTimeField(
+                        blank=True, null=True, verbose_name="结束时刻"
+                    ),
+                ),
+                (
+                    "failure",
+                    models.TextField(blank=True, default="", verbose_name="失败原因"),
+                ),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
             ],
             options={
-                'verbose_name': '池化表重算记录',
-                'verbose_name_plural': '池化表重算记录',
-                'db_table': 'regime_pool_rebuilds',
-                'ordering': ['-started_at', '-id'],
+                "verbose_name": "池化表重算记录",
+                "verbose_name_plural": "池化表重算记录",
+                "db_table": "regime_pool_rebuilds",
+                "ordering": ["-started_at", "-id"],
             },
         ),
         migrations.CreateModel(
-            name='ArchetypeOverride',
+            name="ArchetypeOverride",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('archetype', models.CharField(max_length=64, verbose_name='人工指定的原型')),
-                ('note', models.TextField(blank=True, default='', verbose_name='备注（为什么这么改）')),
-                ('created_by', models.CharField(max_length=128, verbose_name='修改人')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
-                ('updated_at', models.DateTimeField(auto_now=True, verbose_name='更新时间')),
-                ('strategy', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='regime_archetype_override', to='trading.strategy', verbose_name='策略')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "archetype",
+                    models.CharField(max_length=64, verbose_name="人工指定的原型"),
+                ),
+                (
+                    "note",
+                    models.TextField(
+                        blank=True, default="", verbose_name="备注（为什么这么改）"
+                    ),
+                ),
+                ("created_by", models.CharField(max_length=128, verbose_name="修改人")),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
+                (
+                    "updated_at",
+                    models.DateTimeField(auto_now=True, verbose_name="更新时间"),
+                ),
+                (
+                    "strategy",
+                    models.OneToOneField(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="regime_archetype_override",
+                        to="trading.strategy",
+                        verbose_name="策略",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': '策略原型人工覆盖',
-                'verbose_name_plural': '策略原型人工覆盖',
-                'db_table': 'regime_archetype_overrides',
-                'ordering': ['strategy'],
+                "verbose_name": "策略原型人工覆盖",
+                "verbose_name_plural": "策略原型人工覆盖",
+                "db_table": "regime_archetype_overrides",
+                "ordering": ["strategy"],
             },
         ),
         migrations.CreateModel(
-            name='DeactivationExemption',
+            name="DeactivationExemption",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('regime', models.CharField(choices=[('high_vol', '高波动'), ('downtrend', '下行趋势'), ('uptrend', '上行趋势'), ('range', '箱体震荡')], max_length=16, verbose_name='阶段')),
-                ('granted_at', models.DateTimeField(verbose_name='发出时刻')),
-                ('expires_at', models.DateTimeField(db_index=True, verbose_name='到期时刻（写入时按当时配置换算）')),
-                ('granted_by', models.CharField(max_length=128, verbose_name='发出人')),
-                ('note', models.TextField(blank=True, default='', verbose_name='备注')),
-                ('closed_at', models.DateTimeField(blank=True, null=True, verbose_name='提前失效时刻（阶段离开）')),
-                ('closed_reason', models.CharField(blank=True, default='', max_length=32, verbose_name='提前失效原因')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
-                ('strategy', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='regime_deactivation_exemptions', to='trading.strategy', verbose_name='策略')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "regime",
+                    models.CharField(
+                        choices=[
+                            ("high_vol", "高波动"),
+                            ("downtrend", "下行趋势"),
+                            ("uptrend", "上行趋势"),
+                            ("range", "箱体震荡"),
+                        ],
+                        max_length=16,
+                        verbose_name="阶段",
+                    ),
+                ),
+                ("granted_at", models.DateTimeField(verbose_name="发出时刻")),
+                (
+                    "expires_at",
+                    models.DateTimeField(
+                        db_index=True, verbose_name="到期时刻（写入时按当时配置换算）"
+                    ),
+                ),
+                ("granted_by", models.CharField(max_length=128, verbose_name="发出人")),
+                ("note", models.TextField(blank=True, default="", verbose_name="备注")),
+                (
+                    "closed_at",
+                    models.DateTimeField(
+                        blank=True, null=True, verbose_name="提前失效时刻（阶段离开）"
+                    ),
+                ),
+                (
+                    "closed_reason",
+                    models.CharField(
+                        blank=True,
+                        default="",
+                        max_length=32,
+                        verbose_name="提前失效原因",
+                    ),
+                ),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
+                (
+                    "strategy",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="regime_deactivation_exemptions",
+                        to="trading.strategy",
+                        verbose_name="策略",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': '人工恢复豁免',
-                'verbose_name_plural': '人工恢复豁免',
-                'db_table': 'regime_deactivation_exemptions',
-                'ordering': ['strategy', 'regime', '-granted_at'],
+                "verbose_name": "人工恢复豁免",
+                "verbose_name_plural": "人工恢复豁免",
+                "db_table": "regime_deactivation_exemptions",
+                "ordering": ["strategy", "regime", "-granted_at"],
             },
         ),
         migrations.CreateModel(
-            name='DeactivationDecision',
+            name="DeactivationDecision",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('regime', models.CharField(choices=[('high_vol', '高波动'), ('downtrend', '下行趋势'), ('uptrend', '上行趋势'), ('range', '箱体震荡')], max_length=16, verbose_name='阶段')),
-                ('status', models.CharField(choices=[('suggested', '建议中'), ('applied', '已施加'), ('released', '已解除')], default='suggested', max_length=16, verbose_name='状态')),
-                ('evidence', models.JSONField(default=dict, verbose_name='判据成立时刻的依据摘要（冻结）')),
-                ('pool_rebuild_id', models.IntegerField(blank=True, null=True, verbose_name='首次得出时的池化世代 id')),
-                ('first_decided_at', models.DateTimeField(verbose_name='首次得出时刻')),
-                ('last_confirmed_at', models.DateTimeField(verbose_name='最近一次确认时刻')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
-                ('strategy', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='regime_deactivation_decisions', to='trading.strategy', verbose_name='策略')),
-                ('exemption', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='decisions', to='regime.deactivationexemption', verbose_name='当时生效的人工豁免')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "regime",
+                    models.CharField(
+                        choices=[
+                            ("high_vol", "高波动"),
+                            ("downtrend", "下行趋势"),
+                            ("uptrend", "上行趋势"),
+                            ("range", "箱体震荡"),
+                        ],
+                        max_length=16,
+                        verbose_name="阶段",
+                    ),
+                ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("suggested", "建议中"),
+                            ("applied", "已施加"),
+                            ("released", "已解除"),
+                        ],
+                        default="suggested",
+                        max_length=16,
+                        verbose_name="状态",
+                    ),
+                ),
+                (
+                    "evidence",
+                    models.JSONField(
+                        default=dict, verbose_name="判据成立时刻的依据摘要（冻结）"
+                    ),
+                ),
+                (
+                    "pool_rebuild_id",
+                    models.IntegerField(
+                        blank=True, null=True, verbose_name="首次得出时的池化世代 id"
+                    ),
+                ),
+                ("first_decided_at", models.DateTimeField(verbose_name="首次得出时刻")),
+                (
+                    "last_confirmed_at",
+                    models.DateTimeField(verbose_name="最近一次确认时刻"),
+                ),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
+                (
+                    "strategy",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="regime_deactivation_decisions",
+                        to="trading.strategy",
+                        verbose_name="策略",
+                    ),
+                ),
+                (
+                    "exemption",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="decisions",
+                        to="regime.deactivationexemption",
+                        verbose_name="当时生效的人工豁免",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': '停用决策',
-                'verbose_name_plural': '停用决策',
-                'db_table': 'regime_deactivation_decisions',
-                'ordering': ['strategy', 'regime'],
+                "verbose_name": "停用决策",
+                "verbose_name_plural": "停用决策",
+                "db_table": "regime_deactivation_decisions",
+                "ordering": ["strategy", "regime"],
             },
         ),
         migrations.CreateModel(
-            name='DeactivationReview',
+            name="DeactivationReview",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('verdict', models.CharField(choices=[('still_unfit', '仍判为不适用'), ('still_neutral', '仍判为中性'), ('became_fit', '新表判为适用（依据已失效）')], max_length=16, verbose_name='重放结论')),
-                ('evidence', models.JSONField(default=dict, verbose_name='新表在这一格上的依据摘要')),
-                ('reviewed_at', models.DateTimeField(verbose_name='重放时刻')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
-                ('decision', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='reviews', to='regime.deactivationdecision', verbose_name='被重放的决策')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "verdict",
+                    models.CharField(
+                        choices=[
+                            ("still_unfit", "仍判为不适用"),
+                            ("still_neutral", "仍判为中性"),
+                            ("became_fit", "新表判为适用（依据已失效）"),
+                        ],
+                        max_length=16,
+                        verbose_name="重放结论",
+                    ),
+                ),
+                (
+                    "evidence",
+                    models.JSONField(
+                        default=dict, verbose_name="新表在这一格上的依据摘要"
+                    ),
+                ),
+                ("reviewed_at", models.DateTimeField(verbose_name="重放时刻")),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
+                (
+                    "decision",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="reviews",
+                        to="regime.deactivationdecision",
+                        verbose_name="被重放的决策",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': '停用决策重算差异',
-                'verbose_name_plural': '停用决策重算差异',
-                'db_table': 'regime_deactivation_reviews',
-                'ordering': ['-reviewed_at', '-id'],
+                "verbose_name": "停用决策重算差异",
+                "verbose_name_plural": "停用决策重算差异",
+                "db_table": "regime_deactivation_reviews",
+                "ordering": ["-reviewed_at", "-id"],
             },
         ),
         migrations.CreateModel(
-            name='RegimePoolCell',
+            name="RegimePoolCell",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('regime', models.CharField(choices=[('high_vol', '高波动'), ('downtrend', '下行趋势'), ('uptrend', '上行趋势'), ('range', '箱体震荡')], max_length=16, verbose_name='阶段')),
-                ('source', models.CharField(choices=[('strategy', '本策略切片'), ('archetype', '原型兜底')], max_length=16, verbose_name='结论来源')),
-                ('state', models.CharField(max_length=32, verbose_name='状态')),
-                ('reason', models.CharField(blank=True, default='', max_length=32, verbose_name='原因')),
-                ('evidence', models.JSONField(default=dict, verbose_name='依据摘要（回测 id / 笔数 / 区间 / 品种 / 原型留痕）')),
-                ('needs_review', models.BooleanField(default=False, verbose_name='待人工复核（冲突格子，不产生停用建议）')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
-                ('strategy', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='regime_pool_cells', to='trading.strategy', verbose_name='策略')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "regime",
+                    models.CharField(
+                        choices=[
+                            ("high_vol", "高波动"),
+                            ("downtrend", "下行趋势"),
+                            ("uptrend", "上行趋势"),
+                            ("range", "箱体震荡"),
+                        ],
+                        max_length=16,
+                        verbose_name="阶段",
+                    ),
+                ),
+                (
+                    "source",
+                    models.CharField(
+                        choices=[("strategy", "本策略切片"), ("archetype", "原型兜底")],
+                        max_length=16,
+                        verbose_name="结论来源",
+                    ),
+                ),
+                ("state", models.CharField(max_length=32, verbose_name="状态")),
+                (
+                    "reason",
+                    models.CharField(
+                        blank=True, default="", max_length=32, verbose_name="原因"
+                    ),
+                ),
+                (
+                    "evidence",
+                    models.JSONField(
+                        default=dict,
+                        verbose_name="依据摘要（回测 id / 笔数 / 区间 / 品种 / 原型留痕）",
+                    ),
+                ),
+                (
+                    "needs_review",
+                    models.BooleanField(
+                        default=False,
+                        verbose_name="待人工复核（冲突格子，不产生停用建议）",
+                    ),
+                ),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
+                (
+                    "strategy",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="regime_pool_cells",
+                        to="trading.strategy",
+                        verbose_name="策略",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': '池化适用性结论',
-                'verbose_name_plural': '池化适用性结论',
-                'db_table': 'regime_pool_cells',
-                'ordering': ['strategy', 'regime'],
+                "verbose_name": "池化适用性结论",
+                "verbose_name_plural": "池化适用性结论",
+                "db_table": "regime_pool_cells",
+                "ordering": ["strategy", "regime"],
             },
         ),
         migrations.AddConstraint(
-            model_name='regimepoolrebuild',
-            constraint=models.UniqueConstraint(condition=models.Q(('status', 'ready')), fields=('input_fingerprint',), name='uniq_pool_rebuild_ready_fingerprint'),
+            model_name="regimepoolrebuild",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(("status", "ready")),
+                fields=("input_fingerprint",),
+                name="uniq_pool_rebuild_ready_fingerprint",
+            ),
         ),
         migrations.AddField(
-            model_name='regimepoolcell',
-            name='rebuild',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='cells', to='regime.regimepoolrebuild', verbose_name='所属世代'),
+            model_name="regimepoolcell",
+            name="rebuild",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="cells",
+                to="regime.regimepoolrebuild",
+                verbose_name="所属世代",
+            ),
         ),
         migrations.AddField(
-            model_name='deactivationreview',
-            name='rebuild',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='reviews', to='regime.regimepoolrebuild', verbose_name='依据的新世代'),
+            model_name="deactivationreview",
+            name="rebuild",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="reviews",
+                to="regime.regimepoolrebuild",
+                verbose_name="依据的新世代",
+            ),
         ),
         migrations.AddConstraint(
-            model_name='deactivationdecision',
-            constraint=models.UniqueConstraint(fields=('strategy', 'regime'), name='uniq_deactivation_decision_strategy_regime'),
+            model_name="deactivationdecision",
+            constraint=models.UniqueConstraint(
+                fields=("strategy", "regime"),
+                name="uniq_deactivation_decision_strategy_regime",
+            ),
         ),
         migrations.AddConstraint(
-            model_name='regimepoolcell',
-            constraint=models.UniqueConstraint(fields=('rebuild', 'strategy', 'regime'), name='uniq_pool_cell_rebuild_strategy_regime'),
+            model_name="regimepoolcell",
+            constraint=models.UniqueConstraint(
+                fields=("rebuild", "strategy", "regime"),
+                name="uniq_pool_cell_rebuild_strategy_regime",
+            ),
         ),
         migrations.AddConstraint(
-            model_name='deactivationreview',
-            constraint=models.UniqueConstraint(fields=('decision', 'rebuild'), name='uniq_deactivation_review_decision_rebuild'),
+            model_name="deactivationreview",
+            constraint=models.UniqueConstraint(
+                fields=("decision", "rebuild"),
+                name="uniq_deactivation_review_decision_rebuild",
+            ),
         ),
     ]

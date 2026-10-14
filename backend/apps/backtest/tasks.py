@@ -82,13 +82,13 @@ def run_backtest_task(
         try:
             close_old_connections()
             from apps.backtest.models import BacktestResult as BR
-            BR.objects.filter(id=result_id).update(
-                celery_task_id=self.request.id
-            )
+
+            BR.objects.filter(id=result_id).update(celery_task_id=self.request.id)
         except Exception:
             logger.warning(
                 "[BacktestTask] failed to set celery_task_id on result %s",
-                result_id, exc_info=True,
+                result_id,
+                exc_info=True,
             )
 
     try:
@@ -98,7 +98,7 @@ def run_backtest_task(
         )
 
         if not StrategyRegistry._strategy_path:
-            StrategyRegistry.set_strategy_path('/root/.tradelogx/strategies')
+            StrategyRegistry.set_strategy_path("/root/.tradelogx/strategies")
 
         StrategyRegistry.discover()
         strategy_name = _resolve_strategy_name(strategy_name)
@@ -190,7 +190,9 @@ def run_backtest_task(
                     result_id=result_id,
                     benchmark=benchmark,
                     slippage_rate=(
-                        Decimal(str(slippage_rate)) if slippage_rate is not None else None
+                        Decimal(str(slippage_rate))
+                        if slippage_rate is not None
+                        else None
                     ),
                     is_perp=is_perp,
                     funding_rates=funding_rates,
@@ -231,8 +233,21 @@ def run_backtest_task(
 
 # 常见报价币后缀（长后缀在前，避免 BTC 误匹配 WBTC、ETH 误匹配 WBETH）
 _QUOTE_SUFFIXES = (
-    "USDT", "USDC", "FDUSD", "BFUSD", "USDP", "TUSD", "BUSD",
-    "DAI", "WBTC", "WBETH", "BTC", "ETH", "BNB", "EUR", "GBP",
+    "USDT",
+    "USDC",
+    "FDUSD",
+    "BFUSD",
+    "USDP",
+    "TUSD",
+    "BUSD",
+    "DAI",
+    "WBTC",
+    "WBETH",
+    "BTC",
+    "ETH",
+    "BNB",
+    "EUR",
+    "GBP",
 )
 
 
@@ -386,7 +401,7 @@ def _close_async_resources(loop: asyncio.AbstractEventLoop) -> None:
     track_started=True,
     soft_time_limit=3600,
     time_limit=7200,
-    queue='grid_search',
+    queue="grid_search",
 )
 def run_grid_search_task(self, job_id: str, user_id: str | None = None) -> dict:
     """
@@ -460,17 +475,19 @@ def run_grid_search_task(self, job_id: str, user_id: str | None = None) -> dict:
         job.total_combinations = len(combinations)
         job.save(update_fields=["total_combinations"])
 
-        tracker.milestone(
-            f"已生成 {len(combinations)} 个参数组合", progress=0.05
-        )
+        tracker.milestone(f"已生成 {len(combinations)} 个参数组合", progress=0.05)
 
         tracker.milestone("正在获取历史K线数据...", progress=0.1)
         ohlcv_data = _fetch_ohlcv_sync(
             job.symbol,
             job.timeframe,
             exchange="binance",
-            start_date=job.start_date.isoformat() if isinstance(job.start_date, date) else str(job.start_date),
-            end_date=job.end_date.isoformat() if isinstance(job.end_date, date) else str(job.end_date),
+            start_date=job.start_date.isoformat()
+            if isinstance(job.start_date, date)
+            else str(job.start_date),
+            end_date=job.end_date.isoformat()
+            if isinstance(job.end_date, date)
+            else str(job.end_date),
         )
         if not ohlcv_data:
             tracker.fail(f"未能获取 {job.symbol} {job.timeframe} 的历史K线数据")
@@ -553,9 +570,7 @@ def run_grid_search_task(self, job_id: str, user_id: str | None = None) -> dict:
                         {"combination_index": idx, "params": params, "error": str(e)}
                     ]
                     job.save(update_fields=["error_log"])
-                    logger.warning(
-                        f"[GridSearchTask] combination {idx} failed: {e}"
-                    )
+                    logger.warning(f"[GridSearchTask] combination {idx} failed: {e}")
 
                 job.completed_combinations = idx + 1
                 job.save(update_fields=["completed_combinations"])
@@ -624,7 +639,6 @@ def run_grid_search_task(self, job_id: str, user_id: str | None = None) -> dict:
         tracker_context.reset(token)
 
 
-
 # 同步资金费率的主流币永续（起步集合；后续可挪到配置）
 FUNDING_SYNC_SYMBOLS = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
 
@@ -649,8 +663,7 @@ def load_funding_rates(symbol: str, ohlcv_data: list[dict]) -> dict[str, float]:
         qs = qs.filter(funding_time__lte=end)
 
     return {
-        rec.funding_time.astimezone(timezone.utc).isoformat(): rec.rate
-        for rec in qs
+        rec.funding_time.astimezone(timezone.utc).isoformat(): rec.rate for rec in qs
     }
 
 
@@ -724,16 +737,25 @@ def sync_funding_rates(self, symbols: list[str] | None = None) -> dict:
 
 
 async def _fetch_all_symbols(plans: list[tuple[str, int | None]]) -> dict[str, list]:
-    """按计划拉取所有 symbol 的资金费率历史，返回 {symbol: rows}。"""
-    import ccxt.async_support as ccxt
+    """按计划拉取所有 symbol 的资金费率历史，返回 {symbol: rows}。
 
-    exchange = ccxt.binance({"enableRateLimit": True})
+    代理注入必须与 _fetch_ohlcv_sync 保持一致：漏注入时，在需要代理出网的
+    环境下 K 线能拉、资金费率拉不到，而 sync_funding_rates 不检查失败，
+    缺陷是静默的。
+    """
+    import ccxt.async_support as ccxt
+    from django.conf import settings
+
+    options: dict = {"enableRateLimit": True}
+    proxy = getattr(settings, "WEB_PROXY", "") or None
+    if proxy:
+        options["aiohttp_proxy"] = proxy
+
+    exchange = ccxt.binance(options)
     out: dict[str, list] = {}
     try:
         for symbol, since_ms in plans:
-            out[symbol] = await _fetch_funding_history(
-                exchange, symbol, since_ms, {}
-            )
+            out[symbol] = await _fetch_funding_history(exchange, symbol, since_ms, {})
     finally:
         await exchange.close()
     return out

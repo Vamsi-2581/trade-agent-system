@@ -121,7 +121,7 @@ class WebFetchTool(BaseTool):
             )
 
         # 降级 DSML 路径可能把 max_chars 传成字符串，转 int 再用于长度比较/切片
-        #（与 box_range 对数字参数的处理一致）
+        # （与 box_range 对数字参数的处理一致）
         max_chars = int(max_chars or self._max_chars())
 
         is_valid, err = _validate_url(url)

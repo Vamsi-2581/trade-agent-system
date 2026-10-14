@@ -4,30 +4,33 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0007_dailyreport_and_more'),
+        ("regime", "0007_dailyreport_and_more"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='dailyreport',
-            name='delivered_at',
-            field=models.DateTimeField(blank=True, null=True, verbose_name='首次全部送达的时刻'),
+            model_name="dailyreport",
+            name="delivered_at",
+            field=models.DateTimeField(
+                blank=True, null=True, verbose_name="首次全部送达的时刻"
+            ),
         ),
         migrations.AddField(
-            model_name='dailyreport',
-            name='delivery',
-            field=models.JSONField(default=dict, verbose_name='逐人投递明细'),
+            model_name="dailyreport",
+            name="delivery",
+            field=models.JSONField(default=dict, verbose_name="逐人投递明细"),
         ),
         migrations.AddField(
-            model_name='dailyreport',
-            name='delivery_attempts',
-            field=models.PositiveIntegerField(default=0, verbose_name='投递轮次'),
+            model_name="dailyreport",
+            name="delivery_attempts",
+            field=models.PositiveIntegerField(default=0, verbose_name="投递轮次"),
         ),
         migrations.AddField(
-            model_name='dailyreport',
-            name='delivery_error',
-            field=models.TextField(blank=True, default='', verbose_name='最近一轮的失败原因'),
+            model_name="dailyreport",
+            name="delivery_error",
+            field=models.TextField(
+                blank=True, default="", verbose_name="最近一轮的失败原因"
+            ),
         ),
     ]

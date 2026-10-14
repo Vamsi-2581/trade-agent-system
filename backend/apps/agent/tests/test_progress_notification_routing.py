@@ -119,9 +119,7 @@ class TestProgressNotificationRouting:
 
         # 即使 channel_resolver 返回 telegram，web 分支也要跑
         mock_group_send.group_send.assert_called_once()
-        assert (
-            mock_group_send.group_send.call_args.args[0] == f"user_{user_id}"
-        )
+        assert mock_group_send.group_send.call_args.args[0] == f"user_{user_id}"
         mock_ws_pending.assert_called_once()
 
     def test_group_send_failure_does_not_break_routing(

@@ -52,7 +52,6 @@ from apps.trading.reduce_ledger import (
     TRIGGER_EXCHANGE_BACKFILL,
     _group_trades_by_order,
     resolve_session_for,
-    to_session_symbol,
 )
 
 #: 每处理多少条断一次旧连接（长循环纪律，同其他管理命令）。
@@ -229,9 +228,7 @@ class Command(BaseCommand):
                     id=oid
                 ).update(realized_pnl=pnl)
             )()
-        self.stdout.write(
-            self.style.SUCCESS(f"已更新 {len(changes)} 笔 realized_pnl")
-        )
+        self.stdout.write(self.style.SUCCESS(f"已更新 {len(changes)} 笔 realized_pnl"))
 
         for row in created_rows:
             await self._create_backfill_row(row)
@@ -274,9 +271,9 @@ class Command(BaseCommand):
         # 所有历史卖单之后，成本链修不回来。queryset.update() 绕过 auto_now_add。
         if row["time"] is not None:
             await db_async(
-                lambda oid=order.id, ts=row["time"]: Order.objects.filter(id=oid).update(
-                    created_at=ts
-                )
+                lambda oid=order.id, ts=row["time"]: Order.objects.filter(
+                    id=oid
+                ).update(created_at=ts)
             )()
 
     async def _bump(self, session_id, delta: Decimal) -> None:

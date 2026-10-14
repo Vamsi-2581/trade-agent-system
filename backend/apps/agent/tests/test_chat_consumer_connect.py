@@ -67,7 +67,9 @@ async def test_chat_connect_works_normally(chat_user):
         comm = _make_communicator(_valid_token(chat_user))
         connected, _ = await asyncio.wait_for(comm.connect(), timeout=_CONNECT_TIMEOUT)
         assert connected is True
-        resp = await asyncio.wait_for(comm.receive_json_from(), timeout=_CONNECT_TIMEOUT)
+        resp = await asyncio.wait_for(
+            comm.receive_json_from(), timeout=_CONNECT_TIMEOUT
+        )
         assert resp == {"type": "status", "status": "connected"}
         try:
             await comm.disconnect()

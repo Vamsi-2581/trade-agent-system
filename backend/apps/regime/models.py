@@ -27,7 +27,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
 
@@ -67,9 +67,7 @@ class DailyCandle(models.Model):
     high = models.DecimalField("最高价", max_digits=20, decimal_places=8)
     low = models.DecimalField("最低价", max_digits=20, decimal_places=8)
     close = models.DecimalField("收盘价", max_digits=20, decimal_places=8)
-    volume = models.DecimalField(
-        "成交量（基础币）", max_digits=30, decimal_places=8
-    )
+    volume = models.DecimalField("成交量（基础币）", max_digits=30, decimal_places=8)
 
     created_at = models.DateTimeField("创建时间", auto_now_add=True)
     updated_at = models.DateTimeField("更新时间", auto_now=True)
@@ -401,11 +399,11 @@ class RegimePoolRebuild(models.Model):
     而不是记一个「跳过了几个」。
     """
 
-    status = models.CharField(
-        "状态", max_length=16, choices=RebuildStatus.choices()
-    )
+    status = models.CharField("状态", max_length=16, choices=RebuildStatus.choices())
 
-    actor_kind = models.CharField("触发方类别", max_length=16, choices=ActorKind.choices())
+    actor_kind = models.CharField(
+        "触发方类别", max_length=16, choices=ActorKind.choices()
+    )
     actor_name = models.CharField("触发方", max_length=128)
 
     # 池化口径的版本（`pool.POOL_VERSION`）。它已经进了 `input_fingerprint`——这里是
@@ -500,13 +498,17 @@ class RegimePoolCell(models.Model):
     state = models.CharField("状态", max_length=32)
     reason = models.CharField("原因", max_length=32, blank=True, default="")
 
-    evidence = models.JSONField("依据摘要（回测 id / 笔数 / 区间 / 品种 / 原型留痕）", default=dict)
+    evidence = models.JSONField(
+        "依据摘要（回测 id / 笔数 / 区间 / 品种 / 原型留痕）", default=dict
+    )
 
     # 「明显冲突」的判据是 CONTEXT.md 定的（方向相反且两侧都过门槛）。冲突**不阻塞
     # 池化结论**，只阻塞停用建议：结论照常产出、照常被引用，但那格不产生建议，并标成
     # 待复核。所以这是一个独立的布尔，不是第七种 state——把它并进 state 就等于说
     # 「这格没有结论」，而它明明有。
-    needs_review = models.BooleanField("待人工复核（冲突格子，不产生停用建议）", default=False)
+    needs_review = models.BooleanField(
+        "待人工复核（冲突格子，不产生停用建议）", default=False
+    )
 
     created_at = models.DateTimeField("创建时间", auto_now_add=True)
 
@@ -592,7 +594,10 @@ class DeactivationDecision(models.Model):
     )
 
     status = models.CharField(
-        "状态", max_length=16, choices=DecisionStatus.choices(), default=DecisionStatus.SUGGESTED.value
+        "状态",
+        max_length=16,
+        choices=DecisionStatus.choices(),
+        default=DecisionStatus.SUGGESTED.value,
     )
 
     evidence = models.JSONField("判据成立时刻的依据摘要（冻结）", default=dict)
@@ -600,7 +605,9 @@ class DeactivationDecision(models.Model):
     #: 首次得出这条结论的池化世代。**留 id 不留外键**：世代会被清理，而对一条审计记录
     #: 来说「那一代没了」不该让它跟着一起消失（CASCADE 会），也不该拦住清理（PROTECT
     #: 会）。它是个线索，不是一条约束。
-    pool_rebuild_id = models.IntegerField("首次得出时的池化世代 id", null=True, blank=True)
+    pool_rebuild_id = models.IntegerField(
+        "首次得出时的池化世代 id", null=True, blank=True
+    )
 
     exemption = models.ForeignKey(
         "regime.DeactivationExemption",
@@ -684,7 +691,9 @@ class DeactivationReview(models.Model):
         verbose_name="依据的新世代",
     )
 
-    verdict = models.CharField("重放结论", max_length=16, choices=ReviewVerdict.choices())
+    verdict = models.CharField(
+        "重放结论", max_length=16, choices=ReviewVerdict.choices()
+    )
     evidence = models.JSONField("新表在这一格上的依据摘要", default=dict)
 
     reviewed_at = models.DateTimeField("重放时刻")
@@ -747,7 +756,9 @@ class DeactivationExemption(models.Model):
     note = models.TextField("备注", blank=True, default="")
 
     closed_at = models.DateTimeField("提前失效时刻（阶段离开）", null=True, blank=True)
-    closed_reason = models.CharField("提前失效原因", max_length=32, blank=True, default="")
+    closed_reason = models.CharField(
+        "提前失效原因", max_length=32, blank=True, default=""
+    )
 
     created_at = models.DateTimeField("创建时间", auto_now_add=True)
 
@@ -893,8 +904,12 @@ class RegimeMechanismSwitch(models.Model):
     的接线路径写。
     """
 
-    from_mode = models.CharField("切换前档位", max_length=16, choices=MechanismMode.choices())
-    to_mode = models.CharField("切换后档位", max_length=16, choices=MechanismMode.choices())
+    from_mode = models.CharField(
+        "切换前档位", max_length=16, choices=MechanismMode.choices()
+    )
+    to_mode = models.CharField(
+        "切换后档位", max_length=16, choices=MechanismMode.choices()
+    )
 
     # 这一行说的是哪个开关（`MechanismKind`）。默认 `mechanism` 并回填既有行：加这一列之前
     # 那张表里唯一可能存在的语义就是「机制整体」。
@@ -910,7 +925,9 @@ class RegimeMechanismSwitch(models.Model):
 
     # 复用 `ActorKind`：切换的两个来源正是「人敲的命令」与「机制自己（自熔断）」，与
     # 重算记录的触发方是同一组分别。再开一个枚举会让「谁干的」出现两套词汇。
-    actor_kind = models.CharField("触发方类别", max_length=16, choices=ActorKind.choices())
+    actor_kind = models.CharField(
+        "触发方类别", max_length=16, choices=ActorKind.choices()
+    )
     actor_name = models.CharField("触发方", max_length=128)
 
     reason = models.TextField("切换原因（必填）")
@@ -924,7 +941,9 @@ class RegimeMechanismSwitch(models.Model):
         ordering = ["-at", "-id"]
 
     def __str__(self) -> str:
-        return f"{self.at:%Y-%m-%d} {self.from_mode}→{self.to_mode} by {self.actor_name}"
+        return (
+            f"{self.at:%Y-%m-%d} {self.from_mode}→{self.to_mode} by {self.actor_name}"
+        )
 
     @classmethod
     def latest(
@@ -938,7 +957,9 @@ class RegimeMechanismSwitch(models.Model):
         「机制整体」这件事，默认值让它们不必改。
         """
         return (
-            cls.objects.filter(kind=MechanismKind(kind or MechanismKind.MECHANISM).value)
+            cls.objects.filter(
+                kind=MechanismKind(kind or MechanismKind.MECHANISM).value
+            )
             .order_by("-at", "-id")
             .first()
         )
@@ -1049,20 +1070,30 @@ class HaltDeclaration(models.Model):
     opened_at = models.DateTimeField("生效起始（UTC）", db_index=True)
     # 空 = 不定（保命档随阶段起落，没有预先知道的截止时刻）。**不是「永久」**：它的失效
     # 由解除写 `closed_at` 完成，而不是靠一个很远的日期。
-    expires_at = models.DateTimeField("生效截止（UTC，空=不定）", null=True, blank=True, db_index=True)
+    expires_at = models.DateTimeField(
+        "生效截止（UTC，空=不定）", null=True, blank=True, db_index=True
+    )
 
-    closed_at = models.DateTimeField("解除时刻（UTC，空=生效中）", null=True, blank=True, db_index=True)
+    closed_at = models.DateTimeField(
+        "解除时刻（UTC，空=生效中）", null=True, blank=True, db_index=True
+    )
     closed_reason = models.CharField("解除原因", max_length=64, blank=True, default="")
 
     # 「开窗 / 结束」两条即时消息发出去了没有。空 = 还没发（**不是「不用发」**）。
     # 发送方是 `halt_notify`，写入方是那条窗口同步任务；`halt_sync._rewrite` 在窗口起点被
     # 改写时把 `opened_notified_at` 清回空（通知讲的是那个起点，起点变了它就过期了）。
-    opened_notified_at = models.DateTimeField("开窗通知时刻（UTC，空=未发）", null=True, blank=True)
-    closed_notified_at = models.DateTimeField("结束通知时刻（UTC，空=未发）", null=True, blank=True)
+    opened_notified_at = models.DateTimeField(
+        "开窗通知时刻（UTC，空=未发）", null=True, blank=True
+    )
+    closed_notified_at = models.DateTimeField(
+        "结束通知时刻（UTC，空=未发）", null=True, blank=True
+    )
 
     reason = models.TextField("声明依据（必填）")
 
-    actor_kind = models.CharField("触发方类别", max_length=16, choices=ActorKind.choices())
+    actor_kind = models.CharField(
+        "触发方类别", max_length=16, choices=ActorKind.choices()
+    )
     actor_name = models.CharField("触发方", max_length=128)
 
     created_at = models.DateTimeField("创建时间", auto_now_add=True)
@@ -1184,7 +1215,9 @@ class ShadowDailyRecord(models.Model):
     derivation_skipped = models.CharField(
         "推导收场（空 = 正常推导）", max_length=32, blank=True, default=""
     )
-    note = models.TextField("给人看的一句话（为什么这一行是这样）", blank=True, default="")
+    note = models.TextField(
+        "给人看的一句话（为什么这一行是这样）", blank=True, default=""
+    )
 
     suggestions = models.JSONField("当天的建议清单（冻结）", default=list)
     suggested_count = models.IntegerField("建议条数（本行清单长度的副本）", default=0)
@@ -1263,7 +1296,9 @@ class RegimeTruthInterval(models.Model):
     #: 录入人与撤回人各记一组（`kind` + `name`），与 `RegimeMechanismSwitch` 同形。理由见
     #: `ActorKind`：`chat` 行的人是平台 sender id、`cli` 行的人是系统用户名，混成一个
     #: 自由文本字段之后，「谁干的」这一栏就不可比了。
-    actor_kind = models.CharField("录入方类别", max_length=16, choices=ActorKind.choices())
+    actor_kind = models.CharField(
+        "录入方类别", max_length=16, choices=ActorKind.choices()
+    )
     actor_name = models.CharField("录入方", max_length=128)
     created_at = models.DateTimeField("录入时间", auto_now_add=True)
 
@@ -1273,7 +1308,9 @@ class RegimeTruthInterval(models.Model):
     retracted_by_kind = models.CharField(
         "撤回方类别", max_length=16, choices=ActorKind.choices(), blank=True, default=""
     )
-    retracted_by_name = models.CharField("撤回方", max_length=128, blank=True, default="")
+    retracted_by_name = models.CharField(
+        "撤回方", max_length=128, blank=True, default=""
+    )
 
     class Meta:
         db_table = "regime_truth_intervals"
@@ -1482,7 +1519,10 @@ class MajorEvent(models.Model):
     resume_at = models.DateTimeField("恢复时刻（录入时按当时配置算好）", db_index=True)
 
     status = models.CharField(
-        "状态", max_length=16, choices=EventStatus.choices(), default=EventStatus.SCHEDULED.value
+        "状态",
+        max_length=16,
+        choices=EventStatus.choices(),
+        default=EventStatus.SCHEDULED.value,
     )
 
     created_by = models.CharField("录入人", max_length=128)
@@ -1570,7 +1610,9 @@ class MajorEventChange(models.Model):
     #: 两者会不同——而「这条改期是什么时候批的」问的是前者。
     at = models.DateTimeField("动作时刻（UTC）", db_index=True)
 
-    actor_kind = models.CharField("触发方类别", max_length=16, choices=ActorKind.choices())
+    actor_kind = models.CharField(
+        "触发方类别", max_length=16, choices=ActorKind.choices()
+    )
     actor_name = models.CharField("触发方", max_length=128)
 
     before = models.JSONField("改动前（只含被改动的键）", default=dict)
@@ -1671,7 +1713,9 @@ class CandidateEvent(models.Model):
 
     name = models.CharField("推测的事件名称", max_length=128)
 
-    origin = models.CharField("提出方", max_length=16, choices=CandidateOrigin.choices())
+    origin = models.CharField(
+        "提出方", max_length=16, choices=CandidateOrigin.choices()
+    )
 
     #: 推测时刻，**可空**：资讯里常常只说「下周」或「月末」，说不出具体钟点。
     #: 为它编一个时间等于给一个未知量填一个看起来像事实的数。
@@ -1746,7 +1790,9 @@ class CandidateEvent(models.Model):
 
     @property
     def discard_reason_display(self) -> str:
-        return _CANDIDATE_DISCARD_REASON_DISPLAY.get(self.discard_reason, self.discard_reason)
+        return _CANDIDATE_DISCARD_REASON_DISPLAY.get(
+            self.discard_reason, self.discard_reason
+        )
 
     @property
     def is_pending(self) -> bool:
@@ -1885,7 +1931,9 @@ class DailyReport(models.Model):
     #: 做差只能拿两份都会被改写的决策行去比，等于永远比出「无变化」（见类 docstring）。
     landscape = models.JSONField("当天推导结论快照（做差用）", default=dict)
 
-    note = models.TextField("给人看的一句话（为什么这一行是这样）", blank=True, default="")
+    note = models.TextField(
+        "给人看的一句话（为什么这一行是这样）", blank=True, default=""
+    )
 
     created_at = models.DateTimeField("生成时间", auto_now_add=True)
 
@@ -1946,7 +1994,11 @@ class DailyReport(models.Model):
 
     @property
     def escalation_display(self) -> str:
-        return Escalation(self.escalation).display if self.escalation else NO_ESCALATION_DISPLAY
+        return (
+            Escalation(self.escalation).display
+            if self.escalation
+            else NO_ESCALATION_DISPLAY
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -2124,7 +2176,11 @@ class RegimeReduceRecord(models.Model):
 
     #: 当天该品种的基准持仓，**由该日第一行冻结**，其余行照抄（见类 docstring）。
     baseline_qty = models.DecimalField(
-        "基准持仓（当日首行冻结）", max_digits=20, decimal_places=8, null=True, blank=True
+        "基准持仓（当日首行冻结）",
+        max_digits=20,
+        decimal_places=8,
+        null=True,
+        blank=True,
     )
     #: 计划减仓数量（取整、降片**之后**真正要发的总量）。与 `qty_before - qty_after`
     #: 分开：那个差是「减成了多少」，这个是「打算减多少」，两者不等正是要看的信号。
@@ -2137,7 +2193,11 @@ class RegimeReduceRecord(models.Model):
         "减仓前持仓", max_digits=20, decimal_places=8, null=True, blank=True
     )
     qty_after = models.DecimalField(
-        "减仓后持仓（交易所侧重读）", max_digits=20, decimal_places=8, null=True, blank=True
+        "减仓后持仓（交易所侧重读）",
+        max_digits=20,
+        decimal_places=8,
+        null=True,
+        blank=True,
     )
 
     #: 每张子单的下场（`apps/trading/reduce.py::ShardResult.as_dict` 的列表）。这是
@@ -2155,7 +2215,11 @@ class RegimeReduceRecord(models.Model):
         "滑点（正=不利）", max_digits=20, decimal_places=8, null=True, blank=True
     )
     slippage_basis = models.CharField(
-        "滑点的来路", max_length=16, choices=SlippageBasis.choices(), blank=True, default=""
+        "滑点的来路",
+        max_length=16,
+        choices=SlippageBasis.choices(),
+        blank=True,
+        default="",
     )
 
     #: 人读的一句话：为什么减、为什么没减、还差什么。**不放进日志**——「日志不算被看见」
@@ -2166,7 +2230,9 @@ class RegimeReduceRecord(models.Model):
     #: 空 = 还停在认领态（正在跑，或者跑挂了）。**跑挂了的那一行永远停在这里**，由
     #: `reduce_run` 的悬挂检查读出来告警并转人工（CONTEXT.md:116「记录写失败等同于没有
     #: 减仓」的同一族问题：这一行说「可能要减」，而没人知道后来减没减）。
-    finished_at = models.DateTimeField("完成时刻（UTC）", null=True, blank=True, db_index=True)
+    finished_at = models.DateTimeField(
+        "完成时刻（UTC）", null=True, blank=True, db_index=True
+    )
 
     class Meta:
         db_table = "regime_reduce_records"
@@ -2267,10 +2333,14 @@ class RegimeReducePause(models.Model):
     evidence = models.JSONField("触发证据", default=dict, blank=True)
 
     opened_at = models.DateTimeField("暂停起始（UTC）", db_index=True)
-    closed_at = models.DateTimeField("解除时刻（UTC，空=生效中）", null=True, blank=True, db_index=True)
+    closed_at = models.DateTimeField(
+        "解除时刻（UTC，空=生效中）", null=True, blank=True, db_index=True
+    )
     closed_reason = models.CharField("解除原因", max_length=64, blank=True, default="")
 
-    actor_kind = models.CharField("触发方类别", max_length=16, choices=ActorKind.choices())
+    actor_kind = models.CharField(
+        "触发方类别", max_length=16, choices=ActorKind.choices()
+    )
     actor_name = models.CharField("触发方", max_length=128)
 
     created_at = models.DateTimeField("创建时间", auto_now_add=True)

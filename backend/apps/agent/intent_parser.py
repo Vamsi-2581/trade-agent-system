@@ -117,7 +117,7 @@ class IntentParser:
             f"{frame_block}"
             f"{supervisor_block}"
             f"Available agents:\n{agent_descriptions}\n\n"
-            f"根据以上信息与流程定义，解析消息: \" {text} \" 中包含的用户意图 \n\n"
+            f'根据以上信息与流程定义，解析消息: " {text} " 中包含的用户意图 \n\n'
             "if the message is a general inquiry or doesn't clearly match any agent, reply with:\n"
             '{"_free_chat": true, "response": "your response to user"}\n'
         )

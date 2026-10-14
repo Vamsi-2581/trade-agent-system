@@ -510,7 +510,9 @@ class TestTheLiveRound(_Fixture):
         self.assertTrue(verdict.blocked)
         self.assertIn("AlphaStem", verdict.reason)
         # 别人的单照放。
-        self.assertFalse(halt.halt_layers("BTC/USDT", str(self.beta.id), now=NOW).blocked)
+        self.assertFalse(
+            halt.halt_layers("BTC/USDT", str(self.beta.id), now=NOW).blocked
+        )
 
     def test_a_second_identical_round_changes_nothing(self):
         self.decision(self.alpha)
@@ -624,7 +626,11 @@ class TestWhatTheWarrantSays(_Fixture):
         """`needs_review` 的冲突格子归 `lapsed`：没有任何一条路径能把它们判成该停。"""
         make_generation(
             cells=(
-                (self.alpha, DOWNTREND, {"state": sl.STATE_UNFIT, "needs_review": True}),
+                (
+                    self.alpha,
+                    DOWNTREND,
+                    {"state": sl.STATE_UNFIT, "needs_review": True},
+                ),
             )
         )
         decision = self.decision(self.alpha)
@@ -684,9 +690,7 @@ class TestWhatTheWarrantSays(_Fixture):
         self.judged()
         row = self.live_row(self.gamma)
         self.decision(self.gamma)
-        make_generation(
-            cells=((self.gamma, DOWNTREND, {"state": sl.STATE_UNFIT}),)
-        )
+        make_generation(cells=((self.gamma, DOWNTREND, {"state": sl.STATE_UNFIT}),))
 
         summary = self.gate_round()
 
@@ -704,9 +708,7 @@ class TestWhatTheWarrantSays(_Fixture):
         self.judged()
         row = self.live_row(self.alpha)
         self.decision(self.alpha, regime=UPTREND)
-        make_generation(
-            cells=((self.alpha, UPTREND, {"state": sl.STATE_UNFIT}),)
-        )
+        make_generation(cells=((self.alpha, UPTREND, {"state": sl.STATE_UNFIT}),))
 
         summary = self.gate_round()
 
@@ -717,12 +719,12 @@ class TestWhatTheWarrantSays(_Fixture):
         row.refresh_from_db()
         self.assertEqual(row.closed_reason, gate.CLOSE_REGIME_LEFT)
 
-    def test_a_fit_cell_takes_the_declaration_away_and_puts_the_row_back_to_released(self):
+    def test_a_fit_cell_takes_the_declaration_away_and_puts_the_row_back_to_released(
+        self,
+    ):
         self.judged()
         decision = self.decision(self.alpha, status=DecisionStatus.APPLIED.value)
-        make_generation(
-            cells=((self.alpha, DOWNTREND, {"state": sl.STATE_UNFIT}),)
-        )
+        make_generation(cells=((self.alpha, DOWNTREND, {"state": sl.STATE_UNFIT}),))
         first = self.gate_round()
         self.assertEqual(first["halt"]["created"], 1)
 
@@ -797,9 +799,7 @@ class TestTheWindowStart(_Fixture):
         self.assertEqual(row.opened_at, days(-1))
 
     def test_an_exemption_that_ran_out_ends_the_window_at_its_expiry(self):
-        row = self._declare(
-            exemption={"granted_at": days(-10), "expires_at": days(-1)}
-        )
+        row = self._declare(exemption={"granted_at": days(-10), "expires_at": days(-1)})
         self.assertEqual(row.opened_at, days(-1))
 
     def test_an_exemption_for_another_regime_does_not_move_the_window(self):
@@ -817,9 +817,7 @@ class TestTheWindowStart(_Fixture):
     def test_an_exemption_still_in_force_takes_the_declaration_away(self):
         """在期的豁免不声明，活行按 `exempted` 解除——那是「人按住了它」，比「判据变了」
         更靠前也更可执行。"""
-        self.exemption(
-            self.alpha, granted_at=days(-10), expires_at=days(10)
-        )
+        self.exemption(self.alpha, granted_at=days(-10), expires_at=days(10))
         self.judged(effective_at=days(-3))
         row = self.live_row(self.alpha)
         decision = self.decision(self.alpha, status=DecisionStatus.APPLIED.value)
@@ -899,9 +897,7 @@ class TestTheStatusWrite(_Fixture):
         """`suggested` 是只有 `deactivation_run` 写过的值 = 机制从没碰过它。给它写
         `released` 等于往表里记一条「它当时在拦」的假历史（Q3 的同一条理由）。"""
         decision = self.decision(self.alpha)  # suggested
-        make_generation(
-            cells=((self.alpha, DOWNTREND, {"state": sl.STATE_FIT}),)
-        )
+        make_generation(cells=((self.alpha, DOWNTREND, {"state": sl.STATE_FIT}),))
 
         summary = self.gate_round()
 

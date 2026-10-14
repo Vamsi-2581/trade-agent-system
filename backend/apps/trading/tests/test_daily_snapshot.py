@@ -17,7 +17,6 @@ CONTEXT.md 第 142 条要的是「给 `daily_snapshots` 补一个写入方，**�
 
 from __future__ import annotations
 
-import asyncio
 import unittest
 from datetime import date, datetime
 from decimal import Decimal
@@ -148,8 +147,12 @@ class TestActiveSessionStatuses(_SnapshotTestBase):
         from apps.trading.models import LiveSession
 
         all_statuses = [s for s, _ in LiveSession.STATUS_CHOICES]
-        self.assertEqual(all_statuses, ["pending", "running", "paused", "stopped", "error"])
-        self.assertEqual(set(_active_session_statuses()), {"pending", "running", "paused", "error"})
+        self.assertEqual(
+            all_statuses, ["pending", "running", "paused", "stopped", "error"]
+        )
+        self.assertEqual(
+            set(_active_session_statuses()), {"pending", "running", "paused", "error"}
+        )
 
 
 class TestCollectUserEquity(_SnapshotTestBase):
@@ -216,13 +219,17 @@ class TestCollectUserEquity(_SnapshotTestBase):
 
     async def test_unparseable_balance_is_none(self):
         """余额解析不出来 → None，不当作 0。"""
-        self._patch_live_sessions(_FakeLiveSessionManager(sessions_by_user={"u1": [_session("acc-1")]}))
+        self._patch_live_sessions(
+            _FakeLiveSessionManager(sessions_by_user={"u1": [_session("acc-1")]})
+        )
         with self._patch_adapter(_adapter({"USDT": "not-a-number"})):
             self.assertIsNone(await collect_user_equity("u1"))
 
     async def test_adapter_disconnects_after_balance_read(self):
         """取完余额必须断开适配器，否则每 5 分钟泄一个连接。"""
-        self._patch_live_sessions(_FakeLiveSessionManager(sessions_by_user={"u1": [_session("acc-1")]}))
+        self._patch_live_sessions(
+            _FakeLiveSessionManager(sessions_by_user={"u1": [_session("acc-1")]})
+        )
         adapter = _adapter({"USDT": Decimal("1")})
         with self._patch_adapter(adapter):
             await collect_user_equity("u1")
@@ -231,7 +238,9 @@ class TestCollectUserEquity(_SnapshotTestBase):
     async def test_session_without_account_is_ignored(self):
         """会话未绑账户 → 不计入，也不因此判定失败（它本来就没有余额可读）。"""
         self._patch_live_sessions(
-            _FakeLiveSessionManager(sessions_by_user={"u1": [_session(None), _session("acc-1")]})
+            _FakeLiveSessionManager(
+                sessions_by_user={"u1": [_session(None), _session("acc-1")]}
+            )
         )
         with self._patch_adapter(_adapter({"USDT": Decimal("7")})) as build:
             equity = await collect_user_equity("u1")
@@ -242,7 +251,11 @@ class TestCollectUserEquity(_SnapshotTestBase):
 class TestWriteDailySnapshots(_SnapshotTestBase):
     async def test_writes_snapshot_labelled_today(self):
         """快照标当日（UTC，与检查侧 today 同口径），值 = 去重后账户余额之和。"""
-        self._patch_live_sessions(_FakeLiveSessionManager(user_ids=["u1"], sessions_by_user={"u1": [_session("acc-1")]}))
+        self._patch_live_sessions(
+            _FakeLiveSessionManager(
+                user_ids=["u1"], sessions_by_user={"u1": [_session("acc-1")]}
+            )
+        )
         snapshots = self._patch_snapshots(_FakeSnapshotManager())
         with self._patch_adapter(_adapter({"USDT": Decimal("123.45")})):
             result = await write_daily_snapshots(now=NOW)
@@ -284,7 +297,11 @@ class TestWriteDailySnapshots(_SnapshotTestBase):
 
     async def test_failed_balance_writes_nothing_and_alerts_the_user(self):
         """取不到余额：不写快照，并把「回撤保护降级」告警出去。"""
-        self._patch_live_sessions(_FakeLiveSessionManager(user_ids=["u1"], sessions_by_user={"u1": [_session("acc-1")]}))
+        self._patch_live_sessions(
+            _FakeLiveSessionManager(
+                user_ids=["u1"], sessions_by_user={"u1": [_session("acc-1")]}
+            )
+        )
         snapshots = self._patch_snapshots(_FakeSnapshotManager())
         notify = self._patch_notify(delivered=True)
         with self._patch_adapter(_adapter(RuntimeError("network down"))):
@@ -301,7 +318,11 @@ class TestWriteDailySnapshots(_SnapshotTestBase):
 
     async def test_alert_is_sent_at_most_once_per_day(self):
         """5 分钟一轮，账户持续不可达时逐轮告警会变成骚扰 → 骚扰的结果是被静音。"""
-        self._patch_live_sessions(_FakeLiveSessionManager(user_ids=["u1"], sessions_by_user={"u1": [_session("acc-1")]}))
+        self._patch_live_sessions(
+            _FakeLiveSessionManager(
+                user_ids=["u1"], sessions_by_user={"u1": [_session("acc-1")]}
+            )
+        )
         self._patch_snapshots(_FakeSnapshotManager())
         notify = self._patch_notify(delivered=True)
         with self._patch_adapter(_adapter(RuntimeError("network down"))):
@@ -314,7 +335,11 @@ class TestWriteDailySnapshots(_SnapshotTestBase):
 
     async def test_undelivered_alert_is_counted_not_swallowed(self):
         """没人可送（用户已注销/无接收人）→ 计入结果，不假装送达，也不记为已告警。"""
-        self._patch_live_sessions(_FakeLiveSessionManager(user_ids=["u1"], sessions_by_user={"u1": [_session("acc-1")]}))
+        self._patch_live_sessions(
+            _FakeLiveSessionManager(
+                user_ids=["u1"], sessions_by_user={"u1": [_session("acc-1")]}
+            )
+        )
         self._patch_snapshots(_FakeSnapshotManager())
         notify = self._patch_notify(delivered=False)
         with self._patch_adapter(_adapter(RuntimeError("network down"))):
@@ -329,8 +354,16 @@ class TestWriteDailySnapshots(_SnapshotTestBase):
 
     async def test_concurrent_write_is_counted_as_already_written(self):
         """两个 worker 同时写同一天 → 唯一约束报错，按「已有」计，不炸任务。"""
-        self._patch_live_sessions(_FakeLiveSessionManager(user_ids=["u1"], sessions_by_user={"u1": [_session("acc-1")]}))
-        self._patch_snapshots(_FakeSnapshotManager(create_side_effect=Exception("UNIQUE constraint failed")))
+        self._patch_live_sessions(
+            _FakeLiveSessionManager(
+                user_ids=["u1"], sessions_by_user={"u1": [_session("acc-1")]}
+            )
+        )
+        self._patch_snapshots(
+            _FakeSnapshotManager(
+                create_side_effect=Exception("UNIQUE constraint failed")
+            )
+        )
         self._patch_notify()
         with self._patch_adapter(_adapter({"USDT": Decimal("5")})):
             result = await write_daily_snapshots(now=NOW)
@@ -393,9 +426,7 @@ class TestTaskWiring(unittest.TestCase):
     def test_task_is_registered(self):
         from celery_app import app
 
-        self.assertIn(
-            "apps.trading.tasks.snapshot_daily_equity", app.tasks
-        )
+        self.assertIn("apps.trading.tasks.snapshot_daily_equity", app.tasks)
 
     def test_task_runs_the_writer(self):
         """任务体必须真的调到写入方，而不是只返回一个空 dict。
@@ -487,7 +518,7 @@ class TestTaskWiring(unittest.TestCase):
                 payload["shadow"],
             ),
             "日报必须拿到前面三段**刚落下的产物**，而不是三个空 dict——"
-            "stub 忽略入参时，`payload.get(\"shadow\")` 写错成 `{}` 也能过，"
+            'stub 忽略入参时，`payload.get("shadow")` 写错成 `{}` 也能过，'
             "而那正是「日报说没有、实际有」这类假话的入口",
         )
         self.assertEqual(
@@ -495,7 +526,12 @@ class TestTaskWiring(unittest.TestCase):
             {
                 "users": 1,
                 "written": 1,
-                "candles": {"created": 1, "updated": 0, "unchanged": 0, "last_date": "2026-09-22"},
+                "candles": {
+                    "created": 1,
+                    "updated": 0,
+                    "unchanged": 0,
+                    "last_date": "2026-09-22",
+                },
                 "regime": {"skipped": "no_candles"},
                 "deactivation": {
                     "skipped": "no_generation",

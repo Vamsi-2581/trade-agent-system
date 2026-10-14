@@ -13,6 +13,7 @@ async def test_execute_tool_call_pushes_notification():
     # Create minimal agent
     class MockAgent(BaseAgent):
         name = "test_agent"
+
         async def handle(self, message, on_tool_result=None):
             pass
 
@@ -30,11 +31,13 @@ async def test_execute_tool_call_pushes_notification():
     tc.arguments = {"symbol": "BTCUSDT", "interval": "1h"}
 
     # Mock tool execution
-    with patch.object(agent, 'run_tool', new_callable=AsyncMock) as mock_run_tool:
-        mock_run_tool.return_value = MagicMock(success=True, data="K-line data retrieved")
+    with patch.object(agent, "run_tool", new_callable=AsyncMock) as mock_run_tool:
+        mock_run_tool.return_value = MagicMock(
+            success=True, data="K-line data retrieved"
+        )
 
         # Mock tracker.tool_call
-        with patch.object(tracker, 'tool_call') as mock_tool_call:
+        with patch.object(tracker, "tool_call") as mock_tool_call:
             await agent._execute_tool_call(tc)
 
             # Verify tool_call was invoked with correct args
@@ -57,6 +60,7 @@ async def test_multiple_tool_calls_push_sequentially():
 
     class MockAgent(BaseAgent):
         name = "test_agent"
+
         async def handle(self, message, on_tool_result=None):
             pass
 
@@ -76,10 +80,10 @@ async def test_multiple_tool_calls_push_sequentially():
     tc2.name = "get_balance"
     tc2.arguments = {"user_id": "user-1"}
 
-    with patch.object(agent, 'run_tool', new_callable=AsyncMock) as mock_run_tool:
+    with patch.object(agent, "run_tool", new_callable=AsyncMock) as mock_run_tool:
         mock_run_tool.return_value = MagicMock(success=True, data="result")
 
-        with patch.object(tracker, 'tool_call') as mock_tool_call:
+        with patch.object(tracker, "tool_call") as mock_tool_call:
             await agent._execute_tool_call(tc1)
             await agent._execute_tool_call(tc2)
 
@@ -116,8 +120,11 @@ class _XmlToolCallLLM:
         self.round = 0
         self.last_messages = None  # captured each round
 
-    async def chat_with_tools(self, system, messages, tools, max_tokens=2048, temperature=0.3):
+    async def chat_with_tools(
+        self, system, messages, tools, max_tokens=2048, temperature=0.3
+    ):
         from apps.agent.llm_client import LLMToolResponse
+
         self.round += 1
         self.last_messages = list(messages)
         if self.round == 1:
@@ -158,6 +165,7 @@ def _make_quant_agent_for_test(llm):
 
         async def run_tool(self, tool_name, **kwargs):
             from apps.agent.tools.base import ToolResult
+
             self.executed_tool_names.append(tool_name)
             return ToolResult(
                 success=True,
@@ -288,14 +296,16 @@ async def test_xml_tool_call_with_arguments():
             await agent._run_tool_loop(
                 system="x",
                 messages=[{"role": "user", "content": "q"}],
-                tools=[{
-                    "type": "function",
-                    "function": {
-                        "name": "get_kline_data",
-                        "description": "Get kline",
-                        "parameters": {"type": "object", "properties": {}},
-                    },
-                }],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_kline_data",
+                            "description": "Get kline",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
                 max_tokens=2048,
             )
     finally:
@@ -395,10 +405,10 @@ def test_dsml_parser_handles_degraded_double_pipe_compact():
 
     agent = _make_plain_agent()
     content = (
-        'I will search several directions first.<||DSML||tool_calls>'
+        "I will search several directions first.<||DSML||tool_calls>"
         '<||DSML||invoke name="doc_knowlegebase">'
         '<||DSML||parameter name="query" string="true">bond detail fields display'
-        '</||DSML||parameter></||DSML||invoke></||DSML||tool_calls>'
+        "</||DSML||parameter></||DSML||invoke></||DSML||tool_calls>"
     )
     parsed = agent._try_parse_json_tool_call(content, [])
     assert parsed == {

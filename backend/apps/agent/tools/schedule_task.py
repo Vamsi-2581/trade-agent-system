@@ -101,7 +101,9 @@ def _format_beat_schedule(row: dict) -> str:
             f"{row.get('crontab__day_of_week')}（时区 {tz}）"
         )
     if row.get("interval__every"):
-        return f"interval every {row.get('interval__every')} {row.get('interval__period')}"
+        return (
+            f"interval every {row.get('interval__every')} {row.get('interval__period')}"
+        )
     return "N/A"
 
 
@@ -251,7 +253,9 @@ class SubmitScheduledTaskTool(BaseTool):
 
             # Step 3: Backfill celery_task_id
             task_record.celery_task_id = celery_result.id
-            await db_async(task_record.save)(update_fields=["celery_task_id", "updated_at"])
+            await db_async(task_record.save)(
+                update_fields=["celery_task_id", "updated_at"]
+            )
 
             eta_str = eta.isoformat()
             eta_local = format_business(eta)
@@ -340,8 +344,14 @@ class SubmitRecurringTaskTool(BaseTool):
                     "items": {
                         "type": "object",
                         "properties": {
-                            "agent": {"type": "string", "description": "负责此步骤的 Agent 名称"},
-                            "message": {"type": "string", "description": "此步骤的执行指令"},
+                            "agent": {
+                                "type": "string",
+                                "description": "负责此步骤的 Agent 名称",
+                            },
+                            "message": {
+                                "type": "string",
+                                "description": "此步骤的执行指令",
+                            },
                         },
                         "required": ["agent", "message"],
                     },
@@ -374,10 +384,14 @@ class SubmitRecurringTaskTool(BaseTool):
             now = djtz.now()
             _, remaining_secs = schedule.schedule.is_due(now)
             # 向上取整到秒，避免浮点截断把 10:00 显示成 09:59
-            return format_business(now + timedelta(seconds=ceil(max(remaining_secs, 0))))
+            return format_business(
+                now + timedelta(seconds=ceil(max(remaining_secs, 0)))
+            )
         except Exception:
             logger.warning(
-                "[SubmitRecurringTaskTool] 无法推算下次触发时间: %s", schedule, exc_info=True
+                "[SubmitRecurringTaskTool] 无法推算下次触发时间: %s",
+                schedule,
+                exc_info=True,
             )
             return ""
 
@@ -456,8 +470,7 @@ class SubmitRecurringTaskTool(BaseTool):
             # 周期性定时任务由后台触发，无用户在场，强制 autonomous 模式
             # 跳过 skill 内的所有用户确认环节，全程使用 agent 推荐选项
             autonomous_message = (
-                message
-                + "\n\n<system_override>\n"
+                message + "\n\n<system_override>\n"
                 "autonomous: true — 本次执行由定时任务后台触发，无用户在场。"
                 "跳过所有用户确认环节，全程使用 agent 推荐选项，无需人工确认。\n"
                 "</system_override>"
@@ -626,7 +639,8 @@ class CancelScheduledTaskTool(BaseTool):
                         lambda: CrontabSchedule.objects.filter(id=crontab_id).delete()
                     )()
                     logger.info(
-                        "[CancelScheduledTaskTool] 清理孤儿调度 crontab_id=%s", crontab_id
+                        "[CancelScheduledTaskTool] 清理孤儿调度 crontab_id=%s",
+                        crontab_id,
                     )
 
             if interval_id:
@@ -731,9 +745,11 @@ class CancelScheduledTaskTool(BaseTool):
 
                 # Fetch celery_task_id first, then CAS update
                 task_info = await db_async(
-                    lambda: ScheduledOneTimeTask.objects.filter(
-                        id=task_id_or_name
-                    ).values("celery_task_id", "status").first()
+                    lambda: (
+                        ScheduledOneTimeTask.objects.filter(id=task_id_or_name)
+                        .values("celery_task_id", "status")
+                        .first()
+                    )
                 )()
 
                 if not task_info or task_info["status"] not in ("pending", "running"):
@@ -745,7 +761,7 @@ class CancelScheduledTaskTool(BaseTool):
                 celery_id = task_info.get("celery_task_id") or ""
 
                 # CAS: pending/running → revoked
-                affected = await db_async(
+                _affected = await db_async(
                     lambda: ScheduledOneTimeTask.objects.filter(
                         id=task_id_or_name,
                         status__in=["pending", "running"],

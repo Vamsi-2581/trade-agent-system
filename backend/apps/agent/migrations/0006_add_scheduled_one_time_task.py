@@ -5,33 +5,78 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('agent', '0005_add_workflow_history'),
+        ("agent", "0005_add_workflow_history"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='ScheduledOneTimeTask',
+            name="ScheduledOneTimeTask",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('task_name', models.CharField(max_length=255)),
-                ('agent_name', models.CharField(max_length=100)),
-                ('message', models.TextField()),
-                ('user_id', models.CharField(blank=True, default='', max_length=100)),
-                ('run_at', models.DateTimeField(verbose_name='计划执行时间')),
-                ('status', models.CharField(choices=[('pending', '待执行'), ('running', '执行中'), ('completed', '已完成'), ('failed', '失败'), ('revoked', '已取消'), ('missed', '已错过')], default='pending', max_length=20)),
-                ('celery_task_id', models.CharField(blank=True, default='', max_length=255)),
-                ('executed_at', models.DateTimeField(blank=True, null=True, verbose_name='实际执行时间')),
-                ('result', models.TextField(blank=True, default='', verbose_name='执行结果（JSON）')),
-                ('error', models.TextField(blank=True, default='', verbose_name='错误信息')),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("task_name", models.CharField(max_length=255)),
+                ("agent_name", models.CharField(max_length=100)),
+                ("message", models.TextField()),
+                ("user_id", models.CharField(blank=True, default="", max_length=100)),
+                ("run_at", models.DateTimeField(verbose_name="计划执行时间")),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("pending", "待执行"),
+                            ("running", "执行中"),
+                            ("completed", "已完成"),
+                            ("failed", "失败"),
+                            ("revoked", "已取消"),
+                            ("missed", "已错过"),
+                        ],
+                        default="pending",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "celery_task_id",
+                    models.CharField(blank=True, default="", max_length=255),
+                ),
+                (
+                    "executed_at",
+                    models.DateTimeField(
+                        blank=True, null=True, verbose_name="实际执行时间"
+                    ),
+                ),
+                (
+                    "result",
+                    models.TextField(
+                        blank=True, default="", verbose_name="执行结果（JSON）"
+                    ),
+                ),
+                (
+                    "error",
+                    models.TextField(blank=True, default="", verbose_name="错误信息"),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
             ],
             options={
-                'db_table': 'scheduled_one_time_task',
-                'ordering': ['-run_at'],
-                'indexes': [models.Index(fields=['status', 'run_at'], name='scheduled_ot_status_run_at_idx'), models.Index(fields=['celery_task_id'], name='scheduled_ot_celery_idx')],
+                "db_table": "scheduled_one_time_task",
+                "ordering": ["-run_at"],
+                "indexes": [
+                    models.Index(
+                        fields=["status", "run_at"],
+                        name="scheduled_ot_status_run_at_idx",
+                    ),
+                    models.Index(
+                        fields=["celery_task_id"], name="scheduled_ot_celery_idx"
+                    ),
+                ],
             },
         ),
     ]

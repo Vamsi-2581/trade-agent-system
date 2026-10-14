@@ -86,7 +86,8 @@ class TestMemoryDataStore:
         store = MemoryDataStore()
         store.clear_all()
         store.store(
-            "ticker", "BTCUSDT",
+            "ticker",
+            "BTCUSDT",
             {"symbol": "BTCUSDT", "last_price": 50000.0, "timestamp": datetime.now()},
             "binance",
         )

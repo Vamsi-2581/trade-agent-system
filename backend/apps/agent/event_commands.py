@@ -90,13 +90,15 @@ _USAGE = (
     "窗口可在 add / reschedule / confirm 上用 --停前 N / --停后 N 覆盖（单位分钟）"
 )
 
-_ADD_USAGE = "用法：/event add <档位> <作用域> <时刻> <名称…> [--停前 N] [--停后 N] [--备注 …]"
-_IMPACT_USAGE = "用法：/event impact <编号> <档位> [--备注 …]"
-_RESCHEDULE_USAGE = "用法：/event reschedule <编号> <时刻> [--停前 N] [--停后 N] [--备注 …]"
-_CANCEL_USAGE = "用法：/event cancel <编号> <理由…>"
-_CONFIRM_USAGE = (
-    "用法：/event confirm <候选编号> <档位> <作用域> <时刻> [--停前 N] [--停后 N] [--备注 …]"
+_ADD_USAGE = (
+    "用法：/event add <档位> <作用域> <时刻> <名称…> [--停前 N] [--停后 N] [--备注 …]"
 )
+_IMPACT_USAGE = "用法：/event impact <编号> <档位> [--备注 …]"
+_RESCHEDULE_USAGE = (
+    "用法：/event reschedule <编号> <时刻> [--停前 N] [--停后 N] [--备注 …]"
+)
+_CANCEL_USAGE = "用法：/event cancel <编号> <理由…>"
+_CONFIRM_USAGE = "用法：/event confirm <候选编号> <档位> <作用域> <时刻> [--停前 N] [--停后 N] [--备注 …]"
 _REJECT_USAGE = "用法：/event reject <候选编号>"
 _LIST_USAGE = "用法：/event list [天数]"
 
@@ -236,7 +238,9 @@ def _require_candidate(token: str) -> CandidateEvent:
     pk = _parse_pk(token, "候选")
     candidate = CandidateEvent.objects.filter(pk=pk).first()
     if candidate is None:
-        raise EventInputError(f"找不到编号为 {pk} 的候选事件。先跑 /event list 看编号。")
+        raise EventInputError(
+            f"找不到编号为 {pk} 的候选事件。先跑 /event list 看编号。"
+        )
     return candidate
 
 
@@ -422,9 +426,9 @@ def _list(message: AgentMessage, tokens: list[str]) -> str:
         ).order_by("event_time", "id")
     )
     pending = list(
-        CandidateEvent.objects.filter(
-            status=CandidateStatus.PENDING.value
-        ).order_by("-raised_at", "-id")
+        CandidateEvent.objects.filter(status=CandidateStatus.PENDING.value).order_by(
+            "-raised_at", "-id"
+        )
     )
 
     lines = [f"未来 {days} 天内、尚未整体过去的事件：{len(upcoming)} 条"]

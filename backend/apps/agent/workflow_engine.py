@@ -84,17 +84,19 @@ class WorkflowContext(dict):
 
     @classmethod
     def create(cls, summary: str, variables: dict | None = None) -> "WorkflowContext":
-        return cls({
-            "workflow_id": str(uuid.uuid4())[:8],
-            "summary": summary,
-            "variables": variables or {},
-            "step_results": {},
-            "metadata": {
-                "created_at": time.time(),
-                "total_steps": 0,
-                "completed_steps": 0,
-            },
-        })
+        return cls(
+            {
+                "workflow_id": str(uuid.uuid4())[:8],
+                "summary": summary,
+                "variables": variables or {},
+                "step_results": {},
+                "metadata": {
+                    "created_at": time.time(),
+                    "total_steps": 0,
+                    "completed_steps": 0,
+                },
+            }
+        )
 
 
 # Type alias for the route_to_agent callback used by the engine.
@@ -136,6 +138,7 @@ class WorkflowEngine:
         """Resolve the session manager, defaulting to the global getter."""
         if self._get_session_manager is None:
             from apps.agent import supervisor as _supervisor
+
             self._get_session_manager = _supervisor.get_session_manager
         return self._get_session_manager()
 
@@ -189,15 +192,23 @@ class WorkflowEngine:
             )
 
         _wf_log(
-            "info", ctx["workflow_id"], "START",
-            summary=ctx["summary"], steps=len(steps), user=message.user_id,
+            "info",
+            ctx["workflow_id"],
+            "START",
+            summary=ctx["summary"],
+            steps=len(steps),
+            user=message.user_id,
         )
 
         step_results: list[dict] = []
 
         try:
             failed_result = await self._execute_steps(
-                steps, ctx, message, on_tool_result, step_results,
+                steps,
+                ctx,
+                message,
+                on_tool_result,
+                step_results,
             )
             if failed_result is not None:
                 if on_workflow_complete:
@@ -207,8 +218,11 @@ class WorkflowEngine:
             result = self._workflow_completed(ctx, step_results, steps, message)
             elapsed = round(time.time() - ctx["metadata"]["created_at"], 2)
             _wf_log(
-                "info", ctx["workflow_id"], "COMPLETED",
-                steps=len(steps), elapsed=elapsed,
+                "info",
+                ctx["workflow_id"],
+                "COMPLETED",
+                steps=len(steps),
+                elapsed=elapsed,
             )
             if on_workflow_complete:
                 await on_workflow_complete(ctx, step_results, message, "completed", "")
@@ -217,23 +231,35 @@ class WorkflowEngine:
         except Exception as e:
             elapsed = round(time.time() - ctx["metadata"]["created_at"], 2)
             _wf_log(
-                "error", ctx["workflow_id"], "ABORTED",
+                "error",
+                ctx["workflow_id"],
+                "ABORTED",
                 completed_steps=len(step_results),
-                total=len(steps), error=str(e), elapsed=elapsed,
+                total=len(steps),
+                error=str(e),
+                elapsed=elapsed,
             )
             result = AgentResult(
                 task_id=message.task_id,
                 success=False,
                 error=f"工作流异常: {str(e)}",
-                data={"workflow_id": ctx["workflow_id"], "completed_steps": step_results},
+                data={
+                    "workflow_id": ctx["workflow_id"],
+                    "completed_steps": step_results,
+                },
             )
             if on_workflow_complete:
-                await on_workflow_complete(ctx, step_results, message, "aborted", str(e))
+                await on_workflow_complete(
+                    ctx, step_results, message, "aborted", str(e)
+                )
             return result
         finally:
             if message.user_id:
                 current = await session_mgr.get_session_context(message.user_id)
-                if current and current.get("state") == SessionState.WORKFLOW_RUNNING.value:
+                if (
+                    current
+                    and current.get("state") == SessionState.WORKFLOW_RUNNING.value
+                ):
                     await session_mgr.clear_session_context(message.user_id)
 
     # ------------------------------------------------------------------ #
@@ -265,8 +291,10 @@ class WorkflowEngine:
             tracker = tracker_context.get(None)
             if tracker and tracker.is_cancelled():
                 _wf_log(
-                    "info", ctx["workflow_id"],
-                    "workflow cancelled by user at step %d", idx + 1,
+                    "info",
+                    ctx["workflow_id"],
+                    "workflow cancelled by user at step %d",
+                    idx + 1,
                 )
                 return AgentResult(
                     task_id=message.task_id,
@@ -290,20 +318,28 @@ class WorkflowEngine:
                             error="不支持嵌套 goal 循环",
                         )
                 loop_result = await self._execute_goal_loop(
-                    step, ctx, message, on_tool_result,
+                    step,
+                    ctx,
+                    message,
+                    on_tool_result,
                 )
-                step_results.append({
-                    "type": "loop",
-                    "step": idx + 1,
-                    **loop_result,
-                })
+                step_results.append(
+                    {
+                        "type": "loop",
+                        "step": idx + 1,
+                        **loop_result,
+                    }
+                )
                 ctx["metadata"]["completed_steps"] = idx + 1
                 if "error" in loop_result:
                     return AgentResult(
                         task_id=message.task_id,
                         success=False,
                         error=loop_result["error"],
-                        data={"workflow_id": ctx["workflow_id"], "completed_steps": step_results},
+                        data={
+                            "workflow_id": ctx["workflow_id"],
+                            "completed_steps": step_results,
+                        },
                     )
                 continue
 
@@ -325,23 +361,33 @@ class WorkflowEngine:
             # Evaluate condition
             if condition and not self.evaluate_condition(ctx, condition):
                 _wf_log(
-                    "info", ctx["workflow_id"], "STEP_SKIPPED",
-                    step=idx + 1, agent=agent_name, reason=condition,
+                    "info",
+                    ctx["workflow_id"],
+                    "STEP_SKIPPED",
+                    step=idx + 1,
+                    agent=agent_name,
+                    reason=condition,
                 )
-                step_results.append({
-                    "agent": agent_name,
-                    "data": "(条件不满足，跳过)",
-                    "step": idx + 1,
-                    "skipped": True,
-                })
+                step_results.append(
+                    {
+                        "agent": agent_name,
+                        "data": "(条件不满足，跳过)",
+                        "step": idx + 1,
+                        "skipped": True,
+                    }
+                )
                 continue
 
             # Human interrupt point
             if interrupt:
                 _wf_log(
-                    "info", ctx["workflow_id"], "STEP_PAUSE",
-                    step=idx + 1, agent=agent_name,
-                    message=step_message[:100] + ("..." if len(step_message) > 100 else ""),
+                    "info",
+                    ctx["workflow_id"],
+                    "STEP_PAUSE",
+                    step=idx + 1,
+                    agent=agent_name,
+                    message=step_message[:100]
+                    + ("..." if len(step_message) > 100 else ""),
                 )
                 await session_mgr.pause_session(
                     message.user_id,
@@ -362,29 +408,44 @@ class WorkflowEngine:
 
             # Execute with retry
             _wf_log(
-                "info", ctx["workflow_id"], "STEP_START",
-                step=idx + 1, total=len(steps), agent=agent_name,
+                "info",
+                ctx["workflow_id"],
+                "STEP_START",
+                step=idx + 1,
+                total=len(steps),
+                agent=agent_name,
                 message=step_message[:100] + ("..." if len(step_message) > 100 else ""),
                 retries=max_retries,
             )
             step_start = time.time()
             result = await self._execute_step_with_retry(
-                agent_name, step_message, ctx, message, on_tool_result,
-                max_retries, retry_delay,
+                agent_name,
+                step_message,
+                ctx,
+                message,
+                on_tool_result,
+                max_retries,
+                retry_delay,
             )
             step_elapsed = round(time.time() - step_start, 2)
 
             if result.success:
                 content = self._extract_content(result.data)
                 _wf_log(
-                    "info", ctx["workflow_id"], "STEP_OK",
-                    step=idx + 1, agent=agent_name, elapsed=step_elapsed,
+                    "info",
+                    ctx["workflow_id"],
+                    "STEP_OK",
+                    step=idx + 1,
+                    agent=agent_name,
+                    elapsed=step_elapsed,
                 )
-                step_results.append({
-                    "agent": agent_name,
-                    "data": content,
-                    "step": idx + 1,
-                })
+                step_results.append(
+                    {
+                        "agent": agent_name,
+                        "data": content,
+                        "step": idx + 1,
+                    }
+                )
                 ctx["step_results"][idx] = {"agent": agent_name, "data": content}
                 ctx["variables"][f"step_{idx + 1}_result"] = content
                 ctx["metadata"]["completed_steps"] = idx + 1
@@ -395,19 +456,31 @@ class WorkflowEngine:
             else:
                 if on_failure == "skip":
                     _wf_log(
-                        "warn", ctx["workflow_id"], "STEP_FAIL",
-                        step=idx + 1, agent=agent_name,
-                        error=result.error, action="skip", elapsed=step_elapsed,
+                        "warn",
+                        ctx["workflow_id"],
+                        "STEP_FAIL",
+                        step=idx + 1,
+                        agent=agent_name,
+                        error=result.error,
+                        action="skip",
+                        elapsed=step_elapsed,
                     )
-                    step_results.append({
-                        "agent": agent_name,
-                        "data": f"(失败，跳过: {result.error})",
-                        "step": idx + 1,
-                        "failed": True,
-                    })
+                    step_results.append(
+                        {
+                            "agent": agent_name,
+                            "data": f"(失败，跳过: {result.error})",
+                            "step": idx + 1,
+                            "failed": True,
+                        }
+                    )
                 else:
                     return self._workflow_failed(
-                        ctx, idx, agent_name, result, step_results, message,
+                        ctx,
+                        idx,
+                        agent_name,
+                        result,
+                        step_results,
+                        message,
                     )
 
         return None
@@ -429,7 +502,8 @@ class WorkflowEngine:
         """
         goal = loop_step.get("goal", "")
         max_iter = min(
-            loop_step.get("max_iterations", 3), self._LOOP_MAX_ITERATIONS_HARD,
+            loop_step.get("max_iterations", 3),
+            self._LOOP_MAX_ITERATIONS_HARD,
         )
         inner_steps = loop_step.get("steps", [])
         ctx.setdefault("iterations", [])
@@ -453,24 +527,36 @@ class WorkflowEngine:
             for s in inner_steps:
                 rendered = dict(s)
                 rendered["message"] = self.render_loop_message(
-                    s.get("message", ""), ctx["variables"],
+                    s.get("message", ""),
+                    ctx["variables"],
                 )
                 rendered_steps.append(rendered)
 
             iter_results: list[dict] = []
             failed = await self._execute_steps(
-                rendered_steps, ctx, message, on_tool_result, iter_results,
+                rendered_steps,
+                ctx,
+                message,
+                on_tool_result,
+                iter_results,
             )
 
             if failed is not None:
                 _wf_log(
-                    "error", ctx["workflow_id"], "LOOP_ABORT",
-                    iter=iteration, error=failed.error,
+                    "error",
+                    ctx["workflow_id"],
+                    "LOOP_ABORT",
+                    iter=iteration,
+                    error=failed.error,
                 )
-                iterations_log.append({
-                    "iter": iteration, "steps": iter_results,
-                    "aborted": True, "error": failed.error,
-                })
+                iterations_log.append(
+                    {
+                        "iter": iteration,
+                        "steps": iter_results,
+                        "aborted": True,
+                        "error": failed.error,
+                    }
+                )
                 ctx["iterations"] = iterations_log
                 return {
                     "goal": goal,
@@ -489,13 +575,19 @@ class WorkflowEngine:
                 judge_fail_count += 1
                 if judge_fail_count >= self._LOOP_JUDGE_MAX_FAILURES:
                     _wf_log(
-                        "warn", ctx["workflow_id"], "LOOP_JUDGE_FAILED",
-                        iter=iteration, consecutive=judge_fail_count,
+                        "warn",
+                        ctx["workflow_id"],
+                        "LOOP_JUDGE_FAILED",
+                        iter=iteration,
+                        consecutive=judge_fail_count,
                     )
-                    iterations_log.append({
-                        "iter": iteration, "steps": iter_results,
-                        "judge_failed": True,
-                    })
+                    iterations_log.append(
+                        {
+                            "iter": iteration,
+                            "steps": iter_results,
+                            "judge_failed": True,
+                        }
+                    )
                     ctx["iterations"] = iterations_log
                     return {
                         "goal": goal,
@@ -517,22 +609,29 @@ class WorkflowEngine:
             if score is not None:
                 ctx["variables"]["last_score"] = score
 
-            iterations_log.append({
-                "iter": iteration,
-                "steps": iter_results,
-                "achieved": eval_result.get("achieved", False),
-                "score": score,
-                "feedback": feedback,
-            })
+            iterations_log.append(
+                {
+                    "iter": iteration,
+                    "steps": iter_results,
+                    "achieved": eval_result.get("achieved", False),
+                    "score": score,
+                    "feedback": feedback,
+                }
+            )
 
             _wf_log(
-                "info", ctx["workflow_id"], "LOOP_ITER",
-                iter=iteration, max=max_iter, achieved=eval_result.get("achieved"),
+                "info",
+                ctx["workflow_id"],
+                "LOOP_ITER",
+                iter=iteration,
+                max=max_iter,
+                achieved=eval_result.get("achieved"),
                 score=score,
             )
 
             # Push progress notification via TaskTracker
             from apps.agent.task_tracker import TaskTracker
+
             tracker = TaskTracker.get_current()
             if tracker:
                 score_text = f"，得分 {score}" if score is not None else ""
@@ -550,8 +649,12 @@ class WorkflowEngine:
 
         ctx["iterations"] = iterations_log
         _wf_log(
-            "info", ctx["workflow_id"], "LOOP_DONE",
-            achieved=achieved, iterations=len(iterations_log), best=best_iter,
+            "info",
+            ctx["workflow_id"],
+            "LOOP_DONE",
+            achieved=achieved,
+            iterations=len(iterations_log),
+            best=best_iter,
         )
 
         return {
@@ -614,7 +717,12 @@ class WorkflowEngine:
                 temperature=0.1,
             )
             if is_fallback(response):
-                return {"achieved": False, "score": None, "feedback": "", "judge_ok": False}
+                return {
+                    "achieved": False,
+                    "score": None,
+                    "feedback": "",
+                    "judge_ok": False,
+                }
 
             text = response.strip()
             fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
@@ -655,8 +763,14 @@ class WorkflowEngine:
             return template
 
     async def _execute_step_with_retry(
-        self, agent_name, step_message, ctx, original_message,
-        on_tool_result, max_retries, retry_delay,
+        self,
+        agent_name,
+        step_message,
+        ctx,
+        original_message,
+        on_tool_result,
+        max_retries,
+        retry_delay,
     ) -> AgentResult:
         """Execute a single workflow step with retry logic."""
         last_error = None
@@ -664,8 +778,12 @@ class WorkflowEngine:
         for attempt in range(max_retries + 1):
             if attempt > 0:
                 _wf_log(
-                    "warn", ctx["workflow_id"], "STEP_RETRY",
-                    step=agent_name, attempt=attempt, max=max_retries,
+                    "warn",
+                    ctx["workflow_id"],
+                    "STEP_RETRY",
+                    step=agent_name,
+                    attempt=attempt,
+                    max=max_retries,
                 )
                 await asyncio.sleep(retry_delay)
 
@@ -690,7 +808,9 @@ class WorkflowEngine:
                 step_msg.payload["previous_agent_name"] = prev.get("agent", "")
 
             result = await self._route_to_agent(
-                agent_name, step_msg, on_tool_result=on_tool_result,
+                agent_name,
+                step_msg,
+                on_tool_result=on_tool_result,
             )
             if result.success:
                 return result
@@ -718,7 +838,9 @@ class WorkflowEngine:
         except Exception as e:
             logger.warning(
                 "[%s] Condition eval failed '%s': %s",
-                self._agent_name, condition, e,
+                self._agent_name,
+                condition,
+                e,
             )
             return True
 
@@ -729,14 +851,24 @@ class WorkflowEngine:
         return str(data)
 
     def _workflow_failed(
-        self, ctx, failed_idx, agent_name, result, step_results, message,
+        self,
+        ctx,
+        failed_idx,
+        agent_name,
+        result,
+        step_results,
+        message,
     ):
         """Handle workflow failure."""
         elapsed = round(time.time() - ctx["metadata"]["created_at"], 2)
         _wf_log(
-            "error", ctx["workflow_id"], "FAILED",
-            step=failed_idx + 1, agent=agent_name,
-            error=result.error, elapsed=elapsed,
+            "error",
+            ctx["workflow_id"],
+            "FAILED",
+            step=failed_idx + 1,
+            agent=agent_name,
+            error=result.error,
+            elapsed=elapsed,
         )
         return AgentResult(
             task_id=message.task_id,
@@ -752,14 +884,20 @@ class WorkflowEngine:
         ctx["metadata"]["elapsed_seconds"] = elapsed
 
         _wf_log(
-            "info", ctx["workflow_id"], "ALL_STEPS_DONE",
-            completed=len(step_results), total=len(steps),
+            "info",
+            ctx["workflow_id"],
+            "ALL_STEPS_DONE",
+            completed=len(step_results),
+            total=len(steps),
             elapsed=round(elapsed, 2),
         )
         logger.info(
             "[%s] Workflow %s completed in %.1fs (%d/%d steps)",
-            self._agent_name, ctx["workflow_id"], elapsed,
-            len(step_results), len(steps),
+            self._agent_name,
+            ctx["workflow_id"],
+            elapsed,
+            len(step_results),
+            len(steps),
         )
 
         summary_lines = [
@@ -775,8 +913,10 @@ class WorkflowEngine:
                 )
             else:
                 status = (
-                    "(跳过)" if sr.get("skipped")
-                    else "(失败)" if sr.get("failed")
+                    "(跳过)"
+                    if sr.get("skipped")
+                    else "(失败)"
+                    if sr.get("failed")
                     else ""
                 )
                 data_str = str(sr.get("data", ""))[:500]

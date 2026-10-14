@@ -162,7 +162,12 @@ class TestWhatIsNotAGroundForDeactivation(SimpleTestCase):
 
     def test_only_target_reaches_the_suggestion_list(self):
         """逐状态过一遍 `targets`：这是「哪些结论构成停用理由」的全集断言。"""
-        for state in (sl.STATE_FIT, sl.STATE_NEUTRAL, sl.STATE_UNKNOWN, sl.STATE_BLANKET):
+        for state in (
+            sl.STATE_FIT,
+            sl.STATE_NEUTRAL,
+            sl.STATE_UNKNOWN,
+            sl.STATE_BLANKET,
+        ):
             with self.subTest(state=state):
                 got = derive({(1, DOWNTREND): cell(1, DOWNTREND, state)}, ids=(1,))
                 self.assertEqual(got.targets, ())
@@ -234,7 +239,11 @@ class TestBlanketIsStructural(SimpleTestCase):
         """高波动档下就算有人手工塞了一格「不适用」，那一格也不是 `blanket`——
         而这里要钉的是**真实形状**：`pool` 对高波动档恒返回 `blanket`。"""
         got = derive(
-            {(1, HIGH_VOL): cell(1, HIGH_VOL, sl.STATE_BLANKET, reason=sl.REASON_HIGH_VOL_BLANKET)},
+            {
+                (1, HIGH_VOL): cell(
+                    1, HIGH_VOL, sl.STATE_BLANKET, reason=sl.REASON_HIGH_VOL_BLANKET
+                )
+            },
             ids=(1,),
             state=HIGH_VOL,
         )
@@ -302,7 +311,12 @@ class TestBlocked(SimpleTestCase):
         边界落在哪一边是会有人依赖的事实（判定任务挂了一次之后还剩几天补救），
         所以逐日钉住，而不是只测「4 天算过期」。
         """
-        for age_days, blocked in ((0, ""), (1, ""), (3, ""), (4, dea.BLOCKED_STALE_STATE)):
+        for age_days, blocked in (
+            (0, ""),
+            (1, ""),
+            (3, ""),
+            (4, dea.BLOCKED_STALE_STATE),
+        ):
             with self.subTest(age_days=age_days):
                 got = dea.derive(
                     {},
@@ -375,7 +389,11 @@ class TestExemptionAndRunningAreMarks(SimpleTestCase):
     def test_cell_digest_is_carried_but_not_invented(self):
         """格子上的依据原样带着走；没有格子时是空字典，不是编一份出来。"""
         got = derive(
-            {(1, DOWNTREND): cell(1, DOWNTREND, sl.STATE_UNFIT, evidence={"trades": 7})},
+            {
+                (1, DOWNTREND): cell(
+                    1, DOWNTREND, sl.STATE_UNFIT, evidence={"trades": 7}
+                )
+            },
             ids=(1, 2),
         )
         self.assertEqual(got.outcomes[0].evidence, {"trades": 7})

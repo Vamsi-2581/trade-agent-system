@@ -319,7 +319,9 @@ def derive(
     age_days, blocked = _gate(state, now, params)
 
     unmanaged = tuple(
-        sorted({strategy_id for strategy_id, _ in cells if strategy_id not in managed_set})
+        sorted(
+            {strategy_id for strategy_id, _ in cells if strategy_id not in managed_set}
+        )
     )
 
     # 冷启动下没有「当前阶段」可问：逐策略全落成「当前代没有这一格」是一句真的废话，

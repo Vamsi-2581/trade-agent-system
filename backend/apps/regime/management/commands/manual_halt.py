@@ -44,17 +44,31 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         action = parser.add_mutually_exclusive_group()
-        action.add_argument("--trip", action="store_true", help="按下手动熔断（默认 24 小时失效）")
-        action.add_argument("--lift", action="store_true", help="人工解除该作用域上的手动熔断")
+        action.add_argument(
+            "--trip", action="store_true", help="按下手动熔断（默认 24 小时失效）"
+        )
+        action.add_argument(
+            "--lift", action="store_true", help="人工解除该作用域上的手动熔断"
+        )
         scope = parser.add_mutually_exclusive_group()
-        scope.add_argument("--symbol", default=None, metavar="SYM", help="作用域：只拦这个品种")
         scope.add_argument(
-            "--strategy", default=None, metavar="ID", help="作用域：只拦这个策略（uuid）"
+            "--symbol", default=None, metavar="SYM", help="作用域：只拦这个品种"
         )
         scope.add_argument(
-            "--global", dest="global_scope", action="store_true", help="作用域：全市场（trip 缺省）"
+            "--strategy",
+            default=None,
+            metavar="ID",
+            help="作用域：只拦这个策略（uuid）",
         )
-        parser.add_argument("--reason", default="", metavar="TEXT", help="trip 必填：为什么")
+        scope.add_argument(
+            "--global",
+            dest="global_scope",
+            action="store_true",
+            help="作用域：全市场（trip 缺省）",
+        )
+        parser.add_argument(
+            "--reason", default="", metavar="TEXT", help="trip 必填：为什么"
+        )
         parser.add_argument(
             "--hours",
             default=None,
@@ -123,9 +137,7 @@ class Command(BaseCommand):
                 )
             except manual_halt.ManualHaltError as exc:
                 # 「你给的东西不对」是命令的正常回复，不是故障（与 /event 同一条纪律）。
-                raise CommandError(
-                    f"{exc}\n\n用法：python manage.py help manual_halt"
-                )
+                raise CommandError(f"{exc}\n\n用法：python manage.py help manual_halt")
             row = outcome.row
             expiry = (
                 "到人工解除为止"
@@ -151,10 +163,14 @@ class Command(BaseCommand):
             except manual_halt.ManualHaltError as exc:
                 raise CommandError(str(exc))
             if row is None:
-                self.stdout.write(f"ℹ️ {halt.scope_display(scope)} 上没有活着的手动熔断可解除。")
+                self.stdout.write(
+                    f"ℹ️ {halt.scope_display(scope)} 上没有活着的手动熔断可解除。"
+                )
             else:
                 self.stdout.write(
-                    self.style.SUCCESS(f"🔓 已解除：{halt.scope_display(scope)}（人工解除）")
+                    self.style.SUCCESS(
+                        f"🔓 已解除：{halt.scope_display(scope)}（人工解除）"
+                    )
                 )
         else:
             self.stdout.write("（只读——要改东西请加 --trip 或 --lift）")

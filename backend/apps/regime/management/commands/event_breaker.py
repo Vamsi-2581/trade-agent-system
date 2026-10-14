@@ -65,7 +65,9 @@ class Command(BaseCommand):
         self.stdout.write("")
 
         if not options["on"] and not options["off"]:
-            self.stdout.write("（没有动作参数：以上是当前状态。--on 打开 / --off 关掉）")
+            self.stdout.write(
+                "（没有动作参数：以上是当前状态。--on 打开 / --off 关掉）"
+            )
             return
 
         # 关闭方向的 `reason` 问的是另一件事（「关掉的那一刻放掉了什么」），所以换一份；

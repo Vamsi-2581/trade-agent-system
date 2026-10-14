@@ -41,7 +41,9 @@ def backfill_account_user(apps, schema_editor):
     LiveSession = apps.get_model("trading", "LiveSession")
 
     filled = ambiguous = unowned = 0
-    accounts = ExchangeAccount.objects.filter(user__isnull=True).order_by("created_at", "id")
+    accounts = ExchangeAccount.objects.filter(user__isnull=True).order_by(
+        "created_at", "id"
+    )
     for account in accounts:
         user_ids = list(
             LiveSession.objects.filter(exchange_account=account)
@@ -75,19 +77,25 @@ def backfill_account_user(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('exchange', '0003_deactivate_non_binance'),
+        ("exchange", "0003_deactivate_non_binance"),
         # 回填要读 `LiveSession`，所以必须等它建出来。
-        ('trading', '0006_backfill_strategy_is_active'),
+        ("trading", "0006_backfill_strategy_is_active"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='exchangeaccount',
-            name='user',
-            field=models.ForeignKey(blank=True, help_text='账户归属人（空 = 未归属，通知按全体 is_active 发）', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='exchange_accounts', to=settings.AUTH_USER_MODEL),
+            model_name="exchangeaccount",
+            name="user",
+            field=models.ForeignKey(
+                blank=True,
+                help_text="账户归属人（空 = 未归属，通知按全体 is_active 发）",
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="exchange_accounts",
+                to=settings.AUTH_USER_MODEL,
+            ),
         ),
         # 反向是 noop：`user` 这一列本身会随 AddField 一起被删掉，而「回填」这件事
         # 在反向运行里没有可还原的原状（没有前值）。写一个「反向清空」更糟——它会连带

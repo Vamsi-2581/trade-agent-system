@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 import apps.agent.tasks as tasks_mod
 from apps.agent.base import AgentResult
@@ -33,9 +32,10 @@ def _call_task():
 
 def test_entry_closes_stale_connections():
     """入口 close_all：即使 CAS 失败提前返回，也必须先丢弃陈旧连接。"""
-    with patch.object(tasks_mod, "_update_task_status", return_value=0), patch(
-        "django.db.connections.close_all"
-    ) as close_all:
+    with (
+        patch.object(tasks_mod, "_update_task_status", return_value=0),
+        patch("django.db.connections.close_all") as close_all,
+    ):
         result = _call_task()
 
     assert result["status"] == "SKIPPED"

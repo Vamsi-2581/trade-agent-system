@@ -4,42 +4,117 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0008_dailyreport_delivered_at_dailyreport_delivery_and_more'),
+        ("regime", "0008_dailyreport_delivered_at_dailyreport_delivery_and_more"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='HaltDeclaration',
+            name="HaltDeclaration",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('trigger', models.CharField(choices=[('blanket', '保命档（高波动）'), ('event_breaker', '事件熔断'), ('deactivation', '策略停用决策')], max_length=32, verbose_name='触发源')),
-                ('scope', models.CharField(db_index=True, max_length=128, verbose_name='作用域')),
-                ('label', models.CharField(max_length=128, verbose_name='触发源名称')),
-                ('opened_at', models.DateTimeField(db_index=True, verbose_name='生效起始（UTC）')),
-                ('expires_at', models.DateTimeField(blank=True, db_index=True, null=True, verbose_name='生效截止（UTC，空=不定）')),
-                ('closed_at', models.DateTimeField(blank=True, db_index=True, null=True, verbose_name='解除时刻（UTC，空=生效中）')),
-                ('closed_reason', models.CharField(blank=True, default='', max_length=64, verbose_name='解除原因')),
-                ('reason', models.TextField(verbose_name='声明依据（必填）')),
-                ('actor_kind', models.CharField(choices=[('cli', '命令行'), ('task', '定时任务'), ('chat', '聊天渠道')], max_length=16, verbose_name='触发方类别')),
-                ('actor_name', models.CharField(max_length=128, verbose_name='触发方')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "trigger",
+                    models.CharField(
+                        choices=[
+                            ("blanket", "保命档（高波动）"),
+                            ("event_breaker", "事件熔断"),
+                            ("deactivation", "策略停用决策"),
+                        ],
+                        max_length=32,
+                        verbose_name="触发源",
+                    ),
+                ),
+                (
+                    "scope",
+                    models.CharField(
+                        db_index=True, max_length=128, verbose_name="作用域"
+                    ),
+                ),
+                ("label", models.CharField(max_length=128, verbose_name="触发源名称")),
+                (
+                    "opened_at",
+                    models.DateTimeField(db_index=True, verbose_name="生效起始（UTC）"),
+                ),
+                (
+                    "expires_at",
+                    models.DateTimeField(
+                        blank=True,
+                        db_index=True,
+                        null=True,
+                        verbose_name="生效截止（UTC，空=不定）",
+                    ),
+                ),
+                (
+                    "closed_at",
+                    models.DateTimeField(
+                        blank=True,
+                        db_index=True,
+                        null=True,
+                        verbose_name="解除时刻（UTC，空=生效中）",
+                    ),
+                ),
+                (
+                    "closed_reason",
+                    models.CharField(
+                        blank=True, default="", max_length=64, verbose_name="解除原因"
+                    ),
+                ),
+                ("reason", models.TextField(verbose_name="声明依据（必填）")),
+                (
+                    "actor_kind",
+                    models.CharField(
+                        choices=[
+                            ("cli", "命令行"),
+                            ("task", "定时任务"),
+                            ("chat", "聊天渠道"),
+                        ],
+                        max_length=16,
+                        verbose_name="触发方类别",
+                    ),
+                ),
+                ("actor_name", models.CharField(max_length=128, verbose_name="触发方")),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
             ],
             options={
-                'verbose_name': '停止声明',
-                'verbose_name_plural': '停止声明',
-                'db_table': 'regime_halt_declarations',
-                'ordering': ['-opened_at', '-id'],
+                "verbose_name": "停止声明",
+                "verbose_name_plural": "停止声明",
+                "db_table": "regime_halt_declarations",
+                "ordering": ["-opened_at", "-id"],
             },
         ),
         migrations.AddField(
-            model_name='regimemechanismswitch',
-            name='kind',
-            field=models.CharField(choices=[('mechanism', '出 Shadow（判定 + 切片 + 自动停用）'), ('event_breaker', '事件熔断'), ('regime_gate', '行情阶段 gate')], db_index=True, default='mechanism', max_length=16, verbose_name='开关'),
+            model_name="regimemechanismswitch",
+            name="kind",
+            field=models.CharField(
+                choices=[
+                    ("mechanism", "出 Shadow（判定 + 切片 + 自动停用）"),
+                    ("event_breaker", "事件熔断"),
+                    ("regime_gate", "行情阶段 gate"),
+                ],
+                db_index=True,
+                default="mechanism",
+                max_length=16,
+                verbose_name="开关",
+            ),
         ),
         migrations.AddConstraint(
-            model_name='haltdeclaration',
-            constraint=models.UniqueConstraint(condition=models.Q(('closed_at__isnull', True)), fields=('trigger', 'scope'), name='uniq_live_halt_declaration'),
+            model_name="haltdeclaration",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(("closed_at__isnull", True)),
+                fields=("trigger", "scope"),
+                name="uniq_live_halt_declaration",
+            ),
         ),
     ]

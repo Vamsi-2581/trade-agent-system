@@ -15,11 +15,46 @@ from apps.agent.tools.box_range import DetectBoxRangeTool
 @pytest.mark.asyncio
 async def test_klines_as_temp_file_path_is_accepted(tmp_path):
     sample = [
-        {"timestamp": "2025-01-01T00:00:00", "open": 100, "high": 102, "low": 99, "close": 101, "volume": 1},
-        {"timestamp": "2025-01-02T00:00:00", "open": 101, "high": 103, "low": 100, "close": 102, "volume": 1},
-        {"timestamp": "2025-01-03T00:00:00", "open": 102, "high": 104, "low": 101, "close": 103, "volume": 1},
-        {"timestamp": "2025-01-04T00:00:00", "open": 103, "high": 105, "low": 102, "close": 104, "volume": 1},
-        {"timestamp": "2025-01-05T00:00:00", "open": 104, "high": 106, "low": 103, "close": 105, "volume": 1},
+        {
+            "timestamp": "2025-01-01T00:00:00",
+            "open": 100,
+            "high": 102,
+            "low": 99,
+            "close": 101,
+            "volume": 1,
+        },
+        {
+            "timestamp": "2025-01-02T00:00:00",
+            "open": 101,
+            "high": 103,
+            "low": 100,
+            "close": 102,
+            "volume": 1,
+        },
+        {
+            "timestamp": "2025-01-03T00:00:00",
+            "open": 102,
+            "high": 104,
+            "low": 101,
+            "close": 103,
+            "volume": 1,
+        },
+        {
+            "timestamp": "2025-01-04T00:00:00",
+            "open": 103,
+            "high": 105,
+            "low": 102,
+            "close": 104,
+            "volume": 1,
+        },
+        {
+            "timestamp": "2025-01-05T00:00:00",
+            "open": 104,
+            "high": 106,
+            "low": 103,
+            "close": 105,
+            "volume": 1,
+        },
     ]
     path = tmp_path / "ohlcv.json"
     path.write_text(json.dumps(sample))
@@ -52,7 +87,9 @@ async def test_klines_as_list_still_works():
 @pytest.mark.asyncio
 async def test_nonexistent_path_gives_actionable_error():
     tool = DetectBoxRangeTool()
-    result = await tool.execute(klines="/tmp/does_not_exist_xyz.json", max_width_pct=0.5)
+    result = await tool.execute(
+        klines="/tmp/does_not_exist_xyz.json", max_width_pct=0.5
+    )
     assert result.success is False
     assert "路径不存在" in (result.error or "")
 

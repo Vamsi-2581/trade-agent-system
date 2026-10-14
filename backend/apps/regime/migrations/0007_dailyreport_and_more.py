@@ -5,38 +5,130 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0006_majorevent_majoreventchange_and_more'),
+        ("regime", "0006_majorevent_majoreventchange_and_more"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='DailyReport',
+            name="DailyReport",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('symbol', models.CharField(max_length=32, verbose_name='标的')),
-                ('run_day', models.DateField(db_index=True, verbose_name='运行日（业务时区的自然日）')),
-                ('base_regime', models.CharField(blank=True, choices=[('high_vol', '高波动'), ('downtrend', '下行趋势'), ('uptrend', '上行趋势'), ('range', '箱体震荡')], default='', max_length=16, verbose_name='基础阶段（内联副本）')),
-                ('escalation', models.CharField(blank=True, choices=[('', '无'), ('news', '资讯抬升')], default='', max_length=16, verbose_name='抬升标志（内联副本）')),
-                ('effective_regime', models.CharField(blank=True, choices=[('high_vol', '高波动'), ('downtrend', '下行趋势'), ('uptrend', '上行趋势'), ('range', '箱体震荡')], default='', max_length=16, verbose_name='生效阶段（内联副本）')),
-                ('deactivation_skipped', models.CharField(blank=True, default='', max_length=32, verbose_name='推导收场（空 = 正常推导）')),
-                ('judgement_missing', models.BooleanField(default=False, verbose_name='今日判定缺失（照发）')),
-                ('sections', models.JSONField(default=dict, verbose_name='五段内容（结构化）')),
-                ('landscape', models.JSONField(default=dict, verbose_name='当天推导结论快照（做差用）')),
-                ('note', models.TextField(blank=True, default='', verbose_name='给人看的一句话（为什么这一行是这样）')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='生成时间')),
-                ('judgement', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='daily_reports', to='regime.regimejudgement', verbose_name='三值所抄的那条判定（下钻用）')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("symbol", models.CharField(max_length=32, verbose_name="标的")),
+                (
+                    "run_day",
+                    models.DateField(
+                        db_index=True, verbose_name="运行日（业务时区的自然日）"
+                    ),
+                ),
+                (
+                    "base_regime",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("high_vol", "高波动"),
+                            ("downtrend", "下行趋势"),
+                            ("uptrend", "上行趋势"),
+                            ("range", "箱体震荡"),
+                        ],
+                        default="",
+                        max_length=16,
+                        verbose_name="基础阶段（内联副本）",
+                    ),
+                ),
+                (
+                    "escalation",
+                    models.CharField(
+                        blank=True,
+                        choices=[("", "无"), ("news", "资讯抬升")],
+                        default="",
+                        max_length=16,
+                        verbose_name="抬升标志（内联副本）",
+                    ),
+                ),
+                (
+                    "effective_regime",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("high_vol", "高波动"),
+                            ("downtrend", "下行趋势"),
+                            ("uptrend", "上行趋势"),
+                            ("range", "箱体震荡"),
+                        ],
+                        default="",
+                        max_length=16,
+                        verbose_name="生效阶段（内联副本）",
+                    ),
+                ),
+                (
+                    "deactivation_skipped",
+                    models.CharField(
+                        blank=True,
+                        default="",
+                        max_length=32,
+                        verbose_name="推导收场（空 = 正常推导）",
+                    ),
+                ),
+                (
+                    "judgement_missing",
+                    models.BooleanField(
+                        default=False, verbose_name="今日判定缺失（照发）"
+                    ),
+                ),
+                (
+                    "sections",
+                    models.JSONField(default=dict, verbose_name="五段内容（结构化）"),
+                ),
+                (
+                    "landscape",
+                    models.JSONField(
+                        default=dict, verbose_name="当天推导结论快照（做差用）"
+                    ),
+                ),
+                (
+                    "note",
+                    models.TextField(
+                        blank=True,
+                        default="",
+                        verbose_name="给人看的一句话（为什么这一行是这样）",
+                    ),
+                ),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="生成时间"),
+                ),
+                (
+                    "judgement",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="daily_reports",
+                        to="regime.regimejudgement",
+                        verbose_name="三值所抄的那条判定（下钻用）",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': '每日日报',
-                'verbose_name_plural': '每日日报',
-                'db_table': 'regime_daily_reports',
-                'ordering': ['-run_day', 'symbol'],
+                "verbose_name": "每日日报",
+                "verbose_name_plural": "每日日报",
+                "db_table": "regime_daily_reports",
+                "ordering": ["-run_day", "symbol"],
             },
         ),
         migrations.AddConstraint(
-            model_name='dailyreport',
-            constraint=models.UniqueConstraint(fields=('symbol', 'run_day'), name='uniq_daily_report_symbol_run_day'),
+            model_name="dailyreport",
+            constraint=models.UniqueConstraint(
+                fields=("symbol", "run_day"), name="uniq_daily_report_symbol_run_day"
+            ),
         ),
     ]

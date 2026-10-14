@@ -82,12 +82,16 @@ class TestOrderRetrySafety(unittest.IsolatedAsyncioTestCase):
         async def fake_connect():
             a._client = new  # type: ignore[assignment]
 
-        with patch.object(BinanceAdapter, "connect", AsyncMock(side_effect=fake_connect)) as recon:
+        with patch.object(
+            BinanceAdapter, "connect", AsyncMock(side_effect=fake_connect)
+        ) as recon:
             resp = await a.place_order(_req())
 
         self.assertEqual(resp.exchange_order_id, str(ORDER_RAW["orderId"]))
         self.assertEqual(recon.await_count, 1, "发送前错误应重连")
-        self.assertEqual(len([r for r in new.requests if r[0] == "POST"]), 1, "并重发一次")
+        self.assertEqual(
+            len([r for r in new.requests if r[0] == "POST"]), 1, "并重发一次"
+        )
 
     async def test_read_timeout_does_not_resend_and_reconciles(self):
         """读超时（可能已成交）→ 绝不重发；按 clientOrderId 对账并采用交易所真实状态。"""
@@ -115,7 +119,9 @@ class TestOrderRetrySafety(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(recon.await_count, 0)
         self.assertEqual(len([r for r in client.requests if r[0] == "POST"]), 1)
-        self.assertEqual([r for r in client.requests if r[0] == "GET"], [], "无幂等键时不做对账")
+        self.assertEqual(
+            [r for r in client.requests if r[0] == "GET"], [], "无幂等键时不做对账"
+        )
 
     async def test_reconcile_unreachable_raises_unknown(self):
         """对账查询本身失败（网络不可达）→ **未知**，不是失败：那张单可能活着。"""
@@ -126,30 +132,50 @@ class TestOrderRetrySafety(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(OrderPlacementUnknown) as ctx:
             await a.place_order(_req("cid-abc"))
 
-        self.assertIn("cid-abc", str(ctx.exception), "未知单必须带上幂等键，否则无法人工核对")
-        self.assertEqual(len([r for r in client.requests if r[0] == "POST"]), 1, "绝不重发")
-        self.assertEqual(len([r for r in client.requests if r[0] == "GET"]), 1, "必须对账一次")
+        self.assertIn(
+            "cid-abc", str(ctx.exception), "未知单必须带上幂等键，否则无法人工核对"
+        )
+        self.assertEqual(
+            len([r for r in client.requests if r[0] == "POST"]), 1, "绝不重发"
+        )
+        self.assertEqual(
+            len([r for r in client.requests if r[0] == "GET"]), 1, "必须对账一次"
+        )
 
     async def test_duplicate_reject_with_missing_lookup_raises_unknown(self):
         """交易所说单号重复、反查却说没有 → 两处证据矛盾，如实记未知，不挑一边信。"""
         a, client = _adapter_with(
             [
-                _Resp(400, {"code": -4116, "msg": "clientOrderId is duplicated"}, text=DUP_BODY),
-                _Resp(400, {"code": -2013, "msg": "Order does not exist."}, text=NOT_FOUND_BODY),
+                _Resp(
+                    400,
+                    {"code": -4116, "msg": "clientOrderId is duplicated"},
+                    text=DUP_BODY,
+                ),
+                _Resp(
+                    400,
+                    {"code": -2013, "msg": "Order does not exist."},
+                    text=NOT_FOUND_BODY,
+                ),
             ]
         )
 
         with self.assertRaises(OrderPlacementUnknown):
             await a.place_order(_req("cid-abc"))
 
-        self.assertEqual(len([r for r in client.requests if r[0] == "POST"]), 1, "绝不重发")
+        self.assertEqual(
+            len([r for r in client.requests if r[0] == "POST"]), 1, "绝不重发"
+        )
 
     async def test_read_timeout_reconcile_not_found_raises(self):
         """对账查不到（-2013）→ 说明没被受理，抛出原始错误。"""
         a, client = _adapter_with(
             [
                 httpx.ReadTimeout(""),
-                _Resp(400, {"code": -2013, "msg": "Order does not exist."}, text=NOT_FOUND_BODY),
+                _Resp(
+                    400,
+                    {"code": -2013, "msg": "Order does not exist."},
+                    text=NOT_FOUND_BODY,
+                ),
             ]
         )
         with self.assertRaises(httpx.ReadTimeout):
@@ -159,7 +185,14 @@ class TestOrderRetrySafety(unittest.IsolatedAsyncioTestCase):
     async def test_duplicate_order_rejection_is_treated_as_accepted(self):
         """交易所报 clientOrderId 重复 → 说明前一次已受理：对账取真实状态，不当作失败。"""
         a, client = _adapter_with(
-            [_Resp(400, {"code": -4116, "msg": "clientOrderId is duplicated"}, text=DUP_BODY), _Resp(200, ORDER_RAW)]
+            [
+                _Resp(
+                    400,
+                    {"code": -4116, "msg": "clientOrderId is duplicated"},
+                    text=DUP_BODY,
+                ),
+                _Resp(200, ORDER_RAW),
+            ]
         )
         resp = await a.place_order(_req("cid-abc"))
 
@@ -178,7 +211,9 @@ class TestOrderRetrySafety(unittest.IsolatedAsyncioTestCase):
         async def fake_connect():
             a._client = new  # type: ignore[assignment]
 
-        with patch.object(BinanceAdapter, "connect", AsyncMock(side_effect=fake_connect)) as recon:
+        with patch.object(
+            BinanceAdapter, "connect", AsyncMock(side_effect=fake_connect)
+        ) as recon:
             positions = await a.get_positions()
 
         self.assertEqual(len(positions), 1)
@@ -217,7 +252,11 @@ class TestAmbiguousAnyioErrors(unittest.IsolatedAsyncioTestCase):
         a, client = _adapter_with(
             [
                 BrokenResourceError(""),
-                _Resp(400, {"code": -2013, "msg": "Order does not exist."}, text=NOT_FOUND_BODY),
+                _Resp(
+                    400,
+                    {"code": -2013, "msg": "Order does not exist."},
+                    text=NOT_FOUND_BODY,
+                ),
             ]
         )
 

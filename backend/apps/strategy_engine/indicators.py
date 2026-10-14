@@ -575,9 +575,7 @@ def detect_box_range(
     min_abs_floor = float(min_width_abs) if min_width_abs is not None else None
     min_pct_floor = float(min_width_pct) if min_width_pct is not None else None
     # 箱体持续根数下限；0/None = 不限制
-    min_duration_floor = (
-        int(min_duration_bars) if min_duration_bars else None
-    )
+    min_duration_floor = int(min_duration_bars) if min_duration_bars else None
 
     highs = np.array([float(k["high"]) for k in klines], dtype=np.float64)
     lows = np.array([float(k["low"]) for k in klines], dtype=np.float64)
@@ -712,7 +710,9 @@ def detect_box_range(
     if best is None:
         if min_duration_floor is not None and duration_rejected:
             longest = (
-                f"最长 {short_max} 根" if short_max is not None else "候选箱带内无 close 落入"
+                f"最长 {short_max} 根"
+                if short_max is not None
+                else "候选箱带内无 close 落入"
             )
             return _fail(
                 f"箱体持续时间不足（{longest} < 下限 {min_duration_floor} 根）"

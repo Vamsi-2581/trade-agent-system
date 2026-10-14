@@ -11,6 +11,7 @@ User = get_user_model()
 @pytest.fixture
 def api_client():
     from rest_framework.test import APIClient
+
     return APIClient()
 
 
@@ -30,6 +31,7 @@ def authenticated_client(api_client, user):
 @pytest.fixture
 def strategy(db):
     from apps.trading.models import Strategy
+
     return Strategy.objects.create(
         name="TestGridStrategy",
         user_id=None,
@@ -40,7 +42,7 @@ class TestGridSearchAPI:
     @pytest.mark.django_db
     def test_create_grid_search_success(self, authenticated_client, strategy):
         """成功提交网格搜索任务"""
-        with patch('apps.backtest.views.run_grid_search_task') as mock_task:
+        with patch("apps.backtest.views.run_grid_search_task") as mock_task:
             mock_apply = MagicMock()
             mock_apply.id = "test-task-uuid-1234"
             mock_task.apply_async.return_value = mock_apply
@@ -108,7 +110,7 @@ class TestGridSearchAPI:
     @pytest.mark.django_db
     def test_user_isolation(self, authenticated_client, strategy):
         """用户不能访问其他人的网格搜索任务"""
-        with patch('apps.backtest.views.run_grid_search_task') as mock_task:
+        with patch("apps.backtest.views.run_grid_search_task") as mock_task:
             mock_apply = MagicMock()
             mock_apply.id = "test-task-uuid-isolation"
             mock_task.apply_async.return_value = mock_apply
@@ -129,8 +131,11 @@ class TestGridSearchAPI:
             job_id = response.json()["grid_search_id"]
 
         # 另一个用户查询
-        other_user = User.objects.create_user(username="otheruser", password="testpass123")
+        other_user = User.objects.create_user(
+            username="otheruser", password="testpass123"
+        )
         from rest_framework.test import APIClient
+
         other_client = APIClient()
         other_client.force_authenticate(user=other_user)
 
@@ -140,7 +145,7 @@ class TestGridSearchAPI:
     @pytest.mark.django_db
     def test_cancel_grid_search(self, authenticated_client, strategy):
         """取消网格搜索任务"""
-        with patch('apps.backtest.views.run_grid_search_task') as mock_task:
+        with patch("apps.backtest.views.run_grid_search_task") as mock_task:
             mock_apply = MagicMock()
             mock_apply.id = "test-task-uuid-cancel"
             mock_task.apply_async.return_value = mock_apply
@@ -161,7 +166,7 @@ class TestGridSearchAPI:
             job_id = response.json()["grid_search_id"]
 
         # 取消任务
-        with patch('apps.backtest.views.celery_app') as mock_celery:
+        with patch("apps.backtest.views.celery_app") as mock_celery:
             mock_celery.control.revoke = MagicMock()
             response = authenticated_client.post(
                 f"/api/backtest/grid-search/{job_id}/cancel/"
@@ -176,6 +181,7 @@ class TestNormalizeSymbol:
     @staticmethod
     def _norm(s):
         from apps.backtest.tasks import normalize_binance_symbol
+
         return normalize_binance_symbol(s)
 
     def test_already_normalized(self):

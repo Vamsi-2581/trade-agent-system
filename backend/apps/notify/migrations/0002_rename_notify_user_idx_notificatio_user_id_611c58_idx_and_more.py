@@ -4,20 +4,23 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('notify', '0001_initial'),
+        ("notify", "0001_initial"),
     ]
 
     operations = [
         migrations.RenameIndex(
-            model_name='notification',
-            new_name='notificatio_user_id_611c58_idx',
-            old_name='notify_user_idx',
+            model_name="notification",
+            new_name="notificatio_user_id_611c58_idx",
+            old_name="notify_user_idx",
         ),
         migrations.AlterField(
-            model_name='notification',
-            name='channel',
-            field=models.CharField(choices=[('telegram', 'Telegram'), ('web', 'Web')], default='telegram', max_length=16),
+            model_name="notification",
+            name="channel",
+            field=models.CharField(
+                choices=[("telegram", "Telegram"), ("web", "Web")],
+                default="telegram",
+                max_length=16,
+            ),
         ),
     ]

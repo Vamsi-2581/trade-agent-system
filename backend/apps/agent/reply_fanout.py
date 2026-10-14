@@ -65,7 +65,9 @@ def resolve_django_user_id(user_id: str) -> str:
     if user:
         return str(user.id)
 
-    logger.debug("[Fanout] user %s not resolvable to Django User, using raw id", user_id)
+    logger.debug(
+        "[Fanout] user %s not resolvable to Django User, using raw id", user_id
+    )
     return user_id
 
 
@@ -109,9 +111,7 @@ async def push_web_payload(user_id: str, payload: dict) -> None:
                 {"type": "web_delivery", "message": envelope},
             )
         except Exception:
-            logger.warning(
-                "[Fanout] web wake failed for %s", user_id, exc_info=True
-            )
+            logger.warning("[Fanout] web wake failed for %s", user_id, exc_info=True)
 
 
 async def push_web(user_id: str, text: str) -> None:
@@ -162,9 +162,7 @@ async def push_main_channel(user_id: str, text: str) -> None:
             channel = _get_channel()
             await channel.send_message_to_user(target.user_open_id, text)
         except Exception:
-            logger.warning(
-                "[Fanout] failed to send Lark notification", exc_info=True
-            )
+            logger.warning("[Fanout] failed to send Lark notification", exc_info=True)
 
     # channel_type == "tui": 进程内渲染，无需独立投递
 

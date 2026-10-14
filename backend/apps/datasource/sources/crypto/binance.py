@@ -211,7 +211,9 @@ class BinanceDataSource(BaseDataSource):
         self._http_client_loop = loop
         logger.info(
             "[Binance] HTTP client created, id=%s, proxy=%s, loop=%s",
-            id(self._http_client), proxy, loop,
+            id(self._http_client),
+            proxy,
+            loop,
         )
         return self._http_client
 
@@ -336,7 +338,9 @@ class BinanceDataSource(BaseDataSource):
                     setattr(self, ws_attr, None)
                     logger.error(
                         "[Binance] %s WebSocket connect failed: %s: %s",
-                        mt.value, type(e).__name__, e,
+                        mt.value,
+                        type(e).__name__,
+                        e,
                     )
 
             if not connected:
@@ -406,7 +410,9 @@ class BinanceDataSource(BaseDataSource):
             self._ws_status = ConnectionStatus.ERROR
             logger.error(
                 "[Binance] WebSocket connection error: %s: %s\n%s",
-                type(e).__name__, e, traceback.format_exc(),
+                type(e).__name__,
+                e,
+                traceback.format_exc(),
             )
             return False
 
@@ -426,11 +432,11 @@ class BinanceDataSource(BaseDataSource):
         # 与 connect 互斥：否则断开期间并发 connect 会取消掉刚创建的任务、
         # 关闭刚建立的连接，造成"断开后仍是 connected"的状态错乱
         async with self._ws_connect_lock:
-            return await self._disconnect_websocket_unlocked(preserve_subs=preserve_subs)
+            return await self._disconnect_websocket_unlocked(
+                preserve_subs=preserve_subs
+            )
 
-    async def _disconnect_websocket_unlocked(
-        self, preserve_subs: bool = False
-    ) -> bool:
+    async def _disconnect_websocket_unlocked(self, preserve_subs: bool = False) -> bool:
         """disconnect_websocket 主体，调用方须已持有 _ws_connect_lock。"""
         try:
             logger.info(
@@ -512,10 +518,14 @@ class BinanceDataSource(BaseDataSource):
                     # 条件静默退出、断连原因无从诊断。
                     logger.warning(
                         "[Binance] spot WS closed by peer: %s code=%s reason=%r",
-                        msg.type.name, msg.data, msg.extra,
+                        msg.type.name,
+                        msg.data,
+                        msg.extra,
                     )
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error("[Binance] spot WS error: %s", self._ws_spot.exception())
+                    logger.error(
+                        "[Binance] spot WS error: %s", self._ws_spot.exception()
+                    )
                     break
                 elif msg.type == aiohttp.WSMsgType.CLOSED:
                     logger.warning("[Binance] spot WS closed")
@@ -528,7 +538,9 @@ class BinanceDataSource(BaseDataSource):
                 # aiohttp 会随后关闭连接，不视为错误。
                 logger.debug("[Binance] spot WS receive timeout (idle)")
             except Exception as e:
-                logger.error("[Binance] spot WS receive error: %s: %s", type(e).__name__, e)
+                logger.error(
+                    "[Binance] spot WS receive error: %s: %s", type(e).__name__, e
+                )
                 await asyncio.sleep(1)
 
     async def _ws_futures_receiver(self) -> None:
@@ -546,10 +558,14 @@ class BinanceDataSource(BaseDataSource):
                 ):
                     logger.warning(
                         "[Binance] futures WS closed by peer: %s code=%s reason=%r",
-                        msg.type.name, msg.data, msg.extra,
+                        msg.type.name,
+                        msg.data,
+                        msg.extra,
                     )
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error("[Binance] futures WS error: %s", self._ws_futures.exception())
+                    logger.error(
+                        "[Binance] futures WS error: %s", self._ws_futures.exception()
+                    )
                     break
                 elif msg.type == aiohttp.WSMsgType.CLOSED:
                     logger.warning("[Binance] futures WS closed")
@@ -562,7 +578,9 @@ class BinanceDataSource(BaseDataSource):
                 # aiohttp 会随后关闭连接，不视为错误。
                 logger.debug("[Binance] futures WS receive timeout (idle)")
             except Exception as e:
-                logger.error("[Binance] futures WS receive error: %s: %s", type(e).__name__, e)
+                logger.error(
+                    "[Binance] futures WS receive error: %s: %s", type(e).__name__, e
+                )
                 await asyncio.sleep(1)
 
     async def _handle_websocket_message(
@@ -595,7 +613,9 @@ class BinanceDataSource(BaseDataSource):
             )
 
             # 触发回调
-            logger.debug(f"[DataSource] kline: {kline.get('symbol')} close={kline.get('close')} vol={kline.get('volume')}")
+            logger.debug(
+                f"[DataSource] kline: {kline.get('symbol')} close={kline.get('close')} vol={kline.get('volume')}"
+            )
             self._trigger_precise_callbacks(DataType.KLINE, kline)
 
         elif event_type == "trade" or event_type == "aggTrade":
@@ -682,12 +702,18 @@ class BinanceDataSource(BaseDataSource):
                     continue
                 streams.extend(
                     self._build_stream_names(
-                        sub_info["symbol"], sub_info["data_type"], sub_info.get("interval")
+                        sub_info["symbol"],
+                        sub_info["data_type"],
+                        sub_info.get("interval"),
                     )
                 )
             if not streams:
                 continue
-            msg = {"method": "SUBSCRIBE", "params": streams, "id": int(time.time() * 1000)}
+            msg = {
+                "method": "SUBSCRIBE",
+                "params": streams,
+                "id": int(time.time() * 1000),
+            }
             try:
                 logger.info(
                     "[Binance] resubscribe batch market=%s streams=%s",
@@ -696,7 +722,9 @@ class BinanceDataSource(BaseDataSource):
                 )
                 await self._send_subscribe_frame(market_type, msg)
             except Exception as e:
-                logger.error("[Binance] resubscribe error for %s: %s", market_type.value, e)
+                logger.error(
+                    "[Binance] resubscribe error for %s: %s", market_type.value, e
+                )
 
     async def _send_subscribe(self, sub_info: Dict) -> None:
         """发送订阅请求"""
@@ -932,21 +960,22 @@ class BinanceDataSource(BaseDataSource):
         if callback:
             interval_str = interval.value if interval else None
             cb_symbol = symbol.replace("/", "") if symbol else symbol
-            self.register_callback(data_type, callback, symbol=cb_symbol, interval=interval_str)
+            self.register_callback(
+                data_type, callback, symbol=cb_symbol, interval=interval_str
+            )
 
         # 生成订阅键
         sub_key = f"{symbol}:{data_type.value}:{interval.value if interval else 'none'}:{market_type.value}"
-       
+
         logger.info("[Binance] subscribe: %s", sub_key)
 
         # 同一 key 的重复订阅：流已在当前连接上发出（首次 subscribe 时发送，
         # 或重连后由 _resubscribe_all 批量补发），只需更新订阅条目（如回调
         # 变更），不能重发 SUBSCRIBE 帧——重发会空耗 Binance 每连接订阅速率
         # 配额（约 5/秒），触发 1008 "Too many requests" 断连。
-        existed_active = (
-            sub_key in self._subscriptions
-            and self._subscriptions[sub_key].get("active", True)
-        )
+        existed_active = sub_key in self._subscriptions and self._subscriptions[
+            sub_key
+        ].get("active", True)
 
         # 存储订阅信息
         self._subscriptions[sub_key] = {
@@ -1006,7 +1035,9 @@ class BinanceDataSource(BaseDataSource):
             # 即使 WS 没订阅，也清理精确回调（避免幽灵回调）
             if callback:
                 interval_str = interval.value if interval else None
-                self.unregister_callback(data_type, callback, symbol=cb_symbol, interval=interval_str)
+                self.unregister_callback(
+                    data_type, callback, symbol=cb_symbol, interval=interval_str
+                )
             return False
 
         # 标记为非活跃
@@ -1042,7 +1073,9 @@ class BinanceDataSource(BaseDataSource):
         # 清理精确回调
         if callback:
             interval_str = interval.value if interval else None
-            self.unregister_callback(data_type, callback, symbol=cb_symbol, interval=interval_str)
+            self.unregister_callback(
+                data_type, callback, symbol=cb_symbol, interval=interval_str
+            )
 
         return True
 

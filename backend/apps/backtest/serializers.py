@@ -133,6 +133,7 @@ class GridSearchJobSerializer(serializers.ModelSerializer):
 
 class GridSearchGroupSerializer(serializers.Serializer):
     """序列化一个分组（网格搜索任务）"""
+
     type = serializers.CharField(default="grid_search")
     job_id = serializers.UUIDField()
     job_name = serializers.CharField()
@@ -149,5 +150,6 @@ class GridSearchGroupSerializer(serializers.Serializer):
 
 class SingleGroupSerializer(serializers.Serializer):
     """序列化一个单次回测分组"""
+
     type = serializers.CharField(default="single")
     result = serializers.DictField()

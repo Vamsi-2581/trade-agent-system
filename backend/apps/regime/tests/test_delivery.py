@@ -175,7 +175,9 @@ class TestTheDeliverer(TestCase):
         title = report._SECTION_TITLES[report.SECTION_CHANGE]
         self.assertIn(title, _sent(mock, mine), "在跑这个策略的人该看到停用段")
         self.assertNotIn(
-            title, _sent(mock, theirs), "没在跑它的人不该看到——**整节不出现**，不是「无内容」"
+            title,
+            _sent(mock, theirs),
+            "没在跑它的人不该看到——**整节不出现**，不是「无内容」",
         )
 
     def test_the_ledger_keys_are_strings(self):
@@ -204,7 +206,9 @@ class TestTheDeliverer(TestCase):
         with _notify(False):
             summary = report.deliver_daily_report(now=AFTER_GRACE)
         row = DailyReport.objects.get(symbol=SYMBOL, run_day=RUN_DAY)
-        self.assertIsNone(row.delivered_at, "一格没送达就不算送达——这是第⑤段与看门狗的判据")
+        self.assertIsNone(
+            row.delivered_at, "一格没送达就不算送达——这是第⑤段与看门狗的判据"
+        )
         self.assertEqual(row.delivery_attempts, 1)
         self.assertTrue(row.delivery_error)
         self.assertFalse(summary["delivered"])
@@ -272,10 +276,14 @@ class TestTheDeliverer(TestCase):
         yesterday = RUN_DAY - timedelta(days=1)
         _row(yesterday)
         with _notify(True) as mock:
-            summary = report.deliver_daily_report(yesterday.isoformat(), now=AFTER_GRACE)
+            summary = report.deliver_daily_report(
+                yesterday.isoformat(), now=AFTER_GRACE
+            )
         self.assertEqual(mock.await_count, 1)
         self.assertEqual(summary["run_day"], yesterday.isoformat())
-        self.assertEqual(DailyReport.objects.get(run_day=yesterday).delivery_attempts, 1)
+        self.assertEqual(
+            DailyReport.objects.get(run_day=yesterday).delivery_attempts, 1
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -407,7 +415,9 @@ class TestTheWatchdog(TestCase):
         _users(2)
         with _notify(True) as mock:
             report.check_report_delivery(now=AFTER_GRACE)
-            second = report.check_report_delivery(now=AFTER_GRACE + timedelta(minutes=5))
+            second = report.check_report_delivery(
+                now=AFTER_GRACE + timedelta(minutes=5)
+            )
         self.assertEqual(mock.await_count, 2, "第二轮一个人都不该再收到")
         self.assertFalse(second["escalated"])
         self.assertEqual(second["reason"], "already_alerted")
@@ -421,7 +431,9 @@ class TestTheWatchdog(TestCase):
         _users(1)
         with _notify(False) as mock:
             first = report.check_report_delivery(now=AFTER_GRACE)
-            second = report.check_report_delivery(now=AFTER_GRACE + timedelta(minutes=5))
+            second = report.check_report_delivery(
+                now=AFTER_GRACE + timedelta(minutes=5)
+            )
         self.assertEqual(mock.await_count, 2)
         self.assertTrue(first["escalated"])
         self.assertTrue(second["escalated"])
@@ -432,7 +444,9 @@ class TestTheWatchdog(TestCase):
         _users(2)
         with _notify([True, False]) as mock:
             first = report.check_report_delivery(now=AFTER_GRACE)
-            second = report.check_report_delivery(now=AFTER_GRACE + timedelta(minutes=5))
+            second = report.check_report_delivery(
+                now=AFTER_GRACE + timedelta(minutes=5)
+            )
         self.assertEqual(mock.await_count, 2)
         self.assertTrue(first["escalated"])
         self.assertFalse(second["escalated"])

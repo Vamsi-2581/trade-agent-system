@@ -297,28 +297,39 @@ class TestAdoption(TestCase):
         """同账户+同品种另有 running 会话 → 账户仓位无法归属 → 采用 0。"""
         account = _account(self.user)
         other = _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="donchian_atr_trend_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="donchian_atr_trend_strategy",
         )
         me = _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="box_time_range_breakout_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="box_time_range_breakout_strategy",
         )
         adapter = _FakeAdapter(positions=_long("1000"))
         runner = _make_runner("0", adapter, account=account, session=me)
-        with runner.patch_exchange(adapter), patch.object(
-            LiveSession,
-            "conflicting_active_session",
-            staticmethod(lambda *a, **k: _conflict_reason(account, other)),
+        with (
+            runner.patch_exchange(adapter),
+            patch.object(
+                LiveSession,
+                "conflicting_active_session",
+                staticmethod(lambda *a, **k: _conflict_reason(account, other)),
+            ),
         ):
             asyncio.run(runner._sync_position_from_exchange())
 
         self.assertEqual(
-            runner.strategy.ctx.position, Decimal("0"),
+            runner.strategy.ctx.position,
+            Decimal("0"),
             "共享账户的仓位不得采进本会话台账",
         )
         self.assertEqual(
-            runner._last_actual_position, Decimal("1000"),
+            runner._last_actual_position,
+            Decimal("1000"),
             "账户真值仍要记录（卖出侧钳制依据）",
         )
 
@@ -331,8 +342,11 @@ class TestAdoption(TestCase):
         """
         account = _account(self.user)
         me = _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="box_time_range_breakout_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="box_time_range_breakout_strategy",
         )
         adapter = _FakeAdapter(positions=_long("1000"))
         runner = _make_runner("0", adapter, account=account, session=me)
@@ -348,12 +362,18 @@ class TestAdoption(TestCase):
         """
         account = _account(self.user)
         _session(
-            self.user, symbol="DOGE/USDT", status="stopped",
-            account=account, strategy_name="donchian_atr_trend_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="stopped",
+            account=account,
+            strategy_name="donchian_atr_trend_strategy",
         )
         me = _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="box_time_range_breakout_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="box_time_range_breakout_strategy",
         )
         adapter = _FakeAdapter(positions=_long("10401"))
         runner = _make_runner("0", adapter, account=account, session=me)
@@ -371,12 +391,18 @@ class TestAdoption(TestCase):
         """
         account = _account(self.user)
         _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="donchian_atr_trend_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="donchian_atr_trend_strategy",
         )
         me = _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="box_time_range_breakout_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="box_time_range_breakout_strategy",
         )
         for acct_arg in (str(account.id), account):
             with self.subTest(entry=type(acct_arg).__name__):
@@ -395,8 +421,11 @@ class TestAdoption(TestCase):
         """同步失败不算采用：首次**成功**才定归属（失败时 ctx 不得被篡改）。"""
         account = _account(self.user)
         me = _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="box_time_range_breakout_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="box_time_range_breakout_strategy",
         )
         adapter = _FakeAdapter(error=RuntimeError("positions API down"))
         runner = _make_runner("0", adapter, account=account, session=me)
@@ -414,22 +443,30 @@ class TestAdoption(TestCase):
         """采用 0 必须可见：一条通知，说清冲突会话是谁。"""
         account = _account(self.user)
         other = _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="donchian_atr_trend_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="donchian_atr_trend_strategy",
         )
         me = _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="box_time_range_breakout_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="box_time_range_breakout_strategy",
         )
         adapter = _FakeAdapter(positions=_long("1000"))
         notify_cls = MagicMock()
         runner = _make_runner("0", adapter, account=account, session=me)
-        with runner.patch_exchange(adapter), patch(
-            "apps.notify.models.Notification", notify_cls
-        ), patch.object(
-            LiveSession,
-            "conflicting_active_session",
-            staticmethod(lambda *a, **k: _conflict_reason(account, other)),
+        with (
+            runner.patch_exchange(adapter),
+            patch("apps.notify.models.Notification", notify_cls),
+            patch.object(
+                LiveSession,
+                "conflicting_active_session",
+                staticmethod(lambda *a, **k: _conflict_reason(account, other)),
+            ),
         ):
             asyncio.run(runner._sync_position_from_exchange())
 
@@ -444,9 +481,12 @@ class TestAdoption(TestCase):
         """非 UUID 的 live_session_id（测试/独立 runner）不得触库，直接走独立采用。"""
         adapter = _FakeAdapter(positions=_long("1000"))
         runner = _make_runner("0", adapter)  # "acct-1" / "sess-1"，库里无行
-        with runner.patch_exchange(adapter), patch(
-            "apps.core.db_utils.db_async",
-            side_effect=AssertionError("非 UUID 会话 id 不得查询数据库"),
+        with (
+            runner.patch_exchange(adapter),
+            patch(
+                "apps.core.db_utils.db_async",
+                side_effect=AssertionError("非 UUID 会话 id 不得查询数据库"),
+            ),
         ):
             asyncio.run(runner._sync_position_from_exchange())
 
@@ -462,8 +502,11 @@ class TestReconcile(TestCase):
         )
         account = _account(self.user)
         self.me = _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="box_time_range_breakout_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="box_time_range_breakout_strategy",
         )
         self.account = account
         patcher = patch("apps.notify.models.Notification", MagicMock())
@@ -487,7 +530,8 @@ class TestReconcile(TestCase):
                 asyncio.run(runner._sync_position_from_exchange())
 
         self.assertEqual(
-            runner.strategy.ctx.position, Decimal("0"),
+            runner.strategy.ctx.position,
+            Decimal("0"),
             "外部持仓不得采进本会话台账（采进来 close_position 就会平掉它）",
         )
         calls = notify_cls.objects.create.call_args_list
@@ -499,8 +543,9 @@ class TestReconcile(TestCase):
         adapter = _FakeAdapter(positions=[])
         runner = self._runner(adapter)
         notify_cls = MagicMock()
-        with runner.patch_exchange(adapter), patch(
-            "apps.notify.models.Notification", notify_cls
+        with (
+            runner.patch_exchange(adapter),
+            patch("apps.notify.models.Notification", notify_cls),
         ):
             asyncio.run(runner._sync_position_from_exchange())  # 采用 0
             adapter._positions = _long("500")
@@ -509,9 +554,7 @@ class TestReconcile(TestCase):
             asyncio.run(runner._sync_position_from_exchange())
 
         calls = notify_cls.objects.create.call_args_list
-        self.assertEqual(
-            len(calls), 1, f"外部持仓通知应只发一次，实际 {len(calls)} 次"
-        )
+        self.assertEqual(len(calls), 1, f"外部持仓通知应只发一次，实际 {len(calls)} 次")
 
     def test_foreign_position_silent_within_inflight_window(self):
         """本会话平仓单在途（交易所态未反映）→「账户有仓+台账 0」是正常态，
@@ -542,7 +585,8 @@ class TestReconcile(TestCase):
             asyncio.run(runner._sync_position_from_exchange())
 
         self.assertEqual(
-            runner.strategy.ctx.position, Decimal("400"),
+            runner.strategy.ctx.position,
+            Decimal("400"),
             "台账不得高于账户真值（否则卖出超出 → 反向开仓）",
         )
         # 下钳后卖出侧同样被钳制
@@ -568,8 +612,12 @@ class TestSellClamp(TestCase):
         ctx = _Ctx(position=position)
         strategy = _FakeStrategy(ctx)
         return LiveStrategyRunner(
-            strategy, "DOGE/USDT", "1h", "acct-1",
-            user_id="user-1", live_session_id="sess-1",
+            strategy,
+            "DOGE/USDT",
+            "1h",
+            "acct-1",
+            user_id="user-1",
+            live_session_id="sess-1",
         )
 
     def test_sell_clamped_by_account_actual(self):
@@ -595,7 +643,9 @@ class TestSellClamp(TestCase):
         """账户已 0（被平掉了）→ 不发明知是 0 的空头卖单。"""
         runner = self._bare("1000")
         runner._last_actual_position = Decimal("0")
-        self.assertIsNone(runner._target_to_order(_Target(target_quantity=Decimal("0"))))
+        self.assertIsNone(
+            runner._target_to_order(_Target(target_quantity=Decimal("0")))
+        )
 
     def test_sell_not_clamped_without_actual(self):
         """账户真值未知（从未同步成功）→ 维持传统行为，不猜。"""
@@ -620,28 +670,39 @@ class TestIncidentEndToEnd(TestCase):
     def test_late_session_does_not_close_earlier_sessions_position(self):
         account = _account(self.user)
         other = _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="donchian_atr_trend_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="donchian_atr_trend_strategy",
         )
         me = _session(
-            self.user, symbol="DOGE/USDT", status="running",
-            account=account, strategy_name="box_time_range_breakout_strategy",
+            self.user,
+            symbol="DOGE/USDT",
+            status="running",
+            account=account,
+            strategy_name="box_time_range_breakout_strategy",
         )
         adapter = _FakeAdapter(positions=_long("10401"))  # donchian 开的仓
         runner = _make_runner("0", adapter, account=account, session=me)
-        with runner.patch_exchange(adapter), patch.object(
-            LiveSession,
-            "conflicting_active_session",
-            staticmethod(lambda *a, **k: _conflict_reason(account, other)),
+        with (
+            runner.patch_exchange(adapter),
+            patch.object(
+                LiveSession,
+                "conflicting_active_session",
+                staticmethod(lambda *a, **k: _conflict_reason(account, other)),
+            ),
         ):
             asyncio.run(runner._process_kline(dict(KLINE)))
 
         self.assertEqual(
-            runner._test_dispatched, [],
+            runner._test_dispatched,
+            [],
             "不得对别会话的仓位发平仓单（事故中 box 平掉 donchian 的 10401）",
         )
         self.assertEqual(runner.strategy.ctx.position, Decimal("0"))
         self.assertEqual(
-            runner.strategy.bar_calls, 1,
+            runner.strategy.bar_calls,
+            1,
             "决策路径本身照常运行（是「无仓可平」，不是「被跳过」）",
         )

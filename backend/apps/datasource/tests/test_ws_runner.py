@@ -32,6 +32,7 @@ class TestWSEngine:
 
     def test_run_coroutine(self):
         """协程在持久循环上运行并返回结果"""
+
         async def coro():
             await asyncio.sleep(0.01)
             return 42

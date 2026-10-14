@@ -74,7 +74,9 @@ class LarkChannel(BaseChannel):
             logger.warning("[LarkChannel] no open_id, skipping send_message_to_user")
             return
         for chunk in chunk_message(text, _LARK_MAX_LENGTH):
-            await self._send_im(open_id, "text", {"text": chunk}, receive_id_type="open_id")
+            await self._send_im(
+                open_id, "text", {"text": chunk}, receive_id_type="open_id"
+            )
 
     async def send_photo(self, photo_bytes: bytes, caption: str = "") -> None:
         if not self._chat_id:
@@ -183,7 +185,11 @@ class LarkChannel(BaseChannel):
 
                 now = datetime.now(timezone.utc)
                 if token_obj.expires_at > now:
-                    return ("cached", token_obj.decrypt_access_token(), token_obj.expires_at)
+                    return (
+                        "cached",
+                        token_obj.decrypt_access_token(),
+                        token_obj.expires_at,
+                    )
 
                 # Token expired, read refresh_token while holding lock
                 refresh_token = token_obj.decrypt_refresh_token()
@@ -216,7 +222,6 @@ class LarkChannel(BaseChannel):
                 raise
 
             # Step 3: Save new tokens
-            from datetime import timedelta
 
             expires_in = token_data.get("expires_in", 7200)
             token_obj.access_token_enc = token_obj.encrypt_access_token(
@@ -228,8 +233,10 @@ class LarkChannel(BaseChannel):
             token_obj.expires_at = now + timedelta(seconds=expires_in)
             token_obj.save(
                 update_fields=[
-                    "access_token_enc", "refresh_token_enc",
-                    "expires_at", "updated_at",
+                    "access_token_enc",
+                    "refresh_token_enc",
+                    "expires_at",
+                    "updated_at",
                 ]
             )
             return ("refreshed", token_data["access_token"], token_obj.expires_at)
@@ -268,16 +275,26 @@ class LarkChannel(BaseChannel):
             self._tenant_token = data["tenant_access_token"]
             expire = data.get("expire", 7200)
             self._tenant_token_expire_at = time.time() + expire - 300
-            logger.info("[LarkChannel] tenant_access_token refreshed (expires in %ds)", expire)
+            logger.info(
+                "[LarkChannel] tenant_access_token refreshed (expires in %ds)", expire
+            )
             return self._tenant_token
         except Exception as e:
             raise RuntimeError(f"[LarkChannel] tenant token refresh failed: {e}") from e
 
-    async def _send_im(self, receive_id: str, msg_type: str, content: dict, receive_id_type: str = "chat_id") -> None:
+    async def _send_im(
+        self,
+        receive_id: str,
+        msg_type: str,
+        content: dict,
+        receive_id_type: str = "chat_id",
+    ) -> None:
         try:
             token = await self._refresh_token()
         except Exception as e:
-            logger.error("[LarkChannel] token refresh failed, cannot send message: %s", e)
+            logger.error(
+                "[LarkChannel] token refresh failed, cannot send message: %s", e
+            )
             return
         headers = {
             "Authorization": f"Bearer {token}",
@@ -292,7 +309,11 @@ class LarkChannel(BaseChannel):
         try:
             resp = await asyncio.to_thread(
                 requests.post,
-                self._SEND_URL, headers=headers, params=params, json=body, timeout=15,
+                self._SEND_URL,
+                headers=headers,
+                params=params,
+                json=body,
+                timeout=15,
             )
             data = resp.json()
             if data.get("code") != 0:
@@ -306,7 +327,9 @@ class LarkChannel(BaseChannel):
         try:
             token = await self._refresh_token()
         except Exception as e:
-            logger.error("[LarkChannel] token refresh failed, cannot upload image: %s", e)
+            logger.error(
+                "[LarkChannel] token refresh failed, cannot upload image: %s", e
+            )
             return None
         headers = {"Authorization": f"Bearer {token}"}
         form = {
@@ -316,7 +339,10 @@ class LarkChannel(BaseChannel):
         try:
             resp = await asyncio.to_thread(
                 requests.post,
-                self._IMG_UPLOAD_URL, headers=headers, files=form, timeout=15,
+                self._IMG_UPLOAD_URL,
+                headers=headers,
+                files=form,
+                timeout=15,
             )
             data = resp.json()
             if data.get("code") == 0:
@@ -354,14 +380,13 @@ class LarkChannel(BaseChannel):
         if not text:
             return
 
-        logger.info(
-            "[LarkChannel] received from %s in %s: %s", user_id, chat_id, text
-        )
+        logger.info("[LarkChannel] received from %s in %s: %s", user_id, chat_id, text)
 
         # Save feishu_open_id to User model for channel resolution
         if user_id:
             self._save_feishu_user(user_id, chat_id)
             from django.db import connections
+
             connections.close_all()
 
         from apps.agent.bus import publish, build_agent_task, wait_reply, AGENT_TASKS
@@ -387,6 +412,7 @@ class LarkChannel(BaseChannel):
         finally:
             loop.close()
             from django import db as django_db
+
             django_db.connections.close_all()
 
     def _extract_content(self, reply) -> str:
@@ -425,7 +451,8 @@ class LarkChannel(BaseChannel):
                     user.save(update_fields=["feishu_open_id"])
                     logger.info(
                         "[LarkChannel] saved feishu_open_id for user %s: %s",
-                        user.username, open_id[:12],
+                        user.username,
+                        open_id[:12],
                     )
             else:
                 # Auto-create a new User for first-time Feishu users
@@ -436,7 +463,8 @@ class LarkChannel(BaseChannel):
                 )
                 logger.info(
                     "[LarkChannel] auto-created user %s with feishu_open_id: %s",
-                    user.username, open_id[:12],
+                    user.username,
+                    open_id[:12],
                 )
         except Exception as e:
             logger.warning("[LarkChannel] failed to save feishu user info: %s", e)

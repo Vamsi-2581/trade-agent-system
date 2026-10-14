@@ -29,14 +29,14 @@ def _split_into(text: str, max_length: int, out: list[str]) -> None:
     double_nl = text.find("\n\n")
     if double_nl != -1 and double_nl <= max_length:
         out.append(text[:double_nl])
-        _split_into(text[double_nl + 2:], max_length, out)
+        _split_into(text[double_nl + 2 :], max_length, out)
         return
 
     # 尝试按换行分割
     single_nl = text.find("\n")
     if single_nl != -1 and single_nl <= max_length:
         out.append(text[:single_nl])
-        _split_into(text[single_nl + 1:], max_length, out)
+        _split_into(text[single_nl + 1 :], max_length, out)
         return
 
     # 尝试按句末标点分割（中英文）

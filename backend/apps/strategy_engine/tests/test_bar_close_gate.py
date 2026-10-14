@@ -48,7 +48,9 @@ class TestBarCloseDecisionGate(TestCase):
         self.assertEqual(adapter.calls, 0, "bar 内 tick 不得打交易所持仓 API")
         self.assertEqual(len(runner._kline_history), 1, "历史仍要更新")
         self.assertEqual(
-            runner._kline_history[-1]["timestamp"], KLINE["timestamp"], "历史按本 bar 记录"
+            runner._kline_history[-1]["timestamp"],
+            KLINE["timestamp"],
+            "历史按本 bar 记录",
         )
 
     def test_closed_bar_decides_once_with_final_ohlcv(self):
@@ -85,9 +87,7 @@ class TestBarCloseDecisionGate(TestCase):
 
     def test_same_bar_tick_then_close_decides_only_on_close(self):
         """同 bar 多次 tick + 一次收盘：决策次数 = 收盘推送次数（1）。"""
-        adapter = _FakeAdapter(
-            positions=[]
-        )
+        adapter = _FakeAdapter(positions=[])
         with _patch_executor(adapter):
             runner, strategy, _ = _make_runner("100", adapter)
             runner._running = True

@@ -80,7 +80,9 @@ def _halt_verdict(request: "OrderRequest") -> HaltVerdict:
     """
     from apps.regime import halt
 
-    return halt.halt_layers(request.symbol, _strategy_of_session(request.live_session_id))
+    return halt.halt_layers(
+        request.symbol, _strategy_of_session(request.live_session_id)
+    )
 
 
 class RiskGuard:
@@ -307,9 +309,7 @@ class RiskGuard:
         try:
             await notify_user(user_id, f"⚠️ 下单被风控拦截\n{reason}")
         except Exception:  # noqa: BLE001 - 通知不得影响风控判定
-            logger.error(
-                "[RiskGuard] 拒单通知投递失败 user=%s", user_id, exc_info=True
-            )
+            logger.error("[RiskGuard] 拒单通知投递失败 user=%s", user_id, exc_info=True)
         return False, reason
 
     async def _is_circuit_open(self, user_id: str) -> bool:
@@ -526,9 +526,7 @@ class RiskGuard:
             else self.MAX_POSITION_RATIO
         )
         if ratio > max_ratio:
-            return False, (
-                f"单笔仓位 {ratio:.1%} 超过上限 {max_ratio:.0%}"
-            )
+            return False, (f"单笔仓位 {ratio:.1%} 超过上限 {max_ratio:.0%}")
         return True, ""
 
     async def _check_drawdown(self, user_id: str) -> Tuple[bool, str]:
@@ -677,8 +675,7 @@ class RiskGuard:
                 balance = await adapter.get_balance()
             except Exception as e:
                 logger.error(
-                    f"Failed to fetch balance from {target} "
-                    f"({type(e).__name__}: {e!r})"
+                    f"Failed to fetch balance from {target} ({type(e).__name__}: {e!r})"
                 )
                 continue
 
@@ -697,9 +694,7 @@ class RiskGuard:
                         message=f"{target}:{pos.symbol} 浮亏 {pnl_ratio:.2%}",
                     )
 
-    async def _send_floating_loss_alert(
-        self, target: str, pos, ratio: Decimal
-    ) -> None:
+    async def _send_floating_loss_alert(self, target: str, pos, ratio: Decimal) -> None:
         """发送 Telegram 浮亏预警（``target`` = 交易所名或 ``交易所#账户id``）"""
         try:
             # TelegramChannel 需要 app 实例，通过日志作为 fallback

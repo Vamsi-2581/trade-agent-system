@@ -148,7 +148,11 @@ async def test_json_riding_reasoning_content_still_parses():
     mock_client = _mock_client(
         _resp(
             200,
-            {"choices": [{"message": {"content": "", "reasoning_content": '{"a": 1}'}}]},
+            {
+                "choices": [
+                    {"message": {"content": "", "reasoning_content": '{"a": 1}'}}
+                ]
+            },
         )
     )
     with patch("httpx.AsyncClient", return_value=mock_client):

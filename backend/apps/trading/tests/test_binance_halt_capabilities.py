@@ -107,10 +107,15 @@ class TestReduceOnlyFlag(SimpleTestCase):
         """基类默认必须是关的：任何漏传该标志的新调用点都退化成普通下单，
         而不是悄悄获得「只减不增」——后者会让一张本该开仓的单莫名被拒。
         """
-        self.assertFalse(OrderRequest(
-            exchange="binance", symbol=_SYMBOL, order_type="market",
-            side="sell", quantity=Decimal("1"),
-        ).reduce_only)
+        self.assertFalse(
+            OrderRequest(
+                exchange="binance",
+                symbol=_SYMBOL,
+                order_type="market",
+                side="sell",
+                quantity=Decimal("1"),
+            ).reduce_only
+        )
 
 
 class TestMinNotional(SimpleTestCase):
@@ -227,7 +232,9 @@ class TestFetchOpenOrders(SimpleTestCase):
 
         asyncio.run(a.fetch_open_orders(_SYMBOL))
 
-        self.assertIn(f"symbol={_RAW_SYMBOL}", str(client.get.call_args_list[0].args[0]))
+        self.assertIn(
+            f"symbol={_RAW_SYMBOL}", str(client.get.call_args_list[0].args[0])
+        )
 
 
 class TestFetchMidPrice(SimpleTestCase):
@@ -328,10 +335,6 @@ class TestBaseAdapterContract(SimpleTestCase):
         """枚举挂单是保命档的必经之路（能力缺失必须显式抛错），
         而「不声明最小额约束」是一种合法状态（默认 0）。
         """
-        self.assertIn(
-            "fetch_open_orders", BaseExchangeAdapter.__abstractmethods__
-        )
-        self.assertIn(
-            "fetch_mid_price", BaseExchangeAdapter.__abstractmethods__
-        )
+        self.assertIn("fetch_open_orders", BaseExchangeAdapter.__abstractmethods__)
+        self.assertIn("fetch_mid_price", BaseExchangeAdapter.__abstractmethods__)
         self.assertNotIn("min_notional", BaseExchangeAdapter.__abstractmethods__)

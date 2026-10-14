@@ -11,7 +11,6 @@ import unittest
 from apps.agent.supervisor import (
     IntentRouter,
     SupervisorAgent,
-    SessionState,
     AgentMessage,
     AgentResult,
 )
@@ -41,7 +40,9 @@ class MockSessionManager:
     async def get_session_context(self, user_id):
         return self._store.get(f"session:{user_id}:context")
 
-    async def set_session_context(self, user_id, state, active_agent=None, task_id=None, ttl=1800):
+    async def set_session_context(
+        self, user_id, state, active_agent=None, task_id=None, ttl=1800
+    ):
         self._store[f"session:{user_id}:context"] = {
             "state": state.value if hasattr(state, "value") else state,
             "active_agent": active_agent,
@@ -51,7 +52,9 @@ class MockSessionManager:
     async def clear_session_context(self, user_id):
         self._store.pop(f"session:{user_id}:context", None)
 
-    async def pause_session(self, user_id, active_agent, pause_ttl=300, pause_context=""):
+    async def pause_session(
+        self, user_id, active_agent, pause_ttl=300, pause_context=""
+    ):
         self._store[f"session:{user_id}:context"] = {
             "state": "paused",
             "active_agent": active_agent,
@@ -60,9 +63,11 @@ class MockSessionManager:
 
     def get_redis(self):
         """Return a mock redis handle for workflow state storage."""
+
         class MockRedis:
             async def set(self, key, value, ex=None):
                 pass
+
         return MockRedis()
 
 
@@ -375,15 +380,17 @@ class TestNormalRouteWorkflowDetection(unittest.TestCase):
         """_parse_intent detects multi-step task and returns workflow plan."""
         sup, sm = self._setup()
 
-        workflow_json = json.dumps({
-            "_workflow_plan": {
-                "summary": "研究并实现策略",
-                "steps": [
-                    {"agent": "researcher", "message": "做研究"},
-                    {"agent": "quant", "message": "实现代码"},
-                ],
+        workflow_json = json.dumps(
+            {
+                "_workflow_plan": {
+                    "summary": "研究并实现策略",
+                    "steps": [
+                        {"agent": "researcher", "message": "做研究"},
+                        {"agent": "quant", "message": "实现代码"},
+                    ],
+                }
             }
-        })
+        )
 
         sup._llm.chat = AsyncMock(return_value=workflow_json)
 
@@ -400,15 +407,17 @@ class TestNormalRouteWorkflowDetection(unittest.TestCase):
         mock_researcher = make_accepting_agent("研究完成")
         mock_quant = make_accepting_agent("实现完成")
 
-        workflow_json = json.dumps({
-            "_workflow_plan": {
-                "summary": "研究并实现",
-                "steps": [
-                    {"agent": "researcher", "message": "研究BTC策略"},
-                    {"agent": "quant", "message": "实现策略代码"},
-                ],
+        workflow_json = json.dumps(
+            {
+                "_workflow_plan": {
+                    "summary": "研究并实现",
+                    "steps": [
+                        {"agent": "researcher", "message": "研究BTC策略"},
+                        {"agent": "quant", "message": "实现策略代码"},
+                    ],
+                }
             }
-        })
+        )
 
         sup._llm.chat = AsyncMock(return_value=workflow_json)
 
@@ -448,14 +457,16 @@ class TestNormalRouteWorkflowDetection(unittest.TestCase):
 
         sup, sm = self._setup()
 
-        workflow_json = json.dumps({
-            "_workflow_plan": {
-                "summary": "研究并实现",
-                "steps": [
-                    {"agent": "researcher", "message": "研究BTC策略"},
-                ],
+        workflow_json = json.dumps(
+            {
+                "_workflow_plan": {
+                    "summary": "研究并实现",
+                    "steps": [
+                        {"agent": "researcher", "message": "研究BTC策略"},
+                    ],
+                }
             }
-        })
+        )
         sup._llm.chat = AsyncMock(return_value=workflow_json)
 
         captured = {}
@@ -540,29 +551,31 @@ class TestNumberedStepWorkflowDetection(unittest.TestCase):
             "全程自动执行，无需人工确认。请输出策略详情、回测结果和优化过程。"
         )
 
-        workflow_json = json.dumps({
-            "_workflow_plan": {
-                "summary": "研究高胜率策略并回测优化",
-                "steps": [
-                    {
-                        "agent": "researcher",
-                        "message": "搜索并分析当前市场环境下的高胜率交易策略思路",
-                    },
-                    {
-                        "agent": "quant",
-                        "message": "基于研究结果，实现策略逻辑并编写回测代码",
-                    },
-                    {
-                        "agent": "quant",
-                        "message": "执行回测并分析回测结果",
-                    },
-                    {
-                        "agent": "quant",
-                        "message": "根据回测结果优化策略参数和逻辑，目标夏普比率达到2以上",
-                    },
-                ],
+        workflow_json = json.dumps(
+            {
+                "_workflow_plan": {
+                    "summary": "研究高胜率策略并回测优化",
+                    "steps": [
+                        {
+                            "agent": "researcher",
+                            "message": "搜索并分析当前市场环境下的高胜率交易策略思路",
+                        },
+                        {
+                            "agent": "quant",
+                            "message": "基于研究结果，实现策略逻辑并编写回测代码",
+                        },
+                        {
+                            "agent": "quant",
+                            "message": "执行回测并分析回测结果",
+                        },
+                        {
+                            "agent": "quant",
+                            "message": "根据回测结果优化策略参数和逻辑，目标夏普比率达到2以上",
+                        },
+                    ],
+                }
             }
-        })
+        )
 
         sup._llm.chat = AsyncMock(return_value=workflow_json)
 
@@ -577,9 +590,7 @@ class TestNumberedStepWorkflowDetection(unittest.TestCase):
             ),
         ):
             result = asyncio.run(
-                sup.handle(
-                    AgentMessage(payload={"text": user_text}, user_id="u1")
-                )
+                sup.handle(AgentMessage(payload={"text": user_text}, user_id="u1"))
             )
 
         self.assertTrue(result.success)
@@ -971,7 +982,10 @@ class TestRecurringTaskWithWorkflow(unittest.TestCase):
                 data={
                     "workflow_id": "test-id",
                     "workflow_summary": workflow_plan.get("summary", ""),
-                    "step_results": [{"agent": s["agent"], "success": True} for s in workflow_plan.get("steps", [])],
+                    "step_results": [
+                        {"agent": s["agent"], "success": True}
+                        for s in workflow_plan.get("steps", [])
+                    ],
                 },
             )
 
@@ -1043,7 +1057,10 @@ class TestGoalLoop(unittest.TestCase):
             sharpe = 1.0 if call_count == 1 else 1.6
             return AgentResult(
                 success=True,
-                data={"content": f"回测完成 夏普={sharpe}", "metrics": {"sharpe": sharpe}},
+                data={
+                    "content": f"回测完成 夏普={sharpe}",
+                    "metrics": {"sharpe": sharpe},
+                },
             )
 
         mock_quant = AsyncMock()
@@ -1120,7 +1137,10 @@ class TestGoalLoop(unittest.TestCase):
                     "goal": "胜率 > 60%",
                     "max_iterations": 5,
                     "steps": [
-                        {"agent": "quant", "message": "目标:{goal} 第{loop_iteration}轮 反馈:{last_feedback}"},
+                        {
+                            "agent": "quant",
+                            "message": "目标:{goal} 第{loop_iteration}轮 反馈:{last_feedback}",
+                        },
                     ],
                 },
             ],
@@ -1399,4 +1419,3 @@ class TestGoalLoop(unittest.TestCase):
         # step_results: researcher, loop, coach = 3 entries
         self.assertEqual(len(result.data["step_results"]), 3)
         self.assertEqual(result.data["step_results"][1]["type"], "loop")
-

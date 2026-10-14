@@ -242,9 +242,7 @@ class TestWhatEarnsADeclaration(SimpleTestCase):
         豁免、机制照拦」，于是「恢复豁免」变成一个按了没反应的动作。
         """
         exemptions = {1: g.Exemption(in_force=True, ends_at=at(days=3))}
-        plan = derive(
-            [row(1, status=g.STATUS_APPLIED)], exemptions=exemptions
-        )
+        plan = derive([row(1, status=g.STATUS_APPLIED)], exemptions=exemptions)
 
         self.assertEqual(plan.declarations, ())
         self.assertEqual(plan.close_reasons, {1: g.CLOSE_EXEMPTED})
@@ -489,7 +487,9 @@ class TestBlockedAndColdStartTouchNothing(SimpleTestCase):
     def test_a_stale_state_derives_nothing_at_all(self):
         """**尤其不能按空集解除**：状态过期正是这套机制最需要继续生效的时刻，而
         「说不清就解除」会让一次任务停摆变成一次无声的机制失效。"""
-        plan = derive([row(1, status=g.STATUS_APPLIED)], blocked=dea.BLOCKED_STALE_STATE)
+        plan = derive(
+            [row(1, status=g.STATUS_APPLIED)], blocked=dea.BLOCKED_STALE_STATE
+        )
 
         self.assertEqual(plan.declarations, ())
         self.assertEqual(plan.statuses, ())
@@ -536,7 +536,9 @@ class TestTheBlanketTier(SimpleTestCase):
     def test_the_blanket_branch_beats_the_row_by_row_verdict(self):
         """一行「阶段对、判据仍成立」的活行本该被声明——保命档下它原样留着，
         **而这不是「没什么可拦」**（`BLOCKED_BLANKET` 非空，页面据此说话）。"""
-        plan = derive([row(1, status=g.STATUS_APPLIED)], regime=BaseRegime.HIGH_VOL.value)
+        plan = derive(
+            [row(1, status=g.STATUS_APPLIED)], regime=BaseRegime.HIGH_VOL.value
+        )
 
         self.assertNotEqual(plan.blocked, "")
         self.assertEqual(plan.declarations, ())
@@ -548,8 +550,11 @@ class TestTheBlanketTier(SimpleTestCase):
         的理由**——那个比较才是假的。口径不同的表现是：一行活行在这里被解除（`gate_closed`），
         在开关开着时反而不动。
         """
-        plan = derive([row(1, status=g.STATUS_APPLIED)], gate_open=False,
-                      regime=BaseRegime.HIGH_VOL.value)
+        plan = derive(
+            [row(1, status=g.STATUS_APPLIED)],
+            gate_open=False,
+            regime=BaseRegime.HIGH_VOL.value,
+        )
 
         self.assertEqual(plan.close_reasons, {1: g.CLOSE_GATE_CLOSED})
         self.assertEqual(plan.blocked, "")

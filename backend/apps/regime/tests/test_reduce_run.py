@@ -233,7 +233,9 @@ class TestFiringWindow(SimpleTestCase):
 
     def test_a_window_containing_now_fires(self):
         pairs = self._pairs(_event(halt_at=NOW - timedelta(minutes=1)))
-        self.assertEqual([(p.event_name, p.scope) for p in pairs], [("FOMC 议息", "global")])
+        self.assertEqual(
+            [(p.event_name, p.scope) for p in pairs], [("FOMC 议息", "global")]
+        )
 
     def test_halt_at_is_inclusive(self):
         # 生效的**那一刻**就该动手：写 `halt_at < at` 会让窗口起点漏一拍。
@@ -296,7 +298,10 @@ class TestTargetsFor(SimpleTestCase):
         return reduce_run.FiringScope(event_id, name, scope or halt.global_scope())
 
     def test_a_global_scope_covers_every_position(self):
-        positions = {SYMBOL_NATIVE: ("long", Decimal("10")), "BTCUSDT": ("short", Decimal("2"))}
+        positions = {
+            SYMBOL_NATIVE: ("long", Decimal("10")),
+            "BTCUSDT": ("short", Decimal("2")),
+        }
 
         targets = reduce_run.targets_for([self._firing()], positions)
 
@@ -306,9 +311,14 @@ class TestTargetsFor(SimpleTestCase):
         )
 
     def test_a_symbol_scope_covers_only_that_symbol(self):
-        positions = {SYMBOL_NATIVE: ("long", Decimal("10")), "BTCUSDT": ("long", Decimal("2"))}
+        positions = {
+            SYMBOL_NATIVE: ("long", Decimal("10")),
+            "BTCUSDT": ("long", Decimal("2")),
+        }
 
-        targets = reduce_run.targets_for([self._firing(halt.symbol_scope(SYMBOL))], positions)
+        targets = reduce_run.targets_for(
+            [self._firing(halt.symbol_scope(SYMBOL))], positions
+        )
 
         self.assertEqual([t.symbol for t in targets], [SYMBOL_NATIVE])
 
@@ -319,7 +329,10 @@ class TestTargetsFor(SimpleTestCase):
         positions = {"BTCUSDT": ("long", Decimal("2"))}
 
         self.assertEqual(
-            reduce_run.targets_for([self._firing(halt.symbol_scope(SYMBOL))], positions), []
+            reduce_run.targets_for(
+                [self._firing(halt.symbol_scope(SYMBOL))], positions
+            ),
+            [],
         )
 
     def test_an_empty_book_produces_nothing(self):
@@ -332,7 +345,10 @@ class TestTargetsFor(SimpleTestCase):
         positions = {SYMBOL_NATIVE: ("long", Decimal("10"))}
 
         self.assertEqual(
-            reduce_run.targets_for([self._firing(halt.strategy_scope("s-1"))], positions), []
+            reduce_run.targets_for(
+                [self._firing(halt.strategy_scope("s-1"))], positions
+            ),
+            [],
         )
 
     def test_an_unreadable_scope_falls_back_to_the_whole_book(self):
@@ -340,7 +356,10 @@ class TestTargetsFor(SimpleTestCase):
         会真的去减，而不是静默一动不动。看不懂的写法只能来自写入方的 bug，而一条写坏了的
         声明静默失效是没有任何别的信号能暴露的。
         """
-        positions = {SYMBOL_NATIVE: ("long", Decimal("10")), "BTCUSDT": ("long", Decimal("2"))}
+        positions = {
+            SYMBOL_NATIVE: ("long", Decimal("10")),
+            "BTCUSDT": ("long", Decimal("2")),
+        }
 
         targets = reduce_run.targets_for([self._firing("SYMBOL:DOGE/USDT")], positions)
 
@@ -352,7 +371,9 @@ class TestTargetsFor(SimpleTestCase):
         """
         positions = {SYMBOL_NATIVE: ("long", Decimal("10"))}
 
-        targets = reduce_run.targets_for([self._firing(halt.symbol_scope(SYMBOL))], positions)
+        targets = reduce_run.targets_for(
+            [self._firing(halt.symbol_scope(SYMBOL))], positions
+        )
 
         self.assertEqual([t.symbol for t in targets], [SYMBOL_NATIVE])
 
@@ -361,13 +382,17 @@ class TestTargetsFor(SimpleTestCase):
         是确定的那一件——不是随便一件，否则同一轮重跑会换一个事件，认领键也跟着换。
         """
         positions = {SYMBOL_NATIVE: ("long", Decimal("10"))}
-        firing = [self._firing(event_id=7, name="先到的"), self._firing(event_id=9, name="后到的")]
+        firing = [
+            self._firing(event_id=7, name="先到的"),
+            self._firing(event_id=9, name="后到的"),
+        ]
 
         targets = reduce_run.targets_for(firing, positions)
 
-        self.assertEqual([(t.symbol, t.event_id, t.event_name) for t in targets], [
-            (SYMBOL_NATIVE, 7, "先到的")
-        ])
+        self.assertEqual(
+            [(t.symbol, t.event_id, t.event_name) for t in targets],
+            [(SYMBOL_NATIVE, 7, "先到的")],
+        )
 
     def test_a_target_holds_exactly_one_symbol(self):
         """装成列表的话 `_run_symbol` 就得再拆一次，而拆的时候漏掉「这个 Target 其实覆盖
@@ -383,7 +408,9 @@ class TestTargetsFor(SimpleTestCase):
 
 class TestNormalizeScopeSymbol(SimpleTestCase):
     def test_only_symbol_scopes_carry_a_symbol(self):
-        self.assertEqual(reduce_run.normalize_scope_symbol("symbol", SYMBOL), SYMBOL_NATIVE)
+        self.assertEqual(
+            reduce_run.normalize_scope_symbol("symbol", SYMBOL), SYMBOL_NATIVE
+        )
         # 全市场 = 不筛；策略档与空值同理（策略档到不了这一步，但函数自己的契约要自洽）。
         self.assertIsNone(reduce_run.normalize_scope_symbol("global", None))
         self.assertIsNone(reduce_run.normalize_scope_symbol("symbol", ""))
@@ -547,7 +574,10 @@ class TestShardClientId(SimpleTestCase):
         self.assertEqual(first, "rd01234567-7-DOGEUSDT-0")
 
     def test_each_shard_gets_its_own_id(self):
-        ids = {reduce_run.shard_client_id(self.account, 7, SYMBOL_NATIVE, i) for i in range(3)}
+        ids = {
+            reduce_run.shard_client_id(self.account, 7, SYMBOL_NATIVE, i)
+            for i in range(3)
+        }
 
         self.assertEqual(len(ids), 3)
 
@@ -582,16 +612,23 @@ class TestBusinessDay(SimpleTestCase):
         # UTC 04:00 = 北京 12:00 —— 同一天；UTC 16:30 = 北京次日 00:30 —— 差一天。
         self.assertEqual(reduce_run.business_day(NOW), DAY)
         self.assertEqual(
-            reduce_run.business_day(datetime(2026, 9, 23, 16, 30, tzinfo=dt_timezone.utc)),
+            reduce_run.business_day(
+                datetime(2026, 9, 23, 16, 30, tzinfo=dt_timezone.utc)
+            ),
             date(2026, 9, 24),
         )
 
     def test_the_boundary_is_business_midnight(self):
         self.assertEqual(
-            reduce_run.business_day(datetime(2026, 9, 23, 15, 59, tzinfo=dt_timezone.utc)), DAY
+            reduce_run.business_day(
+                datetime(2026, 9, 23, 15, 59, tzinfo=dt_timezone.utc)
+            ),
+            DAY,
         )
         self.assertEqual(
-            reduce_run.business_day(datetime(2026, 9, 23, 16, 0, tzinfo=dt_timezone.utc)),
+            reduce_run.business_day(
+                datetime(2026, 9, 23, 16, 0, tzinfo=dt_timezone.utc)
+            ),
             date(2026, 9, 24),
         )
 
@@ -654,10 +691,18 @@ class TestRenderAccountReport(SimpleTestCase):
 
     def test_the_three_slippage_bases_each_get_their_own_sentence(self):
         mid = self._render(
-            [self._make_outcome(slippage_basis=SlippageBasis.MID, slippage_pct=Decimal("0.12"))]
+            [
+                self._make_outcome(
+                    slippage_basis=SlippageBasis.MID, slippage_pct=Decimal("0.12")
+                )
+            ]
         )
-        no_fill = self._render([self._make_outcome(slippage_basis=SlippageBasis.NO_FILL)])
-        unavailable = self._render([self._make_outcome(slippage_basis=SlippageBasis.UNAVAILABLE)])
+        no_fill = self._render(
+            [self._make_outcome(slippage_basis=SlippageBasis.NO_FILL)]
+        )
+        unavailable = self._render(
+            [self._make_outcome(slippage_basis=SlippageBasis.UNAVAILABLE)]
+        )
 
         self.assertIn("滑点：0.12（以动作发起时刻中间价为基准）", mid)
         self.assertIn("滑点：本次无成交，无从计算", no_fill)
@@ -665,7 +710,9 @@ class TestRenderAccountReport(SimpleTestCase):
 
     def test_a_mid_basis_without_a_number_writes_nothing(self):
         # 「以中间价为基准」后面跟不出数字时，只写前半句会变成一句没有信息的话。
-        text = self._render([self._make_outcome(slippage_basis=SlippageBasis.MID, slippage_pct=None)])
+        text = self._render(
+            [self._make_outcome(slippage_basis=SlippageBasis.MID, slippage_pct=None)]
+        )
 
         self.assertNotIn("滑点", text)
 
@@ -695,7 +742,11 @@ class TestRenderReduceFailure(SimpleTestCase):
     def test_it_says_plainly_that_nothing_was_reduced(self):
         """一条沉默的失败与「本来就没到窗口」在收件人眼里一模一样。"""
         text = reduce_run.render_reduce_failure(
-            label="binance（主账户）", symbol=SYMBOL, reason="下单被拒", ordinal=2, day=DAY
+            label="binance（主账户）",
+            symbol=SYMBOL,
+            reason="下单被拒",
+            ordinal=2,
+            day=DAY,
         )
 
         self.assertIn("binance（主账户）", text)
@@ -719,7 +770,8 @@ class TestRecordOutcomeLine(SimpleTestCase):
         )
 
         self.assertEqual(
-            outcome.line(), f"{SYMBOL}：{ReduceStatus.NO_OP.display}（减半后不足一个步进）"
+            outcome.line(),
+            f"{SYMBOL}：{ReduceStatus.NO_OP.display}（减半后不足一个步进）",
         )
 
     def test_no_note_means_no_parentheses(self):
@@ -755,7 +807,9 @@ class TestConfiguredAccounts(_ReduceTestBase):
     """可以动手的账户：`is_active` 且**像**配好了密钥。"""
 
     def test_a_usable_account_is_returned(self):
-        self.assertEqual([a.pk for a in reduce_run.configured_accounts()], [self.account.pk])
+        self.assertEqual(
+            [a.pk for a in reduce_run.configured_accounts()], [self.account.pk]
+        )
 
     def test_a_placeholder_key_is_not_a_key(self):
         """「字段里塞了一个占位符」与「真的配好了」在 `build_account_adapter` 眼里一样
@@ -763,12 +817,16 @@ class TestConfiguredAccounts(_ReduceTestBase):
         """
         _account(label="占位符", key="TODO", secret="TODO")
 
-        self.assertEqual([a.pk for a in reduce_run.configured_accounts()], [self.account.pk])
+        self.assertEqual(
+            [a.pk for a in reduce_run.configured_accounts()], [self.account.pk]
+        )
 
     def test_an_inactive_account_is_not_touched(self):
         _account(label="停用", active=False)
 
-        self.assertEqual([a.pk for a in reduce_run.configured_accounts()], [self.account.pk])
+        self.assertEqual(
+            [a.pk for a in reduce_run.configured_accounts()], [self.account.pk]
+        )
 
     def test_an_undecryptable_account_is_skipped_not_fatal(self):
         # 解密失败也是一种「没配好」，不是事故——整轮不该因为一个坏账户塌掉。
@@ -779,7 +837,9 @@ class TestConfiguredAccounts(_ReduceTestBase):
             api_secret_enc=b"not-a-fernet-token",
         )
 
-        self.assertEqual([a.pk for a in reduce_run.configured_accounts()], [self.account.pk])
+        self.assertEqual(
+            [a.pk for a in reduce_run.configured_accounts()], [self.account.pk]
+        )
 
 
 class TestScopesInForce(_ReduceTestBase):
@@ -884,7 +944,9 @@ class TestStaleClaims(_ReduceTestBase):
     def test_a_claim_without_a_finish_is_stale(self):
         row = _record(self.account, self.event)
 
-        self.assertEqual([r.pk for r in reduce_run.stale_claims(self.account)], [row.pk])
+        self.assertEqual(
+            [r.pk for r in reduce_run.stale_claims(self.account)], [row.pk]
+        )
 
     def test_a_finished_row_is_not_stale(self):
         row = _record(self.account, self.event)
@@ -896,7 +958,7 @@ class TestStaleClaims(_ReduceTestBase):
         """判据是**两个条件都要**（`status` 与 `finished_at` 一起写）。只看 `status` 会漏掉
         「收尾写了一半」的行——而那种行的存在恰恰说明写入中断了。
         """
-        row = _record(self.account, self.event, finished_at=NOW)
+        _row = _record(self.account, self.event, finished_at=NOW)
 
         self.assertEqual(reduce_run.stale_claims(self.account), [])
 
@@ -1179,7 +1241,9 @@ class TestFinish(_ReduceTestBase):
     def test_what_was_not_passed_is_not_clobbered(self):
         # 收尾的每一档只带自己知道的那几个字段：失败那一档不知道该减多少，
         # 把 `planned_qty` 顺手写成 None 会让「计划了多少」永久丢掉。
-        record = _record(self.account, self.event, planned_qty=Decimal("5"), reason="原始理由")
+        record = _record(
+            self.account, self.event, planned_qty=Decimal("5"), reason="原始理由"
+        )
 
         reduce_run.finish(record, status=ReduceStatus.FAILED)
 
@@ -1191,18 +1255,30 @@ class TestFinish(_ReduceTestBase):
         # 「基准价取不到，本次不判定滑点」必须落进记录：日报事后要能说出当时没判。
         record = _record(self.account, self.event)
 
-        reduce_run.finish(record, status=ReduceStatus.SUCCEEDED, slippage_basis=SlippageBasis.UNAVAILABLE)
+        reduce_run.finish(
+            record,
+            status=ReduceStatus.SUCCEEDED,
+            slippage_basis=SlippageBasis.UNAVAILABLE,
+        )
 
         record.refresh_from_db()
         self.assertEqual(record.slippage_basis, SlippageBasis.UNAVAILABLE.value)
         self.assertIsNone(record.slippage_pct)
-        self.assertEqual(record.slippage_basis_display, SlippageBasis.UNAVAILABLE.display)
+        self.assertEqual(
+            record.slippage_basis_display, SlippageBasis.UNAVAILABLE.display
+        )
 
 
 class TestBuildPlans(_ReduceTestBase):
     """装配（同步）→ 执行（async）之间的那一刀。这一层**只读**，且全在同步侧完成。"""
 
-    def _arm(self, *, event: MajorEvent | None = None, declared: bool = True, switch: bool = True):
+    def _arm(
+        self,
+        *,
+        event: MajorEvent | None = None,
+        declared: bool = True,
+        switch: bool = True,
+    ):
         """把三个前置条件一次装好。`event` 留空就用 `setUp` 那条（窗口 NOW±1h，此刻正开着）。
 
         传了 `event` 就把 `setUp` 那条**推出窗口**（`resume_at` 收到 `NOW`，`resume_at` 是
@@ -1227,7 +1303,8 @@ class TestBuildPlans(_ReduceTestBase):
         self.assertEqual(plans[0].account.pk, self.account.pk)
         self.assertEqual(plans[0].label, "binance（主账户）")
         self.assertEqual(
-            [(f.event_name, f.scope) for f in plans[0].firing], [("FOMC 议息", "global")]
+            [(f.event_name, f.scope) for f in plans[0].firing],
+            [("FOMC 议息", "global")],
         )
 
     def test_the_plan_carries_scopes_not_symbols(self):

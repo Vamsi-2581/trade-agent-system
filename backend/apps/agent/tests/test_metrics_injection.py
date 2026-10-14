@@ -98,7 +98,9 @@ def _query_call():
 
 
 def _msg(text="查询回测结果"):
-    return AgentMessage(sender="scheduler", recipient="test_metrics_agent", payload={"text": text})
+    return AgentMessage(
+        sender="scheduler", recipient="test_metrics_agent", payload={"text": text}
+    )
 
 
 def _tool_messages_of(mock_llm) -> list[str]:
@@ -220,7 +222,10 @@ def test_extract_metrics_unit():
     assert m == TASK_RESULT_DATA["result"]
     assert BaseAgent._extract_task_metrics("Error: boom") is None
     assert BaseAgent._extract_task_metrics("not a dict") is None
-    assert BaseAgent._extract_task_metrics(str({"status": "PENDING", "result": {}})) is None
+    assert (
+        BaseAgent._extract_task_metrics(str({"status": "PENDING", "result": {}}))
+        is None
+    )
     # one_time 任务分支：result 是 str → 无指标
     assert (
         BaseAgent._extract_task_metrics(str({"status": "SUCCESS", "result": "hello"}))

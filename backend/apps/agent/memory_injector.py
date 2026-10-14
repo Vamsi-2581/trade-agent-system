@@ -11,8 +11,6 @@ methods free of per-method import boilerplate.
 
 from __future__ import annotations
 
-from typing import Any
-
 
 class MemoryInjector:
     """User-scoped memory facade for the Supervisor.
@@ -44,8 +42,10 @@ class MemoryInjector:
             return None
         if self._mm is None:
             from apps.memory.manager import MemoryManager
+
             self._mm = MemoryManager(
-                agent_type=self._agent_type, user_id=self._user_id,
+                agent_type=self._agent_type,
+                user_id=self._user_id,
             )
         return self._mm
 
@@ -60,7 +60,9 @@ class MemoryInjector:
         return await mm.get_conv_history()
 
     async def append_conv_history(
-        self, entries: list[dict], keep_turns: int | None = None,
+        self,
+        entries: list[dict],
+        keep_turns: int | None = None,
     ) -> None:
         mm = await self._get_mm()
         if mm is None:
@@ -81,13 +83,18 @@ class MemoryInjector:
     # ------------------------------------------------------------------ #
 
     async def write_l2(
-        self, content: str, memory_type: str, importance: int = 1,
+        self,
+        content: str,
+        memory_type: str,
+        importance: int = 1,
     ) -> None:
         mm = await self._get_mm()
         if mm is None:
             return
         await mm.write_l2(
-            content=content, memory_type=memory_type, importance=importance,
+            content=content,
+            memory_type=memory_type,
+            importance=importance,
         )
 
     async def write_l3(self, content: str, memory_type: str) -> None:

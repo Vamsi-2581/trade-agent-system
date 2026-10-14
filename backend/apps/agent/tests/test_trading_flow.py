@@ -10,11 +10,8 @@ Step 3: "回测这个策略" → backtest via quant agent (submit_backtest tool)
 
 from __future__ import annotations
 
-import asyncio
 import os
-import re
-import sys
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch
 
 import django
 
@@ -22,16 +19,15 @@ import django
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings.test")
 django.setup()
 
-import pytest
+import pytest  # noqa: E402  (must follow django.setup() above)
 
-from apps.agent.base import AgentMessage, AgentResult
-from apps.agent.supervisor import (
+from apps.agent.base import AgentMessage, AgentResult  # noqa: E402
+from apps.agent.supervisor import (  # noqa: E402
     SupervisorAgent,
     IntentRouter,
 )
-from apps.agent.registry import AgentRegistry
-from apps.agent.prompt_loader import PromptLoader
-from apps.memory.manager import _L1_CACHE
+from apps.agent.registry import AgentRegistry  # noqa: E402
+from apps.memory.manager import _L1_CACHE  # noqa: E402
 
 
 # ------------------------------------------------------------------ #
@@ -53,13 +49,16 @@ def reset_singletons():
 
     # Clear prompt cache so agents are re-discovered
     from apps.agent import prompt_loader
+
     prompt_loader._cache.clear()
     prompt_loader._meta_cache.clear()
 
     from apps.agent.frame_manager import FrameManager
+
     FrameManager._instance = None
 
     from apps.agent.llm_client import LLMClient
+
     LLMClient._instance = None
 
 
@@ -72,13 +71,17 @@ class MockSessionManager:
     async def get_session_context(self, user_id: str):
         return self._store.get(user_id)
 
-    async def set_session_context(self, user_id: str, state, active_agent=None, ttl=1800):
+    async def set_session_context(
+        self, user_id: str, state, active_agent=None, ttl=1800
+    ):
         self._store[user_id] = {
             "state": state.value,
             "active_agent": active_agent,
         }
 
-    async def pause_session(self, user_id, active_agent, pause_ttl=300, pause_context=""):
+    async def pause_session(
+        self, user_id, active_agent, pause_ttl=300, pause_context=""
+    ):
         self._store[user_id] = {
             "state": "paused",
             "active_agent": active_agent,
@@ -96,6 +99,7 @@ class MockSessionManager:
 
 class MockMemoryManager:
     """In-memory memory manager (no Redis)."""
+
     _shared: dict[str, dict] = {}
 
     def __init__(self, agent_type="supervisor", user_id=TEST_USER):
@@ -236,9 +240,7 @@ class TestResearcherFindsBtcStrategy:
             routed_agent = get_routed_agent_name(result)
             assert routed_agent == "researcher" or (
                 routed_agent and "research" in routed_agent.lower()
-            ), (
-                f"Expected routing to researcher, got: {routed_agent}"
-            )
+            ), f"Expected routing to researcher, got: {routed_agent}"
 
             # Save for next test
             _shared_state["research_report"] = reply
@@ -281,14 +283,22 @@ class TestQuantCreatesStrategy:
             routed_agent = get_routed_agent_name(result)
             assert routed_agent == "quant" or (
                 routed_agent and "quant" in routed_agent.lower()
-            ), (
-                f"Expected routing to quant, got: {routed_agent}. Reply: {reply[:200]}"
-            )
+            ), f"Expected routing to quant, got: {routed_agent}. Reply: {reply[:200]}"
 
             # Verify strategy creation occurred (reply should mention strategy/file/test)
-            creation_indicators = ["策略", "创建", "test", "strategy", "py", "文件", "通过"]
+            creation_indicators = [
+                "策略",
+                "创建",
+                "test",
+                "strategy",
+                "py",
+                "文件",
+                "通过",
+            ]
             reply_lower = reply.lower()
-            found_indicators = [ind for ind in creation_indicators if ind.lower() in reply_lower]
+            found_indicators = [
+                ind for ind in creation_indicators if ind.lower() in reply_lower
+            ]
             assert found_indicators, (
                 f"No strategy creation indicators found. Reply: {reply[:300]}"
             )
@@ -329,6 +339,7 @@ class TestBacktestReturnsResult:
             )
         # For other tools, let the real handler process them
         from apps.agent.tools.base import ToolRegistry
+
         tool = ToolRegistry.get(tc.name)
         if tool:
             try:
@@ -356,21 +367,28 @@ class TestBacktestReturnsResult:
             assert result.success, f"Step 3 failed: {result.error}"
 
             reply = extract_reply(result.data)
-            assert reply and len(reply.strip()) > 0, (
-                "Backtest returned empty result"
-            )
+            assert reply and len(reply.strip()) > 0, "Backtest returned empty result"
 
             # Verify result contains backtest-related fields
             backtest_fields = [
-                "收益", "胜率", "回撤", "return", "win_rate", "drawdown",
-                "task_id", "已提交", "回测", "backtest", "PENDING",
-                "SUCCESS", "FAILURE", "status"
+                "收益",
+                "胜率",
+                "回撤",
+                "return",
+                "win_rate",
+                "drawdown",
+                "task_id",
+                "已提交",
+                "回测",
+                "backtest",
+                "PENDING",
+                "SUCCESS",
+                "FAILURE",
+                "status",
             ]
             reply_lower = reply.lower()
             found = [f for f in backtest_fields if f.lower() in reply_lower]
-            assert found, (
-                f"No backtest result fields found. Reply: {reply[:300]}"
-            )
+            assert found, f"No backtest result fields found. Reply: {reply[:300]}"
 
         finally:
             cleanup()

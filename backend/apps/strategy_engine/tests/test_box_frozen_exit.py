@@ -45,7 +45,7 @@ def _load_strategy_cls():
     return mod.BoxTimeRangeBreakoutStrategy
 
 
-def _kline(i, o, h, l, c, v=1000.0):
+def _kline(i, o, h, l, c, v=1000.0):  # noqa: E741
     return {
         "timestamp": T0 + i * 3600000,
         "open": o,
@@ -62,8 +62,15 @@ def _oscillation(n=140):
     for i in range(n):
         c = 100.35 + 1.65 * math.sin(2 * math.pi * i / 6)
         o = 100.35 + 1.65 * math.sin(2 * math.pi * (i - 1) / 6)
-        bars.append(_kline(i, round(o, 4), round(max(o, c) + 0.05, 4),
-                           round(min(o, c) - 0.05, 4), round(c, 4)))
+        bars.append(
+            _kline(
+                i,
+                round(o, 4),
+                round(max(o, c) + 0.05, 4),
+                round(min(o, c) - 0.05, 4),
+                round(c, 4),
+            )
+        )
     return bars
 
 
@@ -112,8 +119,10 @@ def test_exit_fires_when_box_gone_and_close_below_frozen_ref():
     assert ref == pytest.approx(100.35)
 
     # 窗口低点砸到 80.3：下沿候选 98.87 > 80.3*1.15=92.3，过不了粗筛 → 箱体消失
-    crash = [_kline(len(bars) + j, 102.0, 102.0, c - 0.3, c)
-             for j, c in enumerate([97.0, 88.0, 80.6])]
+    crash = [
+        _kline(len(bars) + j, 102.0, 102.0, c - 0.3, c)
+        for j, c in enumerate([97.0, 88.0, 80.6])
+    ]
     history = bars + [_kline(len(bars), 101.5, 103.2, 101.4, 103.0)] + crash
     exit_bar = _kline(len(history), 80.0, 98.5, 80.0, 99.5)  # close 99.5 < 100.35
 
@@ -131,8 +140,10 @@ def test_no_exit_when_box_gone_and_close_above_frozen_ref():
     bars = _oscillation()
     s, ref = _enter(bars)
 
-    crash = [_kline(len(bars) + j, 102.0, 102.0, c - 0.3, c)
-             for j, c in enumerate([97.0, 88.0, 80.6])]
+    crash = [
+        _kline(len(bars) + j, 102.0, 102.0, c - 0.3, c)
+        for j, c in enumerate([97.0, 88.0, 80.6])
+    ]
     history = bars + [_kline(len(bars), 101.5, 103.2, 101.4, 103.0)] + crash
     hold_bar = _kline(len(history), 100.5, 100.8, 100.2, 100.6)  # close 100.6 > 100.35
 
@@ -167,7 +178,7 @@ def test_ref_cleared_when_flat_again():
     立即市价平。
     """
     bars = _oscillation()
-    cls = _load_strategy_cls()
+    _cls = _load_strategy_cls()
     s, ref = _enter(bars)
     assert ref is not None
 

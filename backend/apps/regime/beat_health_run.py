@@ -159,9 +159,7 @@ def check(*, now: datetime | None = None) -> dict:
     at = now or timezone.now()
     rows = list(entries())
     found = beat_health.findings(rows, declared(), now=at)
-    due = beat_health.alerts(
-        found, newest=beat_health.newest_entry(rows), now=at
-    )
+    due = beat_health.alerts(found, newest=beat_health.newest_entry(rows), now=at)
     summary = {
         "checked": True,
         "problems": len(found),

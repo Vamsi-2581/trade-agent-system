@@ -143,7 +143,7 @@ class TestTaskTrackerToolCall:
         tracker.start("任务启动")
 
         # Mock _notify to capture notification text
-        with patch.object(tracker, '_notify') as mock_notify:
+        with patch.object(tracker, "_notify") as mock_notify:
             tracker.tool_call("get_kline_data", {"symbol": "BTCUSDT", "interval": "1h"})
 
             # Verify _notify was called
@@ -161,12 +161,11 @@ class TestTaskTrackerToolCall:
         tracker = _make_tracker()
         tracker.start()
 
-        with patch.object(tracker, '_notify') as mock_notify:
-            tracker.tool_call("resolve_user", {
-                "user_id": "secret-123",
-                "agent_name": "supervisor",
-                "query": "John"
-            })
+        with patch.object(tracker, "_notify") as mock_notify:
+            tracker.tool_call(
+                "resolve_user",
+                {"user_id": "secret-123", "agent_name": "supervisor", "query": "John"},
+            )
 
             notification_text = mock_notify.call_args[0][0]
 
@@ -187,7 +186,7 @@ class TestTaskTrackerToolCall:
 
         long_query = "a" * 100  # 100 characters
 
-        with patch.object(tracker, '_notify') as mock_notify:
+        with patch.object(tracker, "_notify") as mock_notify:
             tracker.tool_call("search", {"query": long_query})
 
             notification_text = mock_notify.call_args[0][0]
@@ -198,7 +197,10 @@ class TestTaskTrackerToolCall:
             assert len(notification_text) < 150  # Ensure not too long
             assert "query=" in notification_text
             # Check truncated value has 49 a's after opening quote
-            assert "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" in notification_text[:100]
+            assert (
+                "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                in notification_text[:100]
+            )
 
     @pytest.mark.usefixtures("_mock_deps")
     def test_tool_call_without_tracker_context(self):
@@ -210,7 +212,7 @@ class TestTaskTrackerToolCall:
         tracker.start()
 
         # Should not raise even though context is None
-        with patch.object(tracker, '_notify') as mock_notify:
+        with patch.object(tracker, "_notify") as mock_notify:
             tracker.tool_call("get_kline_data", {"symbol": "BTC"})
 
             # Notification should still be sent (tracker exists)

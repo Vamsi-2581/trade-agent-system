@@ -4,15 +4,26 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('trading', '0004_order_triggered_strategy'),
+        ("trading", "0004_order_triggered_strategy"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='order',
-            name='status',
-            field=models.CharField(choices=[('pending', 'Pending'), ('submitted', 'Submitted'), ('partial', 'Partial'), ('filled', 'Filled'), ('cancelled', 'Cancelled'), ('failed', 'Failed'), ('unknown', '未知')], default='pending', max_length=12),
+            model_name="order",
+            name="status",
+            field=models.CharField(
+                choices=[
+                    ("pending", "Pending"),
+                    ("submitted", "Submitted"),
+                    ("partial", "Partial"),
+                    ("filled", "Filled"),
+                    ("cancelled", "Cancelled"),
+                    ("failed", "Failed"),
+                    ("unknown", "未知"),
+                ],
+                default="pending",
+                max_length=12,
+            ),
         ),
     ]

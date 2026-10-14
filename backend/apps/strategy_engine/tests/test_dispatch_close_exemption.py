@@ -47,11 +47,12 @@ def _signal(is_close: bool) -> OrderSignal:
 class TestDispatchCloseExemption(unittest.IsolatedAsyncioTestCase):
     async def _run(self, signal: OrderSignal, guard: _RecordingRiskGuard):
         dispatcher = SignalDispatcher()
-        with patch(
-            "apps.riskguard.guard.RiskGuard.get_instance", return_value=guard
-        ), patch.object(
-            dispatcher, "dispatch", AsyncMock(return_value="msg-1")
-        ) as dispatch:
+        with (
+            patch("apps.riskguard.guard.RiskGuard.get_instance", return_value=guard),
+            patch.object(
+                dispatcher, "dispatch", AsyncMock(return_value="msg-1")
+            ) as dispatch,
+        ):
             msg_id = await dispatcher.dispatch_with_risk_check(
                 signal=signal,
                 symbol="BNBUSDT",
@@ -67,7 +68,8 @@ class TestDispatchCloseExemption(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(msg_id, "msg-1")
         self.assertEqual(
-            len(guard.requests), 1,
+            len(guard.requests),
+            1,
             "平仓信号必须仍走 pre_trade_check：入口预跳过会再造一个答案",
         )
         self.assertTrue(

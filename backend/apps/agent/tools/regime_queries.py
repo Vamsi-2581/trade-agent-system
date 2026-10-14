@@ -143,7 +143,9 @@ class QueryRegimeTool(BaseTool):
         current = judgement.current_judgement(symbol, now=now)
         lines.append("【生效中】此刻正在咬人的那条判定")
         if current is None:
-            lines.append("库中还没有任何生效过的判定（冷启动），当前没有任何阶段在生效。")
+            lines.append(
+                "库中还没有任何生效过的判定（冷启动），当前没有任何阶段在生效。"
+            )
         else:
             lines.extend(_in_force_lines(current))
 
@@ -375,7 +377,9 @@ def _evidence_text(evidence: dict) -> list[str]:
     if metrics.get("calmar") is not None:
         bits.append(f"Calmar {report._num(metrics['calmar'], digits=3)}")
     if metrics.get("max_drawdown_pct") is not None:
-        bits.append(f"分段最大回撤 {report._num(metrics['max_drawdown_pct'], digits=3)}%")
+        bits.append(
+            f"分段最大回撤 {report._num(metrics['max_drawdown_pct'], digits=3)}%"
+        )
     symbols = "、".join(cell.get("symbols") or [])
     if symbols:
         bits.append(f"品种 {symbols}")
@@ -400,7 +404,9 @@ def _evidence_text(evidence: dict) -> list[str]:
     if evidence.get("needs_review"):
         # 会走到这里说明这一行是**不该被写出来的那种**（TARGET 与 needs_review 互斥）。
         # 照实说，不掩盖：`evidence` 是冻结的，它比现在这条路径更接近当时的事实。
-        lines.append("    ⚠ 依据当时标了「方向冲突、待人工复核」，与「已写成停用决策」矛盾，请复核")
+        lines.append(
+            "    ⚠ 依据当时标了「方向冲突、待人工复核」，与「已写成停用决策」矛盾，请复核"
+        )
     return lines
 
 
@@ -447,7 +453,9 @@ def _decision_lines(decision, *, now, blanket_live: bool) -> list[str]:
         f"    首次判出：{report.format_business(decision.first_decided_at)}；"
         f"最近确认：{report.format_business(decision.last_confirmed_at)}"
     )
-    lines.append(_exemption_text(decision.exemption, now=now, blanket_live=blanket_live))
+    lines.append(
+        _exemption_text(decision.exemption, now=now, blanket_live=blanket_live)
+    )
     return lines
 
 
@@ -503,7 +511,9 @@ class QueryDeactivationDecisionsTool(BaseTool):
             lines.append(f"与你相关的停用决策：{len(rows)} 条")
             for decision in rows:
                 lines.append("")
-                lines.extend(_decision_lines(decision, now=now, blanket_live=blanket_live))
+                lines.extend(
+                    _decision_lines(decision, now=now, blanket_live=blanket_live)
+                )
 
         lines.append("")
         lines.append(_gate_line(now))
@@ -515,7 +525,9 @@ class QueryDeactivationDecisionsTool(BaseTool):
         try:
             text = await db_async(self._render)(user_id)
         except Exception as e:  # noqa: BLE001
-            logger.error("[QueryDeactivationDecisionsTool] 查询失败: %s", e, exc_info=True)
+            logger.error(
+                "[QueryDeactivationDecisionsTool] 查询失败: %s", e, exc_info=True
+            )
             return ToolResult(success=False, error=f"查询停用决策失败: {e}")
         return ToolResult(success=True, data=text)
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import unittest
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -64,8 +63,10 @@ class TestExecuteScheduledTaskStateMachine(TestCase):
 
         run_at = datetime.now(timezone.utc)
         task = ScheduledOneTimeTask.objects.create(
-            task_name="cas_test", agent_name="analyst",
-            message="test", run_at=run_at,
+            task_name="cas_test",
+            agent_name="analyst",
+            message="test",
+            run_at=run_at,
         )
         affected = _update_task_status(str(task.id), "running")
         self.assertEqual(affected, 1)
@@ -80,8 +81,11 @@ class TestExecuteScheduledTaskStateMachine(TestCase):
 
         run_at = datetime.now(timezone.utc)
         task = ScheduledOneTimeTask.objects.create(
-            task_name="cas_skip", agent_name="analyst",
-            message="test", run_at=run_at, status="revoked",
+            task_name="cas_skip",
+            agent_name="analyst",
+            message="test",
+            run_at=run_at,
+            status="revoked",
         )
         affected = _update_task_status(str(task.id), "running")
         self.assertEqual(affected, 0)
@@ -95,8 +99,10 @@ class TestExecuteScheduledTaskStateMachine(TestCase):
 
         run_at = datetime.now(timezone.utc)
         task = ScheduledOneTimeTask.objects.create(
-            task_name="cas_race", agent_name="analyst",
-            message="test", run_at=run_at,
+            task_name="cas_race",
+            agent_name="analyst",
+            message="test",
+            run_at=run_at,
         )
         result1 = _update_task_status(str(task.id), "running")
         result2 = _update_task_status(str(task.id), "running")
@@ -109,8 +115,11 @@ class TestExecuteScheduledTaskStateMachine(TestCase):
 
         run_at = datetime.now(timezone.utc)
         task = ScheduledOneTimeTask.objects.create(
-            task_name="finalize_ok", agent_name="analyst",
-            message="test", run_at=run_at, status="running",
+            task_name="finalize_ok",
+            agent_name="analyst",
+            message="test",
+            run_at=run_at,
+            status="running",
         )
         _finalize_task(str(task.id), "SUCCESS", result={"data": "ok"}, error=None)
         task.refresh_from_db()
@@ -124,8 +133,11 @@ class TestExecuteScheduledTaskStateMachine(TestCase):
 
         run_at = datetime.now(timezone.utc)
         task = ScheduledOneTimeTask.objects.create(
-            task_name="finalize_fail", agent_name="analyst",
-            message="test", run_at=run_at, status="running",
+            task_name="finalize_fail",
+            agent_name="analyst",
+            message="test",
+            run_at=run_at,
+            status="running",
         )
         _finalize_task(str(task.id), "FAILURE", result=None, error="agent failed")
         task.refresh_from_db()
@@ -226,9 +238,7 @@ class TestCancelScheduledTaskTool(TransactionTestCase):
         )
 
         tool = CancelScheduledTaskTool()
-        result = await tool.execute(
-            task_id_or_name=task_uuid, task_type="scheduled"
-        )
+        result = await tool.execute(task_id_or_name=task_uuid, task_type="scheduled")
 
         assert not result.success
         assert "无法取消" in result.error
@@ -280,12 +290,15 @@ class TestStartupRecoveryCheck(TestCase):
         from apps.agent.models import ScheduledOneTimeTask
 
         ScheduledOneTimeTask.objects.create(
-            task_name="future", agent_name="analyst",
-            message="future task", run_at=self.now + timedelta(hours=1),
-            status="pending", celery_task_id="old-celery-id",
+            task_name="future",
+            agent_name="analyst",
+            message="future task",
+            run_at=self.now + timedelta(hours=1),
+            status="pending",
+            celery_task_id="old-celery-id",
         )
 
-        result = startup_recovery_check()
+        _result = startup_recovery_check()
         task = ScheduledOneTimeTask.objects.get(task_name="future")
         self.assertNotEqual(task.celery_task_id, "old-celery-id")
         self.assertEqual(task.status, "pending")
@@ -303,12 +316,14 @@ class TestStartupRecoveryCheck(TestCase):
         from apps.agent.models import ScheduledOneTimeTask
 
         ScheduledOneTimeTask.objects.create(
-            task_name="grace", agent_name="analyst",
-            message="grace task", run_at=self.now - timedelta(minutes=3),
+            task_name="grace",
+            agent_name="analyst",
+            message="grace task",
+            run_at=self.now - timedelta(minutes=3),
             status="pending",
         )
 
-        result = startup_recovery_check()
+        _result = startup_recovery_check()
         task = ScheduledOneTimeTask.objects.get(task_name="grace")
         self.assertEqual(task.status, "pending")
         mock_task.apply_async.assert_called()
@@ -326,12 +341,15 @@ class TestStartupRecoveryCheck(TestCase):
         from apps.agent.models import ScheduledOneTimeTask
 
         ScheduledOneTimeTask.objects.create(
-            task_name="missed", agent_name="analyst",
-            message="missed task", run_at=self.now - timedelta(hours=2),
-            status="pending", user_id="user-123",
+            task_name="missed",
+            agent_name="analyst",
+            message="missed task",
+            run_at=self.now - timedelta(hours=2),
+            status="pending",
+            user_id="user-123",
         )
 
-        result = startup_recovery_check()
+        _result = startup_recovery_check()
         task = ScheduledOneTimeTask.objects.get(task_name="missed")
         self.assertEqual(task.status, "missed")
         mock_notify.assert_called()
@@ -346,14 +364,16 @@ class TestStartupRecoveryCheck(TestCase):
         from apps.agent.tasks import startup_recovery_check
         from apps.agent.models import ScheduledOneTimeTask
 
-        zombie_task = ScheduledOneTimeTask.objects.create(
-            task_name="zombie", agent_name="analyst",
-            message="zombie task", run_at=self.now - timedelta(minutes=15),
+        _zombie_task = ScheduledOneTimeTask.objects.create(
+            task_name="zombie",
+            agent_name="analyst",
+            message="zombie task",
+            run_at=self.now - timedelta(minutes=15),
             status="running",
             celery_task_id="zombie-celery-id",
         )
 
-        result = startup_recovery_check()
+        _result = startup_recovery_check()
         task = ScheduledOneTimeTask.objects.get(task_name="zombie")
         self.assertEqual(task.status, "pending")
         mock_task.apply_async.assert_called()
@@ -370,8 +390,11 @@ class TestGetTaskResultDBUUID(TransactionTestCase):
 
         run_at = datetime.now(timezone.utc) + timedelta(hours=1)
         task = ScheduledOneTimeTask.objects.create(
-            task_name="query_test", agent_name="analyst",
-            message="test", run_at=run_at, status="pending",
+            task_name="query_test",
+            agent_name="analyst",
+            message="test",
+            run_at=run_at,
+            status="pending",
         )
         task_id = str(task.id)
         connection.close()
@@ -393,8 +416,10 @@ class TestGetTaskResultDBUUID(TransactionTestCase):
 
         run_at = datetime.now(timezone.utc)
         task = ScheduledOneTimeTask.objects.create(
-            task_name="query_done", agent_name="analyst",
-            message="test", run_at=run_at,
+            task_name="query_done",
+            agent_name="analyst",
+            message="test",
+            run_at=run_at,
             status="completed",
             result='{"status": "SUCCESS", "result": "analysis done"}',
             executed_at=datetime.now(timezone.utc),
@@ -415,7 +440,9 @@ class TestGetTaskResultDBUUID(TransactionTestCase):
 class TestListScheduledTasksAPI(TestCase):
     """Test that API returns both periodic and one-time tasks."""
 
-    @patch("rest_framework.permissions.IsAuthenticated.has_permission", return_value=True)
+    @patch(
+        "rest_framework.permissions.IsAuthenticated.has_permission", return_value=True
+    )
     def test_api_returns_one_time_tasks(self, mock_auth):
         """Should include one-time tasks with source='one_time'."""
         from apps.agent.models import ScheduledOneTimeTask
@@ -423,8 +450,11 @@ class TestListScheduledTasksAPI(TestCase):
 
         run_at = datetime.now(timezone.utc) + timedelta(hours=1)
         ScheduledOneTimeTask.objects.create(
-            task_name="api_test", agent_name="analyst",
-            message="test", run_at=run_at, status="pending",
+            task_name="api_test",
+            agent_name="analyst",
+            message="test",
+            run_at=run_at,
+            status="pending",
         )
 
         from apps.agent.views import list_scheduled_tasks
@@ -432,13 +462,19 @@ class TestListScheduledTasksAPI(TestCase):
         request = APIRequestFactory().get("/api/agent/tasks/scheduled/")
         response = list_scheduled_tasks(request)
         self.assertEqual(response.status_code, 200)
-        one_time_tasks = [t for t in response.data["tasks"] if t.get("source") == "one_time"]
+        one_time_tasks = [
+            t for t in response.data["tasks"] if t.get("source") == "one_time"
+        ]
         self.assertEqual(len(one_time_tasks), 1)
         self.assertEqual(one_time_tasks[0]["agent_name"], "analyst")
         self.assertEqual(one_time_tasks[0]["status"], "pending")
 
-    @patch("rest_framework.permissions.IsAuthenticated.has_permission", return_value=True)
-    def test_a_static_entry_reads_its_own_row_instead_of_a_hardcoded_null(self, mock_auth):
+    @patch(
+        "rest_framework.permissions.IsAuthenticated.has_permission", return_value=True
+    )
+    def test_a_static_entry_reads_its_own_row_instead_of_a_hardcoded_null(
+        self, mock_auth
+    ):
         """静态条目的 `last_run_at` / `total_run_count` / `enabled` 取自库里**那一行**。
 
         原先写死成 `None / 0 / True`，代价不是「少了个数」：`beat_schedule` 只在 beat
@@ -479,7 +515,9 @@ class TestListScheduledTasksAPI(TestCase):
         self.assertEqual(row["total_run_count"], 7)
         self.assertIsNotNone(row["last_run_at"], "库里那一行有值，接口不该回 null")
 
-    @patch("rest_framework.permissions.IsAuthenticated.has_permission", return_value=True)
+    @patch(
+        "rest_framework.permissions.IsAuthenticated.has_permission", return_value=True
+    )
     def test_a_disabled_static_entry_does_not_claim_to_be_enabled(self, mock_auth):
         """`enabled` 那一格原先也写死成 `True`：一条**被人停用的**静态任务照旧显示为正常。
 
@@ -525,8 +563,10 @@ class TestScheduledTaskIntegration(TestCase):
         from apps.agent.tasks import _update_task_status
 
         task = ScheduledOneTimeTask.objects.create(
-            task_name="cas_double", agent_name="analyst",
-            message="test", run_at=datetime.now(timezone.utc),
+            task_name="cas_double",
+            agent_name="analyst",
+            message="test",
+            run_at=datetime.now(timezone.utc),
             status="pending",
         )
         r1 = _update_task_status(str(task.id), "running")
@@ -558,4 +598,6 @@ class TestRunAtParsingTimezone(TestCase):
         # 北京 09:00 == UTC 01:00；修复前这里会是 UTC 09:00
         self.assertEqual(result.astimezone(timezone.utc).hour, 1)
         # 且必须落在「明天」（按业务时区算）
-        self.assertEqual(result.date(), datetime.now(result.tzinfo).date() + timedelta(days=1))
+        self.assertEqual(
+            result.date(), datetime.now(result.tzinfo).date() + timedelta(days=1)
+        )

@@ -5,70 +5,266 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('exchange', '0004_exchangeaccount_user'),
-        ('regime', '0009_haltdeclaration_regimemechanismswitch_kind_and_more'),
+        ("exchange", "0004_exchangeaccount_user"),
+        ("regime", "0009_haltdeclaration_regimemechanismswitch_kind_and_more"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='RegimeReducePause',
+            name="RegimeReducePause",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('symbol', models.CharField(max_length=32, verbose_name='品种（交易所口径）')),
-                ('reason', models.TextField(verbose_name='暂停原因（必填）')),
-                ('evidence', models.JSONField(blank=True, default=dict, verbose_name='触发证据')),
-                ('opened_at', models.DateTimeField(db_index=True, verbose_name='暂停起始（UTC）')),
-                ('closed_at', models.DateTimeField(blank=True, db_index=True, null=True, verbose_name='解除时刻（UTC，空=生效中）')),
-                ('closed_reason', models.CharField(blank=True, default='', max_length=64, verbose_name='解除原因')),
-                ('actor_kind', models.CharField(choices=[('cli', '命令行'), ('task', '定时任务'), ('chat', '聊天渠道')], max_length=16, verbose_name='触发方类别')),
-                ('actor_name', models.CharField(max_length=128, verbose_name='触发方')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
-                ('exchange_account', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='reduce_pauses', to='exchange.exchangeaccount', verbose_name='交易所账户')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "symbol",
+                    models.CharField(max_length=32, verbose_name="品种（交易所口径）"),
+                ),
+                ("reason", models.TextField(verbose_name="暂停原因（必填）")),
+                (
+                    "evidence",
+                    models.JSONField(blank=True, default=dict, verbose_name="触发证据"),
+                ),
+                (
+                    "opened_at",
+                    models.DateTimeField(db_index=True, verbose_name="暂停起始（UTC）"),
+                ),
+                (
+                    "closed_at",
+                    models.DateTimeField(
+                        blank=True,
+                        db_index=True,
+                        null=True,
+                        verbose_name="解除时刻（UTC，空=生效中）",
+                    ),
+                ),
+                (
+                    "closed_reason",
+                    models.CharField(
+                        blank=True, default="", max_length=64, verbose_name="解除原因"
+                    ),
+                ),
+                (
+                    "actor_kind",
+                    models.CharField(
+                        choices=[
+                            ("cli", "命令行"),
+                            ("task", "定时任务"),
+                            ("chat", "聊天渠道"),
+                        ],
+                        max_length=16,
+                        verbose_name="触发方类别",
+                    ),
+                ),
+                ("actor_name", models.CharField(max_length=128, verbose_name="触发方")),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
+                (
+                    "exchange_account",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="reduce_pauses",
+                        to="exchange.exchangeaccount",
+                        verbose_name="交易所账户",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': '自动减仓暂停',
-                'verbose_name_plural': '自动减仓暂停',
-                'db_table': 'regime_reduce_pauses',
-                'ordering': ['-opened_at', '-id'],
+                "verbose_name": "自动减仓暂停",
+                "verbose_name_plural": "自动减仓暂停",
+                "db_table": "regime_reduce_pauses",
+                "ordering": ["-opened_at", "-id"],
             },
         ),
         migrations.CreateModel(
-            name='RegimeReduceRecord',
+            name="RegimeReduceRecord",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('symbol', models.CharField(max_length=32, verbose_name='品种（交易所口径，如 DOGEUSDT）')),
-                ('business_day', models.DateField(db_index=True, verbose_name='业务日（业务时区的自然日）')),
-                ('ordinal', models.PositiveIntegerField(verbose_name='本日第 N 次熔断（事件计数）')),
-                ('status', models.CharField(choices=[('claimed', '已认领（进行中）'), ('succeeded', '已减仓'), ('partial', '部分减仓'), ('failed', '减仓失败（确定未成交）'), ('unsettled', '未得出结论（可能仍有活单）')], db_index=True, default='claimed', max_length=16, verbose_name='收场')),
-                ('baseline_qty', models.DecimalField(blank=True, decimal_places=8, max_digits=20, null=True, verbose_name='基准持仓（当日首行冻结）')),
-                ('planned_qty', models.DecimalField(blank=True, decimal_places=8, max_digits=20, null=True, verbose_name='计划减仓数量')),
-                ('qty_before', models.DecimalField(blank=True, decimal_places=8, max_digits=20, null=True, verbose_name='减仓前持仓')),
-                ('qty_after', models.DecimalField(blank=True, decimal_places=8, max_digits=20, null=True, verbose_name='减仓后持仓（交易所侧重读）')),
-                ('sub_orders', models.JSONField(blank=True, default=list, verbose_name='子单下场（逐张）')),
-                ('cancel_report', models.JSONField(blank=True, default=dict, verbose_name='撤单报告')),
-                ('slippage_pct', models.DecimalField(blank=True, decimal_places=8, max_digits=20, null=True, verbose_name='滑点（正=不利）')),
-                ('slippage_basis', models.CharField(blank=True, choices=[('mid', '以动作发起时刻中间价为基准'), ('no_fill', '本次无成交，无从计算'), ('unavailable', '基准价取不到，本次不判定滑点')], default='', max_length=16, verbose_name='滑点的来路')),
-                ('reason', models.TextField(blank=True, default='', verbose_name='给人看的一句话')),
-                ('claimed_at', models.DateTimeField(auto_now_add=True, verbose_name='认领时刻（UTC）')),
-                ('finished_at', models.DateTimeField(blank=True, db_index=True, null=True, verbose_name='完成时刻（UTC）')),
-                ('event', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='reduce_records', to='regime.majorevent', verbose_name='触发本次减仓的事件')),
-                ('exchange_account', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='reduce_records', to='exchange.exchangeaccount', verbose_name='交易所账户')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "symbol",
+                    models.CharField(
+                        max_length=32, verbose_name="品种（交易所口径，如 DOGEUSDT）"
+                    ),
+                ),
+                (
+                    "business_day",
+                    models.DateField(
+                        db_index=True, verbose_name="业务日（业务时区的自然日）"
+                    ),
+                ),
+                (
+                    "ordinal",
+                    models.PositiveIntegerField(
+                        verbose_name="本日第 N 次熔断（事件计数）"
+                    ),
+                ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("claimed", "已认领（进行中）"),
+                            ("succeeded", "已减仓"),
+                            ("partial", "部分减仓"),
+                            ("failed", "减仓失败（确定未成交）"),
+                            ("unsettled", "未得出结论（可能仍有活单）"),
+                        ],
+                        db_index=True,
+                        default="claimed",
+                        max_length=16,
+                        verbose_name="收场",
+                    ),
+                ),
+                (
+                    "baseline_qty",
+                    models.DecimalField(
+                        blank=True,
+                        decimal_places=8,
+                        max_digits=20,
+                        null=True,
+                        verbose_name="基准持仓（当日首行冻结）",
+                    ),
+                ),
+                (
+                    "planned_qty",
+                    models.DecimalField(
+                        blank=True,
+                        decimal_places=8,
+                        max_digits=20,
+                        null=True,
+                        verbose_name="计划减仓数量",
+                    ),
+                ),
+                (
+                    "qty_before",
+                    models.DecimalField(
+                        blank=True,
+                        decimal_places=8,
+                        max_digits=20,
+                        null=True,
+                        verbose_name="减仓前持仓",
+                    ),
+                ),
+                (
+                    "qty_after",
+                    models.DecimalField(
+                        blank=True,
+                        decimal_places=8,
+                        max_digits=20,
+                        null=True,
+                        verbose_name="减仓后持仓（交易所侧重读）",
+                    ),
+                ),
+                (
+                    "sub_orders",
+                    models.JSONField(
+                        blank=True, default=list, verbose_name="子单下场（逐张）"
+                    ),
+                ),
+                (
+                    "cancel_report",
+                    models.JSONField(blank=True, default=dict, verbose_name="撤单报告"),
+                ),
+                (
+                    "slippage_pct",
+                    models.DecimalField(
+                        blank=True,
+                        decimal_places=8,
+                        max_digits=20,
+                        null=True,
+                        verbose_name="滑点（正=不利）",
+                    ),
+                ),
+                (
+                    "slippage_basis",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("mid", "以动作发起时刻中间价为基准"),
+                            ("no_fill", "本次无成交，无从计算"),
+                            ("unavailable", "基准价取不到，本次不判定滑点"),
+                        ],
+                        default="",
+                        max_length=16,
+                        verbose_name="滑点的来路",
+                    ),
+                ),
+                (
+                    "reason",
+                    models.TextField(
+                        blank=True, default="", verbose_name="给人看的一句话"
+                    ),
+                ),
+                (
+                    "claimed_at",
+                    models.DateTimeField(
+                        auto_now_add=True, verbose_name="认领时刻（UTC）"
+                    ),
+                ),
+                (
+                    "finished_at",
+                    models.DateTimeField(
+                        blank=True,
+                        db_index=True,
+                        null=True,
+                        verbose_name="完成时刻（UTC）",
+                    ),
+                ),
+                (
+                    "event",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="reduce_records",
+                        to="regime.majorevent",
+                        verbose_name="触发本次减仓的事件",
+                    ),
+                ),
+                (
+                    "exchange_account",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="reduce_records",
+                        to="exchange.exchangeaccount",
+                        verbose_name="交易所账户",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': '减仓记录',
-                'verbose_name_plural': '减仓记录',
-                'db_table': 'regime_reduce_records',
-                'ordering': ['-claimed_at', '-id'],
+                "verbose_name": "减仓记录",
+                "verbose_name_plural": "减仓记录",
+                "db_table": "regime_reduce_records",
+                "ordering": ["-claimed_at", "-id"],
             },
         ),
         migrations.AddConstraint(
-            model_name='regimereducepause',
-            constraint=models.UniqueConstraint(condition=models.Q(('closed_at__isnull', True)), fields=('exchange_account', 'symbol'), name='uniq_live_reduce_pause'),
+            model_name="regimereducepause",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(("closed_at__isnull", True)),
+                fields=("exchange_account", "symbol"),
+                name="uniq_live_reduce_pause",
+            ),
         ),
         migrations.AddConstraint(
-            model_name='regimereducerecord',
-            constraint=models.UniqueConstraint(fields=('exchange_account', 'event', 'symbol'), name='uniq_regime_reduce_record'),
+            model_name="regimereducerecord",
+            constraint=models.UniqueConstraint(
+                fields=("exchange_account", "event", "symbol"),
+                name="uniq_regime_reduce_record",
+            ),
         ),
     ]

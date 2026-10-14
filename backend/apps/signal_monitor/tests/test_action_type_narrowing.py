@@ -58,7 +58,9 @@ def _authed_client(user):
 
 
 def _backtest(user):
-    strategy = Strategy.objects.create(name=f"bt-{uuid.uuid4().hex[:8]}", code_path="strategies/s.py")
+    strategy = Strategy.objects.create(
+        name=f"bt-{uuid.uuid4().hex[:8]}", code_path="strategies/s.py"
+    )
     return BacktestResult.objects.create(
         strategy=strategy,
         user=user,
@@ -75,12 +77,16 @@ def _backtest(user):
 
 @pytest.mark.django_db
 class TestCreateAndUpdateEntryPoints:
-    @pytest.mark.parametrize("bad", ["trade", "notify_and_trade", "validate_strategy", "garbage"])
+    @pytest.mark.parametrize(
+        "bad", ["trade", "notify_and_trade", "validate_strategy", "garbage"]
+    )
     def test_create_rejects_non_notify(self, bad):
         """入口①：创建序列化器。`validate_strategy` 由 live_mode 内部写入，不由用户创建"""
         client = _authed_client(_user(f"create-{bad}"))
 
-        resp = client.post(CREATE_URL, {**VALID_SIGNAL, "action_type": bad}, format="json")
+        resp = client.post(
+            CREATE_URL, {**VALID_SIGNAL, "action_type": bad}, format="json"
+        )
 
         assert resp.status_code == 400, resp.content
         assert not SignalMonitor.objects.exists()
@@ -97,10 +103,14 @@ class TestCreateAndUpdateEntryPoints:
         """入口②：更新序列化器——不堵这里，`patch` 会把既有 notify 型改成 trade"""
         user = _user("update-owner")
         client = _authed_client(user)
-        monitor = SignalMonitor.objects.create(user=user, action_type="notify", **VALID_SIGNAL)
+        monitor = SignalMonitor.objects.create(
+            user=user, action_type="notify", **VALID_SIGNAL
+        )
 
         resp = client.patch(
-            f"/api/signal-monitor/{monitor.id}/", {"action_type": "trade"}, format="json"
+            f"/api/signal-monitor/{monitor.id}/",
+            {"action_type": "trade"},
+            format="json",
         )
 
         assert resp.status_code == 400, resp.content
@@ -112,7 +122,9 @@ class TestCreateAndUpdateEntryPoints:
 class TestImportEntryPoint:
     """入口③：按请求体自由 JSON 取值，不经 ChoiceField —— 最宽的一条缝。"""
 
-    @pytest.mark.parametrize("bad", ["trade", "notify_and_trade", "validate_strategy", "garbage"])
+    @pytest.mark.parametrize(
+        "bad", ["trade", "notify_and_trade", "validate_strategy", "garbage"]
+    )
     def test_import_rejects_non_notify(self, bad):
         user = _user(f"import-{bad}")
         client = _authed_client(user)

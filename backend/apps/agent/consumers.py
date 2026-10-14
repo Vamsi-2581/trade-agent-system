@@ -57,9 +57,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         logger.info("[ChatWS] User %s connected", self.user_id)
 
         # 加入 user_{user_id} group — 接收 Celery 任务完成通知（_route_notification 推送）
-        await self.channel_layer.group_add(
-            f"user_{self.user_id}", self.channel_name
-        )
+        await self.channel_layer.group_add(f"user_{self.user_id}", self.channel_name)
 
         await self.send(text_data=json.dumps({"type": "status", "status": "connected"}))
 
@@ -91,10 +89,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         event = {"type": "task_notification", "text": "..."}
         前端识别 {"type": "task_notification", "data": "..."}（后续 PR 加 UI 渲染）。
         """
-        await self._safe_send({
-            "type": "task_notification",
-            "data": event["text"],
-        })
+        await self._safe_send(
+            {
+                "type": "task_notification",
+                "data": event["text"],
+            }
+        )
 
     # Strong references keep workflows alive across socket disconnects.
     # Process restarts still interrupt these tasks; this is not a durable job queue.
@@ -146,7 +146,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if message_type == "chat":
                 active = getattr(self, "_chat_task", None)
                 if active is not None and not active.done():
-                    await self._safe_send({"type": "error", "error": "当前连接仍有任务处理中"})
+                    await self._safe_send(
+                        {"type": "error", "error": "当前连接仍有任务处理中"}
+                    )
                     return
                 self._chat_task = asyncio.create_task(self._handle_chat(data))
                 self._running_chats.add(self._chat_task)
@@ -169,6 +171,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Terminal replies target current user connections, not the originating socket."""
         if message.get("type") in {"chat_response", "task_submitted"}:
             from apps.agent.reply_fanout import push_web_payload
+
             await push_web_payload(self.user_id, message)
             return True  # queued, not a browser acknowledgement
         try:
@@ -191,11 +194,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
         async def on_tool_result(tool_name, result_text):
             """工具执行进度回调 — 实时推送给前端，断线直接丢弃。"""
             try:
-                await self.send(text_data=json.dumps({
-                    "type": "tool_progress",
-                    "tool": tool_name,
-                    "result": result_text[:2000],
-                }, ensure_ascii=False))
+                await self.send(
+                    text_data=json.dumps(
+                        {
+                            "type": "tool_progress",
+                            "tool": tool_name,
+                            "result": result_text[:2000],
+                        },
+                        ensure_ascii=False,
+                    )
+                )
             except Exception:
                 pass
 
@@ -217,11 +225,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 and result.data.get("task_id")
                 and result.success
             ):
-                await self._safe_send({
-                    "type": "task_submitted",
-                    "task_id": result.data["task_id"],
-                    "status": "success",
-                })
+                await self._safe_send(
+                    {
+                        "type": "task_submitted",
+                        "task_id": result.data["task_id"],
+                        "status": "success",
+                    }
+                )
 
             if result.success:
                 if isinstance(result.data, dict):
@@ -232,12 +242,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         content = json.dumps(result.data, ensure_ascii=False)
                 else:
                     content = result.data
-                await self._safe_send({
-                    "type": "chat_response",
-                    "data": content,
-                    "task_id": result.task_id,
-                    "status": "done",
-                })
+                await self._safe_send(
+                    {
+                        "type": "chat_response",
+                        "data": content,
+                        "task_id": result.task_id,
+                        "status": "done",
+                    }
+                )
 
                 # 多通道扇出：web 已由 chat_response 送达，这里把回复同时推送到
                 # 主通道（MAIN_CHANNEL，默认飞书）。例如回测后「已安排 5 分钟后
@@ -257,19 +269,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         exc_info=True,
                     )
             else:
-                await self._safe_send({
-                    "type": "chat_response",
-                    "error": result.error or "处理请求时发生错误，请稍后重试",
-                    "task_id": result.task_id,
-                    "status": "error",
-                })
+                await self._safe_send(
+                    {
+                        "type": "chat_response",
+                        "error": result.error or "处理请求时发生错误，请稍后重试",
+                        "task_id": result.task_id,
+                        "status": "error",
+                    }
+                )
 
         except Exception as e:
             logger.error(
                 "[ChatWS] Supervisor handle error: %s\n%s", e, traceback.format_exc()
             )
-            await self._safe_send({
-                "type": "chat_response",
-                "error": str(e),
-                "status": "error",
-            })
+            await self._safe_send(
+                {
+                    "type": "chat_response",
+                    "error": str(e),
+                    "status": "error",
+                }
+            )

@@ -83,9 +83,7 @@ def _load_active_accounts() -> list:
     """全部 ``is_active`` 账户。**不过滤 user**，与 ``list_exchange_accounts`` 同一约定。"""
     from apps.exchange.models import ExchangeAccount
 
-    return list(
-        ExchangeAccount.objects.filter(is_active=True).order_by("-created_at")
-    )
+    return list(ExchangeAccount.objects.filter(is_active=True).order_by("-created_at"))
 
 
 def _account_title(account) -> str:
@@ -295,7 +293,9 @@ class ListPositionsTool(BaseTool):
 
         lines, unavailable = await self._collect(selected)
         head = f"共 {len(selected)} 个活跃账户" + (
-            f"，其中 {unavailable} 个取不到持仓（**不等于空仓**）" if unavailable else ""
+            f"，其中 {unavailable} 个取不到持仓（**不等于空仓**）"
+            if unavailable
+            else ""
         )
         return ToolResult(success=True, data="\n".join([head + "：", *lines]))
 
@@ -349,7 +349,9 @@ def _confirmed(raw) -> bool:
     return False
 
 
-def _match_symbol(positions: dict, symbol: str) -> tuple[str, tuple[str, Decimal]] | None:
+def _match_symbol(
+    positions: dict, symbol: str
+) -> tuple[str, tuple[str, Decimal]] | None:
     """把用户说的品种对上账户里的真实持仓。
 
     先按 ``reduce.normalize_symbol`` 精确匹配（``BNB/USDT`` / ``BNBUSDT`` 都能命中），
@@ -538,7 +540,9 @@ class ReducePositionTool(BaseTool):
             matched = _match_symbol(positions, symbol)
             if matched is None:
                 held = (
-                    "、".join(sorted(positions)) if positions else "（该账户当前没有持仓）"
+                    "、".join(sorted(positions))
+                    if positions
+                    else "（该账户当前没有持仓）"
                 )
                 return ToolResult(
                     success=False,

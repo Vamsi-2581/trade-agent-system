@@ -80,7 +80,9 @@ class TestOrderFailureNotification(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("下单失败", message, "不得用'失败'诱导用户重下")
         self.assertIn("请先到交易所核对", message)
         for fragment in ("DOGE/USDT", "buy", "13119.21815906", "ConnectTimeout"):
-            self.assertIn(fragment, message, "未知单同样要带上订单要素，否则无法人工核对")
+            self.assertIn(
+                fragment, message, "未知单同样要带上订单要素，否则无法人工核对"
+            )
 
     async def test_determined_failure_keeps_the_failure_wording(self):
         """默认（确定失败）措辞不变，不得误报成"结果未知"。"""
@@ -103,9 +105,10 @@ class TestOrderFailureNotification(unittest.IsolatedAsyncioTestCase):
         """
         guard = RiskGuard("trading")
         self._patch_cb()
-        with patch("apps.trading.alerts._persist", new=AsyncMock()) as persist, patch(
-            "apps.trading.alerts._publish", new=AsyncMock()
-        ) as publish:
+        with (
+            patch("apps.trading.alerts._persist", new=AsyncMock()) as persist,
+            patch("apps.trading.alerts._publish", new=AsyncMock()) as publish,
+        ):
             await guard.record_order_failure("user-1", **FAILURE)
 
         persist.assert_awaited_once()

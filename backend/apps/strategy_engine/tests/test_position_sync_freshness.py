@@ -177,7 +177,12 @@ def _make_runner(position: str, adapter: _FakeAdapter):
     ctx = _Ctx(position=position)
     strategy = _FakeStrategy(ctx)
     runner = LiveStrategyRunner(
-        strategy, "DOGE/USDT", "1h", "acct-1", user_id="user-1", live_session_id="sess-1"
+        strategy,
+        "DOGE/USDT",
+        "1h",
+        "acct-1",
+        user_id="user-1",
+        live_session_id="sess-1",
     )
     runner._test_dispatched = []  # type: ignore[attr-defined]
 
@@ -213,7 +218,9 @@ class TestDecisionTimePositionSync(TestCase):
             runner, strategy, ctx = _make_runner("17718", adapter)
             asyncio.run(runner._process_kline(dict(KLINE)))
 
-        self.assertEqual(ctx.position, Decimal("0"), "决策前必须把 ctx 刷新为交易所真实值")
+        self.assertEqual(
+            ctx.position, Decimal("0"), "决策前必须把 ctx 刷新为交易所真实值"
+        )
         self.assertEqual(adapter.calls, 1)
         self.assertEqual(runner._test_dispatched, [], "刷新后为空仓，不应再产生平仓单")
         self.assertEqual(strategy.bar_calls, 1)
@@ -223,11 +230,15 @@ class TestDecisionTimePositionSync(TestCase):
         adapter = _FakeAdapter(error=RuntimeError("positions API down"))
         with _patch_executor(adapter):
             runner, strategy, ctx = _make_runner("17718", adapter)
-            with self.assertLogs("apps.strategy_engine.live_mode", level="ERROR") as logs:
+            with self.assertLogs(
+                "apps.strategy_engine.live_mode", level="ERROR"
+            ) as logs:
                 asyncio.run(runner._process_kline(dict(KLINE)))
 
         self.assertEqual(runner._test_dispatched, [], "持仓未知时绝不允许下单")
-        self.assertEqual(ctx.position, Decimal("17718"), "失败时不得篡改 ctx（不能假装空仓）")
+        self.assertEqual(
+            ctx.position, Decimal("17718"), "失败时不得篡改 ctx（不能假装空仓）"
+        )
         self.assertEqual(strategy.bar_calls, 0, "同步失败时不应进入策略决策")
         self.assertTrue(
             any("持仓同步失败" in m or "position sync" in m for m in logs.output),
@@ -245,10 +256,14 @@ class TestDecisionTimePositionSync(TestCase):
             # 交易所恢复：真实持有多头 1000；下一根 bar 到来 → 强制刷新
             adapter._error = None
             adapter._positions = [
-                SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("1000"))
+                SimpleNamespace(
+                    symbol="DOGEUSDT", side="long", quantity=Decimal("1000")
+                )
             ]
             asyncio.run(
-                runner._process_kline(dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000))
+                runner._process_kline(
+                    dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000)
+                )
             )
 
         self.assertEqual(len(runner._test_dispatched), 1, "恢复后应能正常下单")
@@ -262,7 +277,11 @@ class TestDecisionTimePositionSync(TestCase):
     def test_short_position_synced_as_negative(self):
         """空头同步为负值（不取绝对值），避免被误当成多头去平仓。"""
         adapter = _FakeAdapter(
-            positions=[SimpleNamespace(symbol="DOGEUSDT", side="short", quantity=Decimal("4599"))]
+            positions=[
+                SimpleNamespace(
+                    symbol="DOGEUSDT", side="short", quantity=Decimal("4599")
+                )
+            ]
         )
         with _patch_executor(adapter):
             runner, strategy, ctx = _make_runner("17718", adapter)
@@ -273,13 +292,17 @@ class TestDecisionTimePositionSync(TestCase):
     def test_new_bar_forces_refresh(self):
         """新 K 线到来 → 强制同步（每根 bar 至少一次真值）。"""
         adapter = _FakeAdapter(
-            positions=[SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))]
+            positions=[
+                SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))
+            ]
         )
         with _patch_executor(adapter):
             runner, _, _ = _make_runner("100", adapter)
             asyncio.run(runner._process_kline(dict(KLINE)))
             asyncio.run(
-                runner._process_kline(dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000))
+                runner._process_kline(
+                    dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000)
+                )
             )
 
         self.assertEqual(adapter.calls, 2)
@@ -287,7 +310,9 @@ class TestDecisionTimePositionSync(TestCase):
     def test_intra_bar_ticks_are_throttled(self):
         """同一根 bar 的多次 tick 推送（约 1~2 秒一次）不得每次都打交易所 API。"""
         adapter = _FakeAdapter(
-            positions=[SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))]
+            positions=[
+                SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))
+            ]
         )
         with _patch_executor(adapter):
             runner, strategy, _ = _make_runner("100", adapter)
@@ -320,11 +345,15 @@ class TestDecisionTimePositionSync(TestCase):
     def test_validate_trigger_syncs_with_min_interval(self):
         """验证事件路径：TTL 内不重复请求，TTL 外重新同步。"""
         adapter = _FakeAdapter(
-            positions=[SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))]
+            positions=[
+                SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))
+            ]
         )
         with _patch_executor(adapter):
             runner, _, _ = _make_runner("100", adapter)
-            runner._kline_history = [dict(KLINE, timestamp=1789000000000 + i) for i in range(15)]
+            runner._kline_history = [
+                dict(KLINE, timestamp=1789000000000 + i) for i in range(15)
+            ]
 
             runner._position_synced = True  # 已成功同步过
             runner._last_position_sync_ts = time.monotonic()
@@ -346,7 +375,9 @@ class TestDecisionTimePositionSync(TestCase):
         adapter = _FakeAdapter(error=RuntimeError("down"))
         with _patch_executor(adapter):
             runner, strategy, _ = _make_runner("17718", adapter)
-            runner._kline_history = [dict(KLINE, timestamp=1789000000000 + i) for i in range(15)]
+            runner._kline_history = [
+                dict(KLINE, timestamp=1789000000000 + i) for i in range(15)
+            ]
             asyncio.run(runner._on_validate_trigger({"symbol": "DOGE/USDT"}))
 
         self.assertEqual(runner._test_dispatched, [])
@@ -358,7 +389,10 @@ class TestPositionSyncFailureNotification(TestCase):
 
     def _run_failed_bars(self, runner, adapter, times: int) -> MagicMock:
         notify_cls = MagicMock()
-        with _patch_executor(adapter), patch("apps.notify.models.Notification", notify_cls):
+        with (
+            _patch_executor(adapter),
+            patch("apps.notify.models.Notification", notify_cls),
+        ):
             for _ in range(times):
                 asyncio.run(runner._process_kline(dict(KLINE)))
         return notify_cls
@@ -396,9 +430,14 @@ class TestPositionSyncFailureNotification(TestCase):
         adapter._positions = [
             SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))
         ]
-        with _patch_executor(adapter), patch("apps.notify.models.Notification", MagicMock()):
+        with (
+            _patch_executor(adapter),
+            patch("apps.notify.models.Notification", MagicMock()),
+        ):
             asyncio.run(
-                runner._process_kline(dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000))
+                runner._process_kline(
+                    dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000)
+                )
             )
 
         # 再失败
@@ -413,7 +452,10 @@ class TestPositionSyncFailureNotification(TestCase):
         adapter = _FakeAdapter(error=RuntimeError("down"))
         runner, _, _ = _make_runner("17718", adapter)
         notify_cls = MagicMock()
-        with _patch_executor(adapter), patch("apps.notify.models.Notification", notify_cls):
+        with (
+            _patch_executor(adapter),
+            patch("apps.notify.models.Notification", notify_cls),
+        ):
             asyncio.run(runner._process_kline(dict(KLINE)))  # 失败 → 一条通知
 
             adapter._error = None
@@ -421,10 +463,14 @@ class TestPositionSyncFailureNotification(TestCase):
                 SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))
             ]
             asyncio.run(
-                runner._process_kline(dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000))
+                runner._process_kline(
+                    dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000)
+                )
             )  # 恢复 → 一条通知
             asyncio.run(
-                runner._process_kline(dict(KLINE, timestamp=KLINE["timestamp"] + 7_200_000))
+                runner._process_kline(
+                    dict(KLINE, timestamp=KLINE["timestamp"] + 7_200_000)
+                )
             )  # 正常 bar → 不通知
 
         calls = notify_cls.objects.create.call_args_list
@@ -438,7 +484,10 @@ class TestPositionSyncFailureNotification(TestCase):
         runner, _, _ = _make_runner("17718", adapter)
         runner.user_id = None
         notify_cls = MagicMock()
-        with _patch_executor(adapter), patch("apps.notify.models.Notification", notify_cls):
+        with (
+            _patch_executor(adapter),
+            patch("apps.notify.models.Notification", notify_cls),
+        ):
             asyncio.run(runner._process_kline(dict(KLINE)))  # 失败：不通知
 
             adapter._error = None
@@ -446,7 +495,9 @@ class TestPositionSyncFailureNotification(TestCase):
                 SimpleNamespace(symbol="DOGEUSDT", side="long", quantity=Decimal("100"))
             ]
             asyncio.run(
-                runner._process_kline(dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000))
+                runner._process_kline(
+                    dict(KLINE, timestamp=KLINE["timestamp"] + 3_600_000)
+                )
             )  # 恢复：仍不通知
 
         self.assertEqual(len(notify_cls.objects.create.call_args_list), 0)
@@ -484,8 +535,9 @@ class TestDispatchRefreshesSyncWatermark(TestCase):
             ]
         )
         clock = _FakeClock()
-        with _patch_executor(adapter), patch(
-            "apps.strategy_engine.live_mode.time.monotonic", clock
+        with (
+            _patch_executor(adapter),
+            patch("apps.strategy_engine.live_mode.time.monotonic", clock),
         ):
             runner, _, ctx = _make_runner("100", adapter)
             runner._last_bar_ts = KLINE["timestamp"]  # 不当新 bar：测 TTL 路径
@@ -521,8 +573,9 @@ class TestDispatchRefreshesSyncWatermark(TestCase):
             ]
         )
         clock = _FakeClock()
-        with _patch_executor(adapter), patch(
-            "apps.strategy_engine.live_mode.time.monotonic", clock
+        with (
+            _patch_executor(adapter),
+            patch("apps.strategy_engine.live_mode.time.monotonic", clock),
         ):
             runner, _, ctx = _make_runner("100", adapter)
             runner._last_bar_ts = KLINE["timestamp"]
@@ -557,7 +610,12 @@ class TestTargetToOrderCloseFlag(TestCase):
         ctx = _Ctx(position=position)
         strategy = _FakeStrategy(ctx)
         return LiveStrategyRunner(
-            strategy, "DOGE/USDT", "1h", "acct-1", user_id="user-1", live_session_id="sess-1"
+            strategy,
+            "DOGE/USDT",
+            "1h",
+            "acct-1",
+            user_id="user-1",
+            live_session_id="sess-1",
         )
 
     def test_sell_to_flat_is_marked_close(self):
@@ -583,4 +641,6 @@ class TestTargetToOrderCloseFlag(TestCase):
 
     def test_no_order_when_already_at_target(self):
         runner = self._bare_runner("0")
-        self.assertIsNone(runner._target_to_order(_Target(target_quantity=Decimal("0"))))
+        self.assertIsNone(
+            runner._target_to_order(_Target(target_quantity=Decimal("0")))
+        )

@@ -187,7 +187,11 @@ class TestFanOutReply:
             lambda u: None,
         )
 
-        _run(fan_out_reply("ou_lark_session", "已安排 5 分钟后自动查询结果", origin="lark"))
+        _run(
+            fan_out_reply(
+                "ou_lark_session", "已安排 5 分钟后自动查询结果", origin="lark"
+            )
+        )
 
         # web 推送执行（open_id → UUID 解析后进 group + 原始 id 兜底）
         mock_layer.group_send.assert_any_call(

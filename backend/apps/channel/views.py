@@ -53,10 +53,12 @@ def feishu_auth_url(request):
     scope = getattr(settings, "LARK_OAUTH_SCOPES", "")
     auth_url = client.build_authorize_url(state, scope=scope)
 
-    return Response({
-        "session_id": str(session.id),
-        "authorize_url": auth_url,
-    })
+    return Response(
+        {
+            "session_id": str(session.id),
+            "authorize_url": auth_url,
+        }
+    )
 
 
 @api_view(["GET"])
@@ -80,11 +82,13 @@ def feishu_auth_qr(request):
     session.qr_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
     session.save(update_fields=["qr_url", "qr_expires_at", "updated_at"])
 
-    return Response({
-        "session_id": str(session.id),
-        "qr_url": auth_url,
-        "expires_in": 600,
-    })
+    return Response(
+        {
+            "session_id": str(session.id),
+            "qr_url": auth_url,
+            "expires_in": 600,
+        }
+    )
 
 
 @api_view(["GET"])
@@ -96,12 +100,16 @@ def feishu_auth_qr_status(request, session_id: str):
             id=uuid.UUID(session_id), user=request.user
         )
     except (FeishuAuthSession.DoesNotExist, ValueError):
-        return Response({"error": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"error": "Session not found"}, status=status.HTTP_404_NOT_FOUND
+        )
 
-    return Response({
-        "session_id": str(session.id),
-        "status": session.status,
-    })
+    return Response(
+        {
+            "session_id": str(session.id),
+            "status": session.status,
+        }
+    )
 
 
 @api_view(["GET"])
@@ -154,8 +162,13 @@ def feishu_oauth_callback(request):
     if not refresh_token:
         session.status = "failed"
         session.save(update_fields=["status", "updated_at"])
-        logger.error("[FeishuOAuth] empty refresh_token in exchange response for user %s", session.user.username)
-        return JsonResponse({"error": "OAuth response missing refresh_token"}, status=400)
+        logger.error(
+            "[FeishuOAuth] empty refresh_token in exchange response for user %s",
+            session.user.username,
+        )
+        return JsonResponse(
+            {"error": "OAuth response missing refresh_token"}, status=400
+        )
     expires_in = token_data.get("expires_in", 7200)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
@@ -193,7 +206,9 @@ def feishu_refresh_token(request):
             user=request.user, is_active=True
         )
     except FeishuUserToken.DoesNotExist:
-        return Response({"error": "No active token found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"error": "No active token found"}, status=status.HTTP_404_NOT_FOUND
+        )
 
     try:
         client = _get_oauth_client()
@@ -209,7 +224,14 @@ def feishu_refresh_token(request):
     token.access_token_enc = token.encrypt_access_token(token_data["access_token"])
     token.refresh_token_enc = token.encrypt_refresh_token(token_data["refresh_token"])
     token.expires_at = expires_at
-    token.save(update_fields=["access_token_enc", "refresh_token_enc", "expires_at", "updated_at"])
+    token.save(
+        update_fields=[
+            "access_token_enc",
+            "refresh_token_enc",
+            "expires_at",
+            "updated_at",
+        ]
+    )
 
     return Response({"status": "ok", "expires_at": expires_at.isoformat()})
 
@@ -218,31 +240,33 @@ def feishu_refresh_token(request):
 @permission_classes([IsAuthenticated])
 def feishu_auth_status(request):
     """检查用户是否有活跃的飞书授权。"""
-    token = FeishuUserToken.objects.filter(
-        user=request.user, is_active=True
-    ).first()
+    token = FeishuUserToken.objects.filter(user=request.user, is_active=True).first()
 
     if not token:
         return Response({"authorized": False})
 
-    return Response({
-        "authorized": True,
-        "open_id": token.open_id,
-        "expires_at": token.expires_at.isoformat(),
-        "created_at": token.created_at.isoformat(),
-    })
+    return Response(
+        {
+            "authorized": True,
+            "open_id": token.open_id,
+            "expires_at": token.expires_at.isoformat(),
+            "created_at": token.created_at.isoformat(),
+        }
+    )
 
 
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated])
 def feishu_revoke(request):
     """撤销用户飞书授权。"""
-    count, _ = FeishuUserToken.objects.filter(
-        user=request.user, is_active=True
-    ).update(is_active=False)
+    count, _ = FeishuUserToken.objects.filter(user=request.user, is_active=True).update(
+        is_active=False
+    )
 
     if count == 0:
-        return Response({"error": "No active token found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"error": "No active token found"}, status=status.HTTP_404_NOT_FOUND
+        )
 
     return Response({"status": "ok", "message": "Authorization revoked"})
 

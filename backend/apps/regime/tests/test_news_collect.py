@@ -72,7 +72,11 @@ def rss_item(
     return "<item>" + "".join(parts) + "</item>"
 
 
-def binance_article(code="7379b99aa0f349a49c3b3feca1b4bbd6", title="Binance Will Delist BTCUSDT Perpetual Contracts", release=ms(NOW - timedelta(hours=3))):
+def binance_article(
+    code="7379b99aa0f349a49c3b3feca1b4bbd6",
+    title="Binance Will Delist BTCUSDT Perpetual Contracts",
+    release=ms(NOW - timedelta(hours=3)),
+):
     """一条公告。默认标题**故意命中关键词**（`delist` / `btc`），默认时刻**故意落在
     窗口内**。
 
@@ -87,7 +91,13 @@ def binance_article(code="7379b99aa0f349a49c3b3feca1b4bbd6", title="Binance Will
       `NOW`（2026-09-22T00:05Z）**之后**——照抄进默认值就等于给每个调用点埋一个
       「这条为什么没进批次」。所以真实字面量放在断言它的那个解析器测试里显式传。
     """
-    return {"id": 285191, "code": code, "title": title, "type": 1, "releaseDate": release}
+    return {
+        "id": 285191,
+        "code": code,
+        "title": title,
+        "type": 1,
+        "releaseDate": release,
+    }
 
 
 def binance_payload(articles, catalogs=None) -> str:
@@ -102,10 +112,20 @@ def binance_payload(articles, catalogs=None) -> str:
                 "catalogs": [],
             }
         ]
-    return json.dumps({"code": "000000", "message": None, "data": {"total": None, "catalogs": catalogs}})
+    return json.dumps(
+        {
+            "code": "000000",
+            "message": None,
+            "data": {"total": None, "catalogs": catalogs},
+        }
+    )
 
 
-def okx_detail(title="OKX will delist KMN/USD perpetual", url="https://www.okx.test/help/list-kmn", ptime=ms(NOW - timedelta(hours=6))):
+def okx_detail(
+    title="OKX will delist KMN/USD perpetual",
+    url="https://www.okx.test/help/list-kmn",
+    ptime=ms(NOW - timedelta(hours=6)),
+):
     """一条公告。默认标题命中关键词（`delist`）、默认时刻落在窗口内，两个理由都见
     `binance_article`。
 
@@ -122,7 +142,9 @@ def okx_detail(title="OKX will delist KMN/USD perpetual", url="https://www.okx.t
 
 
 def okx_payload(details) -> str:
-    return json.dumps({"code": "0", "msg": "", "data": [{"details": details, "totalPage": 3}]})
+    return json.dumps(
+        {"code": "0", "msg": "", "data": [{"details": details, "totalPage": 3}]}
+    )
 
 
 class FakeFetcher:
@@ -133,7 +155,9 @@ class FakeFetcher:
     看起来像功能没做，不像测试替身写错了。
     """
 
-    def __init__(self, routes: dict[str, str | Exception], default_error="未登记的 url"):
+    def __init__(
+        self, routes: dict[str, str | Exception], default_error="未登记的 url"
+    ):
         self._routes = sorted(routes.items(), key=lambda kv: -len(kv[0]))
         self._default_error = default_error
         self.calls: list[tuple[str, float]] = []
@@ -183,7 +207,9 @@ class TestParserRegistryMatchesConfig(SimpleTestCase):
 
     def test_title_cap_matches_the_model_column(self):
         """截断上限取自模型列宽；两处不一致会让超长标题在写库那一刻才炸。"""
-        self.assertEqual(news.TITLE_MAX_CHARS, NewsItem._meta.get_field("title").max_length)
+        self.assertEqual(
+            news.TITLE_MAX_CHARS, NewsItem._meta.get_field("title").max_length
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -193,7 +219,9 @@ class TestParserRegistryMatchesConfig(SimpleTestCase):
 
 class TestRssParsing(SimpleTestCase):
     SOURCE = config.NewsSource(
-        name="media", url="https://media.test/rss", kind=config.NewsSourceKind.CRYPTO_MEDIA
+        name="media",
+        url="https://media.test/rss",
+        kind=config.NewsSourceKind.CRYPTO_MEDIA,
     )
 
     def parse(self, payload):
@@ -205,14 +233,18 @@ class TestRssParsing(SimpleTestCase):
         item = feed.items[0]
         self.assertEqual(item.url, "https://media.test/a")
         self.assertEqual(item.title, "Bitcoin ETF inflows hit a record")
-        self.assertEqual(item.published_at, datetime(2026, 9, 21, 18, 0, tzinfo=timezone.utc))
+        self.assertEqual(
+            item.published_at, datetime(2026, 9, 21, 18, 0, tzinfo=timezone.utc)
+        )
         self.assertEqual(item.body, "Bitcoin ETF inflows hit a record")
 
     def test_an_html_page_instead_of_a_feed_raises(self):
         """顶层不是 RSS/Atom 就抛，而不是返回 0 条：地址换成别的东西时，0 条长得
         跟「今天很平静」一模一样（探测时币安公告页就返回过这种外壳）。"""
         with self.assertRaises(NewsFetchError) as ctx:
-            self.parse("<!DOCTYPE html><html><head><meta charset='utf-8'></head></html>")
+            self.parse(
+                "<!DOCTYPE html><html><head><meta charset='utf-8'></head></html>"
+            )
         self.assertIn("media", str(ctx.exception))
 
     def test_broken_xml_raises(self):
@@ -222,7 +254,9 @@ class TestRssParsing(SimpleTestCase):
     def test_an_item_without_a_link_is_counted_not_silently_dropped(self):
         """链接是去重键，也是日报里给人点的那一下。没有它的条目无法入库，所以计入
         malformed——安静地少一条才是要防的那件事。"""
-        feed = self.parse(rss(rss_item(link=None), rss_item(link="https://media.test/b")))
+        feed = self.parse(
+            rss(rss_item(link=None), rss_item(link="https://media.test/b"))
+        )
         self.assertEqual(feed.malformed, 1)
         self.assertEqual([i.url for i in feed.items], ["https://media.test/b"])
 
@@ -248,7 +282,9 @@ class TestRssParsing(SimpleTestCase):
             '<content:encoded xmlns:content="http://purl.org/rss/1.0/modules/content/">'
             "全文，比引子长得多</content:encoded>"
         )
-        feed = self.parse(rss(f"<item><title>t</title><link>https://media.test/c</link>{body}</item>"))
+        feed = self.parse(
+            rss(f"<item><title>t</title><link>https://media.test/c</link>{body}</item>")
+        )
         self.assertEqual(feed.items[0].body, "全文，比引子长得多")
 
     def test_a_namespaced_media_title_does_not_masquerade_as_the_item_title(self):
@@ -299,13 +335,16 @@ class TestRssParsing(SimpleTestCase):
         )
         feed = self.parse(payload)
         self.assertEqual(feed.items[0].url, "https://macro.test/fed-holds")
-        self.assertEqual(feed.items[0].published_at, datetime(2026, 9, 21, 18, 0, tzinfo=timezone.utc))
+        self.assertEqual(
+            feed.items[0].published_at,
+            datetime(2026, 9, 21, 18, 0, tzinfo=timezone.utc),
+        )
         self.assertEqual(feed.items[0].body, "The Federal Reserve held rates.")
 
     def test_rdf_lists_are_understood(self):
         payload = (
             '<?xml version="1.0"?><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
-            '<item><title>t</title><link>https://media.test/rdf</link>'
+            "<item><title>t</title><link>https://media.test/rdf</link>"
             "<description>d</description></item></rdf:RDF>"
         )
         self.assertEqual(self.parse(payload).items[0].url, "https://media.test/rdf")
@@ -321,7 +360,8 @@ class TestPublishedTimeParsing(SimpleTestCase):
         ):
             with self.subTest(text=text):
                 self.assertEqual(
-                    parse_published(text), datetime(2026, 9, 21, 18, 0, tzinfo=timezone.utc)
+                    parse_published(text),
+                    datetime(2026, 9, 21, 18, 0, tzinfo=timezone.utc),
                 )
 
     def test_rfc3339_with_z_is_understood(self):
@@ -366,7 +406,8 @@ class TestBinanceParsing(SimpleTestCase):
         self.assertEqual(item.title, "Binance Will Delist BTCUSDT Perpetual Contracts")
         # 1790062264920 是探测时抓下来的真实 releaseDate——毫秒，且带着零点九秒的小数。
         self.assertEqual(
-            item.published_at, datetime(2026, 9, 22, 7, 31, 4, 920000, tzinfo=timezone.utc)
+            item.published_at,
+            datetime(2026, 9, 22, 7, 31, 4, 920000, tzinfo=timezone.utc),
         )
         self.assertEqual(item.body, "")
 
@@ -385,21 +426,33 @@ class TestBinanceParsing(SimpleTestCase):
             {
                 "catalogId": 2,
                 "articles": [],
-                "catalogs": [{"catalogId": 3, "articles": [binance_article(code="deep")], "catalogs": []}],
+                "catalogs": [
+                    {
+                        "catalogId": 3,
+                        "articles": [binance_article(code="deep")],
+                        "catalogs": [],
+                    }
+                ],
             },
         ]
         feed = self.parse(binance_payload([], catalogs=catalogs))
-        self.assertEqual([i.url.rpartition("/")[2] for i in feed.items], ["top", "deep"])
+        self.assertEqual(
+            [i.url.rpartition("/")[2] for i in feed.items], ["top", "deep"]
+        )
 
     def test_an_article_missing_code_or_title_is_counted(self):
-        feed = self.parse(binance_payload([binance_article(code=""), binance_article(title="")]))
+        feed = self.parse(
+            binance_payload([binance_article(code=""), binance_article(title="")])
+        )
         self.assertEqual(feed.malformed, 2)
         self.assertEqual(feed.items, ())
 
     def test_a_missing_catalog_list_raises(self):
         """信封变了要抛。`total` 实测在目录上、`data.total` 是 None，所以这里也把
         catalogs 拿掉——返回 None 而不报错，就正好是那个会安静 0 条的形状。"""
-        payload = json.dumps({"code": "000000", "data": {"total": 40, "catalogs": None}})
+        payload = json.dumps(
+            {"code": "000000", "data": {"total": 40, "catalogs": None}}
+        )
         with self.assertRaises(NewsFetchError):
             self.parse(payload)
 
@@ -407,7 +460,9 @@ class TestBinanceParsing(SimpleTestCase):
         """探测实测：走代理请求公告详情页返回 **202 + 2110 字节的通用外壳页**——
         `raise_for_status()` 拦不住它（202 是 2xx），只有信封校验能把它变成失败。"""
         with self.assertRaises(NewsFetchError):
-            self.parse("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head></html>")
+            self.parse(
+                '<!DOCTYPE html><html><head><meta charset="utf-8"></head></html>'
+            )
 
 
 class TestOkxParsing(SimpleTestCase):
@@ -430,7 +485,8 @@ class TestOkxParsing(SimpleTestCase):
         self.assertEqual(item.title, "OKX will delist KMN/USD perpetual")
         self.assertEqual(item.url, "https://www.okx.test/help/list-kmn")
         self.assertEqual(
-            item.published_at, datetime(2026, 9, 22, 4, 45, 7, 266000, tzinfo=timezone.utc)
+            item.published_at,
+            datetime(2026, 9, 22, 4, 45, 7, 266000, tzinfo=timezone.utc),
         )
         self.assertEqual(item.body, "")
 
@@ -463,16 +519,32 @@ class TestRichTextFlattening(SimpleTestCase):
                     "tag": "p",
                     "child": [
                         {"node": "text", "text": "Binance will list "},
-                        {"node": "element", "tag": "b", "child": [{"node": "text", "text": "KMN"}]},
+                        {
+                            "node": "element",
+                            "tag": "b",
+                            "child": [{"node": "text", "text": "KMN"}],
+                        },
                     ],
                 },
-                {"node": "element", "tag": "p", "child": [{"node": "text", "text": "Details below."}]},
+                {
+                    "node": "element",
+                    "tag": "p",
+                    "child": [{"node": "text", "text": "Details below."}],
+                },
             ],
         }
-        self.assertEqual(flatten_rich_text(tree), "Binance will list KMN\nDetails below.")
+        self.assertEqual(
+            flatten_rich_text(tree), "Binance will list KMN\nDetails below."
+        )
 
     def test_garbage_nodes_do_not_raise(self):
-        for payload in (None, [], {"node": "element"}, {"node": "text", "text": None}, 42):
+        for payload in (
+            None,
+            [],
+            {"node": "element"},
+            {"node": "text", "text": None},
+            42,
+        ):
             with self.subTest(payload=payload):
                 self.assertIsInstance(flatten_rich_text(payload), str)
 
@@ -514,18 +586,34 @@ class TestWindow(SimpleTestCase):
     def test_the_cap_boundary_is_the_cap_itself(self):
         """正好 96 小时不夹，多一小时才夹——边界落在哪一侧是「差一分钟算几天」那类
         争执的来源，所以两侧都钉住。"""
-        self.assertEqual(compute_window(NOW, NOW - timedelta(hours=96))[0], NOW - timedelta(hours=96))
-        self.assertEqual(compute_window(NOW, NOW - timedelta(hours=97))[0], NOW - timedelta(hours=96))
+        self.assertEqual(
+            compute_window(NOW, NOW - timedelta(hours=96))[0], NOW - timedelta(hours=96)
+        )
+        self.assertEqual(
+            compute_window(NOW, NOW - timedelta(hours=97))[0], NOW - timedelta(hours=96)
+        )
 
     def test_the_derived_config_is_honoured(self):
         tighter = replace(config.NEWS, window_floor_hours=2, window_cap_hours=6)
-        self.assertEqual(compute_window(NOW, None, tighter)[0], NOW - timedelta(hours=6))
-        self.assertEqual(compute_window(NOW, NOW - timedelta(hours=1), tighter)[0], NOW - timedelta(hours=2))
+        self.assertEqual(
+            compute_window(NOW, None, tighter)[0], NOW - timedelta(hours=6)
+        )
+        self.assertEqual(
+            compute_window(NOW, NOW - timedelta(hours=1), tighter)[0],
+            NOW - timedelta(hours=2),
+        )
 
 
 class TestPrefilter(SimpleTestCase):
     def pub(self, **kwargs):
-        return RawItem(**{"url": "https://media.test/a", "title": "t", "published_at": None, **kwargs})
+        return RawItem(
+            **{
+                "url": "https://media.test/a",
+                "title": "t",
+                "published_at": None,
+                **kwargs,
+            }
+        )
 
     def test_the_window_is_left_open_and_right_closed(self):
         """左开右闭：`start` 那一篇上一轮已经见过了（去重键是 url，重复运行因此
@@ -533,7 +621,9 @@ class TestPrefilter(SimpleTestCase):
         start = NOW - timedelta(hours=24)
         self.assertFalse(in_window(self.pub(published_at=start), start, NOW))
         self.assertTrue(in_window(self.pub(published_at=NOW), start, NOW))
-        self.assertTrue(in_window(self.pub(published_at=NOW - timedelta(seconds=1)), start, NOW))
+        self.assertTrue(
+            in_window(self.pub(published_at=NOW - timedelta(seconds=1)), start, NOW)
+        )
 
     def test_an_item_without_a_published_time_is_kept(self):
         """「未知」不是「很旧」：丢掉它，窗口过滤就成了一处会安静吞掉条目的地方。"""
@@ -542,7 +632,9 @@ class TestPrefilter(SimpleTestCase):
     def test_keywords_match_title_and_body_case_insensitively(self):
         keywords = ("bitcoin", "美联储")
         self.assertTrue(matches_keywords(self.pub(title="Bitcoin ETFs"), keywords))
-        self.assertTrue(matches_keywords(self.pub(title="ETF", body="bitcoin flows"), keywords))
+        self.assertTrue(
+            matches_keywords(self.pub(title="ETF", body="bitcoin flows"), keywords)
+        )
         self.assertTrue(matches_keywords(self.pub(title="美联储按兵不动"), keywords))
         self.assertFalse(matches_keywords(self.pub(title="Ethereum upgrade"), keywords))
 
@@ -574,12 +666,18 @@ MEDIA = config.NewsSource(
 )
 KINDS = (BINANCE, OKX, MEDIA)
 
-BINANCE_DETAIL_PREFIX = "https://www.binance.com/bapi/composite/v1/public/cms/article/detail/query"
+BINANCE_DETAIL_PREFIX = (
+    "https://www.binance.com/bapi/composite/v1/public/cms/article/detail/query"
+)
 BINANCE_BODY_TREE = {
     "node": "element",
     "tag": "div",
     "child": [
-        {"node": "element", "tag": "p", "child": [{"node": "text", "text": "Binance will list KMN."}]},
+        {
+            "node": "element",
+            "tag": "p",
+            "child": [{"node": "text", "text": "Binance will list KMN."}],
+        },
     ],
 }
 
@@ -592,7 +690,12 @@ class TestCollectRound(TestCase):
 
     def collect(self, fetch, **kwargs):
         kwargs.setdefault("last_success", NOW - timedelta(hours=2))
-        return news.collect_news(now=NOW, news=self.config(**kwargs.pop("news_overrides", {})), fetch=fetch, **kwargs)
+        return news.collect_news(
+            now=NOW,
+            news=self.config(**kwargs.pop("news_overrides", {})),
+            fetch=fetch,
+            **kwargs,
+        )
 
     def test_a_clean_round_stores_the_matched_items(self):
         # 三个源都要登记：`ok` 的语义是「**每个**源都成功」，漏登一个就等于在断言
@@ -601,7 +704,10 @@ class TestCollectRound(TestCase):
             {
                 "https://binance.test/list": binance_payload([]),
                 "https://media.test/rss": rss(
-                    rss_item(title="Bitcoin ETF inflows hit a record", link="https://media.test/a"),
+                    rss_item(
+                        title="Bitcoin ETF inflows hit a record",
+                        link="https://media.test/a",
+                    ),
                     # description 默认值本身是命中关键词的，所以「换个不命中的标题」不足
                     # 以让这条不命中——标题与描述都会进预筛的干草堆，两边都要换掉。
                     rss_item(
@@ -611,7 +717,12 @@ class TestCollectRound(TestCase):
                     ),
                 ),
                 "https://okx.test/announcements": okx_payload(
-                    [okx_detail(title="OKX will delist XYZ", url="https://www.okx.test/help/delist")]
+                    [
+                        okx_detail(
+                            title="OKX will delist XYZ",
+                            url="https://www.okx.test/help/delist",
+                        )
+                    ]
                 ),
             }
         )
@@ -619,14 +730,19 @@ class TestCollectRound(TestCase):
 
         self.assertTrue(report.ok, report.failed_sources)
         # 关键词把 Ethereum 那条挡在门外：没进这一批 = 没花掉 token。
-        self.assertEqual(sorted(i.url for i in report.items), ["https://media.test/a", "https://www.okx.test/help/delist"])
+        self.assertEqual(
+            sorted(i.url for i in report.items),
+            ["https://media.test/a", "https://www.okx.test/help/delist"],
+        )
         self.assertEqual(report.created, 2)
         self.assertEqual(NewsItem.objects.count(), 2)
 
         stored = NewsItem.objects.get(url="https://media.test/a")
         self.assertEqual(stored.source, "media")
         self.assertEqual(stored.kind, config.NewsSourceKind.CRYPTO_MEDIA.value)
-        self.assertEqual(stored.published_at, datetime(2026, 9, 21, 18, 0, tzinfo=timezone.utc))
+        self.assertEqual(
+            stored.published_at, datetime(2026, 9, 21, 18, 0, tzinfo=timezone.utc)
+        )
         self.assertEqual(stored.fetched_at, NOW)
 
     def test_each_source_reports_its_own_counts(self):
@@ -685,7 +801,9 @@ class TestCollectRound(TestCase):
     def test_a_source_whose_envelope_changed_is_a_visible_failure(self):
         """币安公告详情页那种响应（202 + 通用外壳页）在这里必须变成一次失败，
         而不是「今天 0 条」。"""
-        fetch = FakeFetcher({"https://binance.test/list": "<!DOCTYPE html><html></html>"})
+        fetch = FakeFetcher(
+            {"https://binance.test/list": "<!DOCTYPE html><html></html>"}
+        )
         report = self.collect(fetch)
         by_name = {r.source: r for r in report.sources}
         self.assertFalse(by_name["binance"].ok)
@@ -695,9 +813,15 @@ class TestCollectRound(TestCase):
         fetch = FakeFetcher(
             {
                 "https://binance.test/list": binance_payload(
-                    [binance_article(code="abc123", release=ms(NOW - timedelta(hours=3)))]
+                    [
+                        binance_article(
+                            code="abc123", release=ms(NOW - timedelta(hours=3))
+                        )
+                    ]
                 ),
-                BINANCE_DETAIL_PREFIX: json.dumps({"data": {"body": BINANCE_BODY_TREE}}),
+                BINANCE_DETAIL_PREFIX: json.dumps(
+                    {"data": {"body": BINANCE_BODY_TREE}}
+                ),
             }
         )
         report = self.collect(fetch)
@@ -717,7 +841,11 @@ class TestCollectRound(TestCase):
         fetch = FakeFetcher(
             {
                 "https://binance.test/list": binance_payload(
-                    [binance_article(code="abc123", release=ms(NOW - timedelta(hours=3)))]
+                    [
+                        binance_article(
+                            code="abc123", release=ms(NOW - timedelta(hours=3))
+                        )
+                    ]
                 ),
                 BINANCE_DETAIL_PREFIX: NewsFetchError("详情页超时"),
             }
@@ -745,9 +873,15 @@ class TestCollectRound(TestCase):
         fetch = FakeFetcher(
             {
                 "https://binance.test/list": binance_payload(
-                    [binance_article(code="abc123", release=ms(NOW - timedelta(hours=3)))]
+                    [
+                        binance_article(
+                            code="abc123", release=ms(NOW - timedelta(hours=3))
+                        )
+                    ]
                 ),
-                BINANCE_DETAIL_PREFIX: json.dumps({"data": {"body": BINANCE_BODY_TREE}}),
+                BINANCE_DETAIL_PREFIX: json.dumps(
+                    {"data": {"body": BINANCE_BODY_TREE}}
+                ),
             }
         )
         report = self.collect(fetch)
@@ -776,7 +910,10 @@ class TestCollectRound(TestCase):
     def test_the_cap_keeps_the_newest_and_records_what_it_dropped(self):
         """上限存在的理由不是成本，是 LLM 的判断力：一次给 200 条，它会挑几条盯着看
         而漏掉真正的大事件。所以留下的是**最新**的那批。"""
-        articles = [binance_article(code=f"c{i}", release=ms(NOW - timedelta(hours=i + 1))) for i in range(5)]
+        articles = [
+            binance_article(code=f"c{i}", release=ms(NOW - timedelta(hours=i + 1)))
+            for i in range(5)
+        ]
         fetch = FakeFetcher(
             {
                 "https://binance.test/list": binance_payload(articles),
@@ -791,7 +928,10 @@ class TestCollectRound(TestCase):
         self.assertTrue(all("c0" in i.url or "c1" in i.url for i in report.items))
 
     def test_a_source_returning_more_than_the_per_source_cap_is_truncated(self):
-        articles = [binance_article(code=f"c{i}", release=ms(NOW - timedelta(minutes=i + 1))) for i in range(4)]
+        articles = [
+            binance_article(code=f"c{i}", release=ms(NOW - timedelta(minutes=i + 1)))
+            for i in range(4)
+        ]
         fetch = FakeFetcher(
             {
                 "https://binance.test/list": binance_payload(articles),
@@ -807,7 +947,11 @@ class TestCollectRound(TestCase):
 
     def test_a_long_body_is_truncated_with_the_flag_set(self):
         long_body = "字" * 500
-        body_tree = {"node": "element", "tag": "p", "child": [{"node": "text", "text": long_body}]}
+        body_tree = {
+            "node": "element",
+            "tag": "p",
+            "child": [{"node": "text", "text": long_body}],
+        }
         fetch = FakeFetcher(
             {
                 "https://binance.test/list": binance_payload(
@@ -825,9 +969,15 @@ class TestCollectRound(TestCase):
         fetch = FakeFetcher(
             {
                 "https://media.test/rss": rss(
-                    rss_item(link="https://media.test/fresh", pub="Mon, 21 Sep 2026 18:00:00 +0000"),
+                    rss_item(
+                        link="https://media.test/fresh",
+                        pub="Mon, 21 Sep 2026 18:00:00 +0000",
+                    ),
                     # 窗口是 (NOW-24h, NOW] = (09-21T00:05, 09-22T00:05]
-                    rss_item(link="https://media.test/old", pub="Sat, 19 Sep 2026 18:00:00 +0000"),
+                    rss_item(
+                        link="https://media.test/old",
+                        pub="Sat, 19 Sep 2026 18:00:00 +0000",
+                    ),
                 )
             }
         )
@@ -844,7 +994,9 @@ class TestCollectRound(TestCase):
     def test_a_rerun_in_the_same_day_stores_nothing_new(self):
         """整条通道可幂等重试：同一天里再跑一次，窗口被拉长到一天以上，看到的是
         同一批条目，而 url 去重让它们一条都进不了库。"""
-        fetch = FakeFetcher({"https://media.test/rss": rss(rss_item(link="https://media.test/a"))})
+        fetch = FakeFetcher(
+            {"https://media.test/rss": rss(rss_item(link="https://media.test/a"))}
+        )
         first = self.collect(fetch)
         second = self.collect(fetch)
 
@@ -854,7 +1006,9 @@ class TestCollectRound(TestCase):
         self.assertEqual(NewsItem.objects.count(), 1)
 
     def test_dry_run_writes_nothing(self):
-        fetch = FakeFetcher({"https://media.test/rss": rss(rss_item(link="https://media.test/a"))})
+        fetch = FakeFetcher(
+            {"https://media.test/rss": rss(rss_item(link="https://media.test/a"))}
+        )
         report = self.collect(fetch, dry_run=True)
 
         self.assertTrue(report.dry_run)
@@ -883,7 +1037,11 @@ class TestCollectRound(TestCase):
         # 三个源都发过请求：一个源失败不能让它后面的源不被尝试。
         self.assertEqual(
             [u for u in fetch.urls],
-            ["https://binance.test/list", "https://okx.test/announcements", "https://media.test/rss"],
+            [
+                "https://binance.test/list",
+                "https://okx.test/announcements",
+                "https://media.test/rss",
+            ],
         )
         self.assertEqual(len(report.sources), 3)
 

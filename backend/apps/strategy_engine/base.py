@@ -95,7 +95,9 @@ class OrderSignal:
     exchange: str = "binance"  # 默认交易所
     signal_name: str = ""  # 信号名称（用于日志和回测记录）
     metadata: dict = field(default_factory=dict)  # 额外元数据
-    is_close_position: bool = False  # 平仓信号：下单时以 reduce_only 传入，由 RiskGuard 免除前置校验
+    is_close_position: bool = (
+        False  # 平仓信号：下单时以 reduce_only 传入，由 RiskGuard 免除前置校验
+    )
 
     def __post_init__(self):
         if self.side not in ("buy", "sell"):
@@ -309,7 +311,7 @@ class BaseStrategy(ABC):
         signal = self.on_bar(kline, history)
         if signal is None:
             return []
-            
+
         insight = _signal_to_insight(signal, self.name)
         insight.symbol = self.ctx.symbol
         return [insight]

@@ -69,11 +69,15 @@ class _WithStubbedSend(SimpleTestCase):
             self.sent.append(text)
             return {"recipients": len(recipients), "delivered": delivered}
 
-        with patch.object(beat_health_run, "entries", return_value=rows), patch.object(
-            beat_health_run, "declared", return_value=list(declared)
-        ), patch(
-            "apps.regime.halt_notify.all_active_user_ids", return_value=list(recipients)
-        ), patch("apps.regime.halt_notify.alert_everyone", side_effect=_send):
+        with (
+            patch.object(beat_health_run, "entries", return_value=rows),
+            patch.object(beat_health_run, "declared", return_value=list(declared)),
+            patch(
+                "apps.regime.halt_notify.all_active_user_ids",
+                return_value=list(recipients),
+            ),
+            patch("apps.regime.halt_notify.alert_everyone", side_effect=_send),
+        ):
             return beat_health_run.check(now=now)
 
 
@@ -96,9 +100,7 @@ class TestTheAlertAccount(_WithStubbedSend):
     def test_a_changed_problem_set_is_news_again(self):
         """「修好一条、又坏一条」是新的一批：当天不该把它咽下去（那是沉默）。"""
         self.check([_entry("beta")], ("alpha", "beta"))
-        again = self.check(
-            [_entry("beta", enabled=False, ago=None)], ("alpha", "beta")
-        )
+        again = self.check([_entry("beta", enabled=False, ago=None)], ("alpha", "beta"))
         self.assertEqual(again["reason"], "sent")
         self.assertEqual(len(self.sent), 2)
 

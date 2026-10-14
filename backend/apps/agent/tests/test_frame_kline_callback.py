@@ -5,6 +5,7 @@ ORM 操作抛 "connection already closed"，整个信号检查静默失败。
 修复：在 _on_kline_data 进入时先调 close_old_connections() 刷新连接。
 兼容同步和异步签名（HEAD 是同步 def，working tree 是 async def）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +13,6 @@ import inspect
 from unittest.mock import MagicMock, patch
 
 import pytest
-from django.db import close_old_connections
 
 
 @pytest.mark.asyncio

@@ -4,15 +4,20 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('backtest', '0009_remove_grid_search_schedule'),
+        ("backtest", "0009_remove_grid_search_schedule"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='backtestresult',
-            name='celery_task_id',
-            field=models.CharField(blank=True, db_index=True, default='', help_text='Celery 任务 ID，用于 get_task_result 反查回测结果', max_length=128),
+            model_name="backtestresult",
+            name="celery_task_id",
+            field=models.CharField(
+                blank=True,
+                db_index=True,
+                default="",
+                help_text="Celery 任务 ID，用于 get_task_result 反查回测结果",
+                max_length=128,
+            ),
         ),
     ]

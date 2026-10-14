@@ -82,7 +82,14 @@ T0 = datetime(2026, 6, 1, 0, 0, tzinfo=timezone.utc)
 #: `down-trend 那三笔平稳盈利把全样本曲线的峰抬起来，箱体那三笔连亏从峰上下来`——
 #: 与 `test_pool.downtrend_profit_then_range_loss` 同一份数据，于是「下行趋势适用、
 #: 箱体不适用」这个结论在两个文件里是同一个（本文件另有一处直接钉住它）。
-DOWNTREND_TRADES = ((0, 1000.0), (1, 1000.0), (2, 1000.0), (7, -500.0), (8, -500.0), (9, -500.0))
+DOWNTREND_TRADES = (
+    (0, 1000.0),
+    (1, 1000.0),
+    (2, 1000.0),
+    (7, -500.0),
+    (8, -500.0),
+    (9, -500.0),
+)
 
 
 def d(n: int) -> date:
@@ -306,7 +313,9 @@ class TestInputFingerprint(SimpleTestCase):
         tags = tags_span(span)
         other = pure_sample([same_day(3, 100.0)], tags, span)
 
-        self.assertNotEqual(self.fingerprint(samples=[*self.samples, other]), self.fingerprint())
+        self.assertNotEqual(
+            self.fingerprint(samples=[*self.samples, other]), self.fingerprint()
+        )
 
     def test_a_changed_exclusion_count_changes_the_fingerprint(self):
         self.assertNotEqual(
@@ -320,7 +329,9 @@ class TestInputFingerprint(SimpleTestCase):
         这一条坏掉的样子是**静默**的：两次不同门槛的重算算出同一个指纹，第二次把
         第一次那一代当成「输入没变」直接复用，于是换了门槛却什么都没发生。
         """
-        self.assertNotEqual(self.fingerprint(params=TWO_MONTHS), self.fingerprint(params=SMALL))
+        self.assertNotEqual(
+            self.fingerprint(params=TWO_MONTHS), self.fingerprint(params=SMALL)
+        )
         self.assertNotEqual(
             self.fingerprint(params=config.EVIDENCE), self.fingerprint(params=SMALL)
         )
@@ -333,7 +344,9 @@ class TestInputFingerprint(SimpleTestCase):
             min_trades: int = 3
             min_months: int = 1
 
-        self.assertNotEqual(self.fingerprint(params=Lookalike()), self.fingerprint(params=SMALL))
+        self.assertNotEqual(
+            self.fingerprint(params=Lookalike()), self.fingerprint(params=SMALL)
+        )
 
     def test_a_changed_pooling_version_changes_the_fingerprint(self):
         with patch.object(pool, "POOL_VERSION", pool.POOL_VERSION + 1):
@@ -344,8 +357,12 @@ class TestInputFingerprint(SimpleTestCase):
     def test_it_reads_the_effective_params_not_the_registered_group(self):
         """登记在 `GROUPS` 里那一份变了、而本次生效的 `params` 没变，指纹不该动。"""
         with patch.dict(config.GROUPS, {"evidence": TWO_MONTHS}):
-            self.assertEqual(self.fingerprint(params=SMALL), self.fingerprint(params=SMALL))
-            self.assertNotEqual(self.fingerprint(params=SMALL), self.fingerprint(params=TWO_MONTHS))
+            self.assertEqual(
+                self.fingerprint(params=SMALL), self.fingerprint(params=SMALL)
+            )
+            self.assertNotEqual(
+                self.fingerprint(params=SMALL), self.fingerprint(params=TWO_MONTHS)
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -374,7 +391,9 @@ def make_generation(
     )
 
 
-def add_cell(generation, strategy, regime, *, state="fit", reason="", source=POOL_SOURCE_STRATEGY):
+def add_cell(
+    generation, strategy, regime, *, state="fit", reason="", source=POOL_SOURCE_STRATEGY
+):
     return RegimePoolCell.objects.create(
         rebuild=generation,
         strategy=strategy,
@@ -441,7 +460,9 @@ class _Fixture(TestCase):
             )
         return result
 
-    def sliced(self, strategy, *, trades=DOWNTREND_TRADES, tags=None, params=SMALL, **kwargs):
+    def sliced(
+        self, strategy, *, trades=DOWNTREND_TRADES, tags=None, params=SMALL, **kwargs
+    ):
         """造一个结果并把切片落库（真走 `slice_result`，不手写载荷）。
 
         落完刷新一次内存里的 `metrics`：`save_slice` 写的是它自己取出来的那一行，手上
@@ -466,7 +487,9 @@ class TestCurrentGeneration(_Fixture):
 
     def test_building_and_failed_generations_are_not_current(self):
         make_generation(status=RebuildStatus.BUILDING.value, fingerprint="b")
-        make_generation(status=RebuildStatus.FAILED.value, fingerprint="f", finished_at=T0)
+        make_generation(
+            status=RebuildStatus.FAILED.value, fingerprint="f", finished_at=T0
+        )
 
         self.assertIsNone(pool_rebuild.current_generation())
 
@@ -483,7 +506,9 @@ class TestCurrentGeneration(_Fixture):
             finished_at=T0 + timedelta(hours=2),
         )
 
-        self.assertEqual(pool_rebuild.current_generation().pk, early_start_late_finish.pk)
+        self.assertEqual(
+            pool_rebuild.current_generation().pk, early_start_late_finish.pk
+        )
 
     def test_cells_are_keyed_by_strategy_and_regime(self):
         generation = make_generation(finished_at=T0)
@@ -501,7 +526,9 @@ class TestCurrentGeneration(_Fixture):
     def test_cells_of_an_older_generation_are_not_current(self):
         old = make_generation(fingerprint="old", started_at=T0, finished_at=T0)
         add_cell(old, self.alpha, RANGE, state="unfit")
-        fresh = make_generation(fingerprint="new", started_at=T0, finished_at=T0 + timedelta(hours=1))
+        fresh = make_generation(
+            fingerprint="new", started_at=T0, finished_at=T0 + timedelta(hours=1)
+        )
         add_cell(fresh, self.alpha, RANGE, state="fit")
 
         cells = pool_rebuild.current_cells()
@@ -575,7 +602,11 @@ class TestCollectSamples(_Fixture):
         self.assertEqual(candidates, 3)
         self.assertEqual(
             {k: v for k, v in exclusions.items() if v},
-            {EXCLUDED_NO_PAYLOAD: 1, EXCLUDED_UNUSABLE_CAPITAL: 1, EXCLUDED_NO_MERGE_INPUTS: 1},
+            {
+                EXCLUDED_NO_PAYLOAD: 1,
+                EXCLUDED_UNUSABLE_CAPITAL: 1,
+                EXCLUDED_NO_MERGE_INPUTS: 1,
+            },
         )
         self.assertEqual(set(exclusions), set(pool_rebuild.EXCLUSION_KEYS))
         self.assertIn(EXCLUDED_NO_MERGE_INPUTS, pool_rebuild.EXCLUSION_KEYS)
@@ -675,7 +706,9 @@ class TestArchetypeMatches(_Fixture):
 
     def test_every_id_gets_an_entry_even_if_unused(self):
         """样本足的策略当下用不到它，但「归到哪一类」不该随样本多寡变成一个没人记录的事实。"""
-        matches = pool_rebuild.archetype_matches([self.alpha.id, self.beta.id, self.gamma.id])
+        matches = pool_rebuild.archetype_matches(
+            [self.alpha.id, self.beta.id, self.gamma.id]
+        )
 
         self.assertEqual(set(matches), {self.alpha.id, self.beta.id, self.gamma.id})
 
@@ -717,7 +750,9 @@ class TestRebuildPool(_Fixture):
     def setUp(self):
         super().setUp()
         self.alpha_result = self.sliced(self.alpha)
-        self.beta_result = self.sliced(self.beta, trades=((3, 200.0), (4, 200.0), (5, 200.0)))
+        self.beta_result = self.sliced(
+            self.beta, trades=((3, 200.0), (4, 200.0), (5, 200.0))
+        )
 
     # -- 正常一代 ------------------------------------------------------- #
 
@@ -821,7 +856,9 @@ class TestRebuildPool(_Fixture):
             with self.subTest(regime=regime.value):
                 row = cells[(self.gamma.id, regime.value)]
                 self.assertEqual(row["source"], POOL_SOURCE_ARCHETYPE)
-                self.assertEqual(row["evidence"]["archetype"]["name"], ARCHETYPE_UNCLASSIFIED)
+                self.assertEqual(
+                    row["evidence"]["archetype"]["name"], ARCHETYPE_UNCLASSIFIED
+                )
                 self.assertFalse(row["needs_review"])
 
     def test_the_exclusions_land_on_the_generation(self):
@@ -960,7 +997,9 @@ class TestRebuildPool(_Fixture):
     # -- 失败与并发 ----------------------------------------------------- #
 
     def test_a_failure_leaves_a_failed_generation_with_the_reason(self):
-        with patch.object(pool_rebuild, "_mark_ready", side_effect=RuntimeError("boom")):
+        with patch.object(
+            pool_rebuild, "_mark_ready", side_effect=RuntimeError("boom")
+        ):
             with self.assertRaises(RuntimeError):
                 pool_rebuild.rebuild_pool()
 
@@ -971,7 +1010,9 @@ class TestRebuildPool(_Fixture):
 
     def test_a_failed_generation_keeps_its_cells_as_evidence(self):
         """残骸与原因一起才回答得了「为什么会这样」，所以不删。"""
-        with patch.object(pool_rebuild, "_mark_ready", side_effect=RuntimeError("boom")):
+        with patch.object(
+            pool_rebuild, "_mark_ready", side_effect=RuntimeError("boom")
+        ):
             with self.assertRaises(RuntimeError):
                 pool_rebuild.rebuild_pool()
 
@@ -979,7 +1020,9 @@ class TestRebuildPool(_Fixture):
         self.assertEqual(RegimePoolCell.objects.filter(rebuild=generation).count(), 8)
 
     def test_a_failed_generation_never_becomes_current(self):
-        with patch.object(pool_rebuild, "_mark_ready", side_effect=RuntimeError("boom")):
+        with patch.object(
+            pool_rebuild, "_mark_ready", side_effect=RuntimeError("boom")
+        ):
             with self.assertRaises(RuntimeError):
                 pool_rebuild.rebuild_pool()
 
@@ -997,7 +1040,9 @@ class TestRebuildPool(_Fixture):
 
         def race(rebuild, changed, now):
             rival = make_generation(
-                fingerprint=rebuild.input_fingerprint, finished_at=now, actor_name="对方"
+                fingerprint=rebuild.input_fingerprint,
+                finished_at=now,
+                actor_name="对方",
             )
             competing.append(rival.pk)
             return real_mark_ready(rebuild, changed, now)

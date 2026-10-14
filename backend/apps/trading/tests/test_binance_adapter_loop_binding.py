@@ -99,7 +99,9 @@ class TestPerLoopClients(SimpleTestCase):
             async def run() -> None:
                 sink: dict[str, _FakeClient] = {}
                 await _resolve_into(adapter, sink, name)
-                seen[name] = sink[name]  # 先记录，再挂住 loop（断言要在两个 loop 都活着时做）
+                seen[name] = sink[
+                    name
+                ]  # 先记录，再挂住 loop（断言要在两个 loop 都活着时做）
                 both_ready.wait()
                 release.wait(timeout=60)
 
@@ -209,7 +211,7 @@ class TestPerLoopClients(SimpleTestCase):
     def test_disconnect_closes_live_foreign_loop_client_in_that_loop(self):
         """归属 loop 还在跑的：投递到它自己的 loop 上去关（而不是从当前 loop 关）。"""
         adapter, _ = _adapter_with_fakes()
-        started, stop = threading.Event(), threading.Event()
+        started, _stop = threading.Event(), threading.Event()
         holder: dict[str, object] = {}
 
         def thread_main():

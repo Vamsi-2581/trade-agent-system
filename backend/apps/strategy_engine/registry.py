@@ -35,18 +35,16 @@ class StrategyRegistry:
     @classmethod
     def validate_description(cls, strategy_cls: type["BaseStrategy"]) -> None:
         """校验策略描述是否符合 4 字段模板，失败抛异常。"""
-        desc = getattr(strategy_cls, 'description', '')
+        desc = getattr(strategy_cls, "description", "")
         if not desc or not desc.strip():
-            name = getattr(strategy_cls, 'name', 'unnamed')
+            name = getattr(strategy_cls, "name", "unnamed")
             raise ValueError(f"Strategy {name!r} missing description")
 
         required_fields = ["策略类型：", "核心指标：", "适用场景：", "入场逻辑："]
         missing = [f for f in required_fields if f not in desc]
         if missing:
-            name = getattr(strategy_cls, 'name', 'unnamed')
-            raise ValueError(
-                f"Strategy {name!r} description missing fields: {missing}"
-            )
+            name = getattr(strategy_cls, "name", "unnamed")
+            raise ValueError(f"Strategy {name!r} description missing fields: {missing}")
 
     @classmethod
     def register(
@@ -94,8 +92,11 @@ class StrategyRegistry:
     @classmethod
     def discover(cls) -> list[str]:
         """自动发现并注册策略模块"""
-        import os, sys, importlib
+        import os
+        import sys
+        import importlib
         from .base import BaseStrategy
+
         path = cls._strategy_path
         if not path or not os.path.isdir(path):
             return cls.list_registered()
@@ -111,9 +112,13 @@ class StrategyRegistry:
                     mod = importlib.import_module(module_name)
                     for attr_name in dir(mod):
                         attr = getattr(mod, attr_name)
-                        if (isinstance(attr, type) and hasattr(attr, "name")
-                                and getattr(attr, "__module__", "") == module_name
-                                and issubclass(attr, BaseStrategy) and attr is not BaseStrategy):
+                        if (
+                            isinstance(attr, type)
+                            and hasattr(attr, "name")
+                            and getattr(attr, "__module__", "") == module_name
+                            and issubclass(attr, BaseStrategy)
+                            and attr is not BaseStrategy
+                        ):
                             cls.register(attr, name=module_name)
                             discovered.append(attr.name)
                 except Exception as e:

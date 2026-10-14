@@ -105,7 +105,9 @@ def _patch_llm(*responses):
     return patch("apps.agent.llm_client.LLMClient.get_instance", return_value=mock_llm)
 
 
-def _msg(text="用参数网格搜索来确定 box_time_range_breakout_strategy 测试 SOL 近4年来4h的最佳参数"):
+def _msg(
+    text="用参数网格搜索来确定 box_time_range_breakout_strategy 测试 SOL 近4年来4h的最佳参数",
+):
     return AgentMessage(sender="user", recipient="test_agent", payload={"text": text})
 
 
@@ -154,7 +156,11 @@ async def test_degraded_after_executed_tool_keeps_content_with_notice():
 
     with _patch_llm(
         _resp("", tool_calls=[_tool("submit_backtest", symbol="SOL/USDT")]),
-        _resp("SOL/USDT 近 4 年 4h 网格搜索共 120 组参数组合。", degraded=True, reason="HTTP 500"),
+        _resp(
+            "SOL/USDT 近 4 年 4h 网格搜索共 120 组参数组合。",
+            degraded=True,
+            reason="HTTP 500",
+        ),
     ):
         out = await agent.handle(_msg())
 
@@ -184,12 +190,18 @@ async def test_chat_with_tools_marks_degraded_and_retries_four_times():
     async def _boom(*_a, **_k):
         calls["n"] += 1
         req = httpx.Request("POST", "https://relay.example/v1/chat/completions")
-        resp = httpx.Response(500, request=req, text='{"error":{"code":"do_request_failed"}}')
-        raise httpx.HTTPStatusError("500 Internal Server Error", request=req, response=resp)
+        resp = httpx.Response(
+            500, request=req, text='{"error":{"code":"do_request_failed"}}'
+        )
+        raise httpx.HTTPStatusError(
+            "500 Internal Server Error", request=req, response=resp
+        )
 
-    with patch.object(LLMClient, "_call_openai_with_tools", _boom), patch(
-        "apps.agent.llm_client.asyncio.sleep", AsyncMock()
-    ), patch.object(LLMClient, "chat", AsyncMock(return_value="降级答复")):
+    with (
+        patch.object(LLMClient, "_call_openai_with_tools", _boom),
+        patch("apps.agent.llm_client.asyncio.sleep", AsyncMock()),
+        patch.object(LLMClient, "chat", AsyncMock(return_value="降级答复")),
+    ):
         r = await client.chat_with_tools(
             "sys",
             [{"role": "user", "content": "hi"}],

@@ -78,7 +78,9 @@ class TestBlockedOrder(_HaltGuardTestBase):
     async def test_a_blocking_declaration_rejects_and_notifies(self):
         notify = self._patch_notify()
         self._patch_later_steps()
-        with patch.object(self.guard, "_halt_block_reason", AsyncMock(return_value=REASON)):
+        with patch.object(
+            self.guard, "_halt_block_reason", AsyncMock(return_value=REASON)
+        ):
             approved, reason = await self.guard.pre_trade_check(_request(), "user-1")
 
         self.assertFalse(approved)
@@ -96,7 +98,9 @@ class TestBlockedOrder(_HaltGuardTestBase):
         """
         notify = self._patch_notify()
         self._patch_later_steps()
-        with patch.object(self.guard, "_halt_block_reason", AsyncMock(return_value=REASON)):
+        with patch.object(
+            self.guard, "_halt_block_reason", AsyncMock(return_value=REASON)
+        ):
             approved, reason = await self.guard.pre_trade_check(_request(), None)
 
         self.assertFalse(approved)
@@ -112,11 +116,15 @@ class TestBlockedOrder(_HaltGuardTestBase):
         """
         self._patch_notify()
         self._patch_later_steps()
-        with patch.object(self.guard, "_halt_block_reason", AsyncMock(return_value=REASON)):
+        with patch.object(
+            self.guard, "_halt_block_reason", AsyncMock(return_value=REASON)
+        ):
             with patch.object(
                 self.guard, "_get_daily_trade_count", AsyncMock(return_value=999)
             ) as count:
-                approved, reason = await self.guard.pre_trade_check(_request(), "user-1")
+                approved, reason = await self.guard.pre_trade_check(
+                    _request(), "user-1"
+                )
 
         self.assertFalse(approved)
         self.assertEqual(reason, REASON)

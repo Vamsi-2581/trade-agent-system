@@ -1,7 +1,6 @@
 """测试内部数据工具的 user_id 过滤、脱敏、字段转换、错误处理。"""
 
 import pytest
-from asgiref.sync import sync_to_async
 
 from apps.agent.tools.list_backtests import ListBacktestsTool
 from apps.agent.tools.list_orders import ListOrdersTool
@@ -85,20 +84,26 @@ async def test_list_exchange_accounts_return_format():
 async def test_list_exchange_accounts_no_api_key_leak():
     """测试 ListExchangeAccountsTool 不返回 API 密钥（脱敏）。"""
     # Mock 查询结果，不依赖真实数据库
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
     from apps.agent.tools.list_exchange_accounts import _query_exchange_accounts
 
     # Mock 返回数据
-    mock_result = [{
-        "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-        "exchange": "binance",
-        "label": "Test Account",
-        "is_active": True,
-        "testnet": False,
-        "created_at": "2024-07-01T10:00:00Z",
-    }]
+    mock_result = [
+        {
+            "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "exchange": "binance",
+            "label": "Test Account",
+            "is_active": True,
+            "testnet": False,
+            "created_at": "2024-07-01T10:00:00Z",
+        }
+    ]
 
-    with patch.object(_query_exchange_accounts, '__wrapped__', side_effect=lambda *args: (mock_result, 1)):
+    with patch.object(
+        _query_exchange_accounts,
+        "__wrapped__",
+        side_effect=lambda *args: (mock_result, 1),
+    ):
         tool = ListExchangeAccountsTool()
         result = await tool.execute(user_id="test_user")
 

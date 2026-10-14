@@ -96,7 +96,9 @@ async def _account_usdt(account) -> Decimal | None:
     try:
         return Decimal(str(balance.get("USDT", Decimal("0")) or Decimal("0")))
     except (InvalidOperation, TypeError, ValueError):
-        logger.warning("[DailySnapshot] 账户 %s 的 USDT 余额无法解析: %r", account.id, balance)
+        logger.warning(
+            "[DailySnapshot] 账户 %s 的 USDT 余额无法解析: %r", account.id, balance
+        )
         return None
 
 

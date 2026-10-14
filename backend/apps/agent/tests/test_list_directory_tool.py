@@ -1,4 +1,5 @@
 """list_directory 工具测试。"""
+
 import pytest
 
 from apps.agent.tools import file_io
@@ -14,7 +15,9 @@ def workspace(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_list_directory_lists_files_and_dirs(workspace):
     (workspace / "strategies").mkdir()
-    (workspace / "strategies" / "macd_atr_strategy.py").write_text("x" * 128, encoding="utf-8")
+    (workspace / "strategies" / "macd_atr_strategy.py").write_text(
+        "x" * 128, encoding="utf-8"
+    )
     (workspace / "strategies" / "sub").mkdir()
     (workspace / "strategies" / ".hidden").write_text("h", encoding="utf-8")
 

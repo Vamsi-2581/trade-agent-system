@@ -190,7 +190,9 @@ class Command(BaseCommand):
     def _rebuild_pool(self, options, failed: list[str]) -> None:
         """切片跑完接着重建池化表。**同步**，与切片同一段连接纪律之外（一次查询 + 几批写入）。"""
         if options["dry_run"]:
-            self.stdout.write("[dry-run] 会全表重建池化表（范围参数只作用于切片那一段）")
+            self.stdout.write(
+                "[dry-run] 会全表重建池化表（范围参数只作用于切片那一段）"
+            )
             return
 
         # 注册表是原型归属的唯一出处，而 `apps.ready()` 只在目录当时存在时才 discover。
@@ -230,7 +232,8 @@ class Command(BaseCommand):
         excluded = {k: v for k, v in summary["exclusions"].items() if v}
         if excluded:
             self.stdout.write(
-                "池化排除：" + "，".join(f"{k} {v}" for k, v in sorted(excluded.items()))
+                "池化排除："
+                + "，".join(f"{k} {v}" for k, v in sorted(excluded.items()))
             )
 
         if summary["unclassified"]:
@@ -361,4 +364,6 @@ class Command(BaseCommand):
 
     @staticmethod
     def _label(result) -> str:
-        return f"{result.symbol} {result.timeframe} {result.start_date}~{result.end_date}"
+        return (
+            f"{result.symbol} {result.timeframe} {result.start_date}~{result.end_date}"
+        )

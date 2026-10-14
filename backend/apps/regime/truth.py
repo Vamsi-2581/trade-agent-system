@@ -97,9 +97,7 @@ from apps.regime.quant import BaseRegime
 #:
 #: 用 `frozenset` 而不是「`PRIORITY` 的前两名」：这里的成员是**语义**（会要命的行情），
 #: 不是排序位置。哪天 `PRIORITY` 插进第五档，按位置取会把新档位悄悄算成极端档。
-EXTREME: frozenset[BaseRegime] = frozenset(
-    {BaseRegime.HIGH_VOL, BaseRegime.DOWNTREND}
-)
+EXTREME: frozenset[BaseRegime] = frozenset({BaseRegime.HIGH_VOL, BaseRegime.DOWNTREND})
 
 #: 兜底档。错向看的是「把极端判成了它」。
 CALM = BaseRegime.RANGE
@@ -141,9 +139,7 @@ class Interval:
 
     def __post_init__(self) -> None:
         if self.end < self.start:
-            raise TruthInputError(
-                f"区间终点（{self.end}）早于起点（{self.start}）"
-            )
+            raise TruthInputError(f"区间终点（{self.end}）早于起点（{self.start}）")
         if not isinstance(self.regime, BaseRegime):
             raise TruthInputError(f"档位不是已知的四档之一：{self.regime!r}")
 
@@ -197,11 +193,7 @@ class Agreement:
     def met(self) -> bool:
         """第 163 条的第①条标准。约定了的系统性错向**一次就否掉**，不看一致率多高。"""
         rate = self.rate
-        return (
-            rate is not None
-            and rate >= self.min_rate
-            and self.misdirected == 0
-        )
+        return rate is not None and rate >= self.min_rate and self.misdirected == 0
 
 
 def day_regimes(intervals: Iterable[Interval]) -> dict[date, set[BaseRegime]]:

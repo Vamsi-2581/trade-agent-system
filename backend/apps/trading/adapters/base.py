@@ -205,9 +205,7 @@ class BaseExchangeAdapter(ABC):
         """
 
     @abstractmethod
-    async def fetch_order(
-        self, exchange_order_id: str, symbol: str
-    ) -> OrderFill:
+    async def fetch_order(self, exchange_order_id: str, symbol: str) -> OrderFill:
         """查询订单当前成交状态（用于成交同步）。
 
         Args:
@@ -271,9 +269,7 @@ class BaseExchangeAdapter(ABC):
             交易所原始成交 dict 列表（币安：``orderId`` / ``qty`` / ``price`` /
             ``realizedPnl`` / ``time`` / ``side`` / ``symbol``）。
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} 不支持拉取 userTrades"
-        )
+        raise NotImplementedError(f"{type(self).__name__} 不支持拉取 userTrades")
 
     @abstractmethod
     async def get_balance(self) -> dict[str, Decimal]:

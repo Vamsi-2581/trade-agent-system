@@ -178,9 +178,7 @@ def _group_trades_by_order(trades: list[dict]) -> dict:
             entry["time"] = ts
 
     for entry in out.values():
-        entry["price"] = (
-            entry["notional"] / entry["qty"] if entry["qty"] > 0 else None
-        )
+        entry["price"] = entry["notional"] / entry["qty"] if entry["qty"] > 0 else None
         del entry["notional"]
     return out
 
@@ -205,7 +203,9 @@ def _trade_time(value) -> datetime | None:
         return None
 
 
-async def _fetch_exchange_pnl(adapter, native_symbol: str, order_id: str) -> Decimal | None:
+async def _fetch_exchange_pnl(
+    adapter, native_symbol: str, order_id: str
+) -> Decimal | None:
     """best-effort：按 ``orderId`` 从交易所 ``userTrades`` 求 ``ΣrealizedPnl``。
 
     取不到（适配器不支持 / 网络失败 / 单号为空）返回 ``None``——交给回填命令兜底，
@@ -289,7 +289,9 @@ async def persist_reduce_order(
         avg_price=result.avg_price,
     )
     if pnl is None:
-        pnl = await _fetch_exchange_pnl(adapter, native_symbol, result.exchange_order_id)
+        pnl = await _fetch_exchange_pnl(
+            adapter, native_symbol, result.exchange_order_id
+        )
 
     @db_async
     def _create():
@@ -327,6 +329,7 @@ async def persist_reduce_order(
 
     if session is not None and pnl is not None and pnl != 0:
         try:
+
             @db_async
             def _bump():
                 LiveSession.objects.filter(id=session.id).update(
@@ -385,6 +388,8 @@ async def _compute_local_pnl_for(
     try:
         history = await _history()
     except Exception as exc:  # noqa: BLE001 — 历史取不到就是算不出（交给交易所兜底）
-        logger.warning("[ReduceLedger] 成本历史读取失败 account=%s：%s", account_id, exc)
+        logger.warning(
+            "[ReduceLedger] 成本历史读取失败 account=%s：%s", account_id, exc
+        )
         return None
     return compute_realized_pnl(history, side, filled_qty, avg_price)

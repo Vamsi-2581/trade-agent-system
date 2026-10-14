@@ -4,24 +4,31 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('backtest', '0011_backtestresult_cost_detail_alter_backtesttrade_id'),
+        ("backtest", "0011_backtestresult_cost_detail_alter_backtesttrade_id"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='FundingRateRecord',
+            name="FundingRateRecord",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('symbol', models.CharField(db_index=True, max_length=32)),
-                ('funding_time', models.DateTimeField(db_index=True)),
-                ('rate', models.FloatField(help_text='资金费率，如 0.0001 = 0.01%/8h')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("symbol", models.CharField(db_index=True, max_length=32)),
+                ("funding_time", models.DateTimeField(db_index=True)),
+                ("rate", models.FloatField(help_text="资金费率，如 0.0001 = 0.01%/8h")),
             ],
             options={
-                'db_table': 'backtest_funding_rates',
-                'ordering': ['funding_time'],
-                'unique_together': {('symbol', 'funding_time')},
+                "db_table": "backtest_funding_rates",
+                "ordering": ["funding_time"],
+                "unique_together": {("symbol", "funding_time")},
             },
         ),
     ]

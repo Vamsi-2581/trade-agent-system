@@ -247,8 +247,12 @@ def resolve_window(
     ——之后改配置不会追溯改变任何一条已入库事件的窗口。
     """
     params = params or config.EVENTS
-    before = _resolve_span("停止提前量", halt_before_minutes, params.default_halt_before_minutes, params)
-    after = _resolve_span("恢复延后量", resume_after_minutes, params.default_resume_after_minutes, params)
+    before = _resolve_span(
+        "停止提前量", halt_before_minutes, params.default_halt_before_minutes, params
+    )
+    after = _resolve_span(
+        "恢复延后量", resume_after_minutes, params.default_resume_after_minutes, params
+    )
     return (
         event_time - timedelta(minutes=before),
         event_time + timedelta(minutes=after),
@@ -471,7 +475,9 @@ def cancel_event(
 
     clean_reason = (reason or "").strip()
     if not clean_reason:
-        raise EventInputError("取消必须给出理由：这条理由是日后唯一能回答「为什么没停」的东西")
+        raise EventInputError(
+            "取消必须给出理由：这条理由是日后唯一能回答「为什么没停」的东西"
+        )
 
     before = _event_snapshot(event)
     with transaction.atomic():
@@ -709,7 +715,9 @@ def describe_event(event: MajorEvent, *, now: datetime | None = None) -> str:
     return "\n".join(lines)
 
 
-def describe_candidate(candidate: CandidateEvent, *, now: datetime | None = None) -> str:
+def describe_candidate(
+    candidate: CandidateEvent, *, now: datetime | None = None
+) -> str:
     """一条候选的回显。**必须与已入库事件在结构上可分辨**（CONTEXT.md 第 94 条）：
 
     这里没有「熔断窗口」这一行，而 `describe_event` 一定有——候选不产生熔断，读的人

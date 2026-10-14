@@ -93,7 +93,9 @@ CLOSE_STRATEGY_GONE = "strategy_gone"
 LABEL_PREFIX = "策略停用决策："
 
 #: 机制回 Shadow 时这一层要说的话（进任务摘要与日志）。
-NOTE_SHADOW = "机制在 Shadow 档：不再拦，活行按「机制已回 Shadow」解除；决策行的状态一个字都不写"
+NOTE_SHADOW = (
+    "机制在 Shadow 档：不再拦，活行按「机制已回 Shadow」解除；决策行的状态一个字都不写"
+)
 
 #: 当前阶段是保命档（高波动）时这一层要说的话（进任务摘要与日志）。与 `NOTE_SHADOW`
 #: 有着**相反**的取向：Shadow 期是「不声明、但要解除」，保命档期是「声明与解除都不做」。

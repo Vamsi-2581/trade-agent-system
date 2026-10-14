@@ -157,7 +157,9 @@ Keep notifications concise and actionable. Do NOT use `notify_user` for conversa
                 filtered.append(m)
 
             if filtered:
-                mem_lines = "\n".join(f"- [{m['source']}] {m['content']}" for m in filtered)
+                mem_lines = "\n".join(
+                    f"- [{m['source']}] {m['content']}" for m in filtered
+                )
                 system = f"{system}\n\n### 相关记忆\n{mem_lines}"
 
         logger.debug("[%s] Final system prompt:\n%s", self.name, system)
@@ -172,7 +174,10 @@ Keep notifications concise and actionable. Do NOT use `notify_user` for conversa
         logger.debug("[%s] Final user prompt:\n%s", self.name, user_prompt[:1000])
 
         content, is_fb = await self._run_tool_loop(
-            system, messages, tools, max_tokens=8192,
+            system,
+            messages,
+            tools,
+            max_tokens=8192,
             on_tool_result=on_tool_result,
         )
 
@@ -186,7 +191,8 @@ Keep notifications concise and actionable. Do NOT use `notify_user` for conversa
             logger.warning(
                 "[%s] _run_tool_loop returned empty content, "
                 "falling back to direct LLM reply for task_id=%s",
-                self.name, message.task_id,
+                self.name,
+                message.task_id,
             )
             content = await self._llm.chat(
                 system=system,
@@ -253,9 +259,7 @@ Keep notifications concise and actionable. Do NOT use `notify_user` for conversa
         prev_response = message.payload.get("previous_agent_response")
         prev_agent = message.payload.get("previous_agent_name")
         if prev_response and prev_agent:
-            parts.append(
-                f"[来自 {prev_agent} Agent 的上一轮回复]\n{prev_response}"
-            )
+            parts.append(f"[来自 {prev_agent} Agent 的上一轮回复]\n{prev_response}")
 
         # 声明的 context_fields
         if self._context_fields:

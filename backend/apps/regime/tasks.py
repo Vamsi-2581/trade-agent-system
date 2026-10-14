@@ -179,7 +179,9 @@ def dispatch_slice(result_ids) -> bool:
         return True
     except Exception:
         logger.error(
-            "[regime] 切片任务投递失败（回测本身已成功）result_ids=%s", ids, exc_info=True
+            "[regime] 切片任务投递失败（回测本身已成功）result_ids=%s",
+            ids,
+            exc_info=True,
         )
         return False
 
@@ -241,7 +243,11 @@ def compute_regime_slice_task(self, result_ids, only_stale: bool = True) -> dict
                 f"{summary['failed'][:3]}"
             )
     except Exception as exc:
-        logger.error("[regime] 切片任务失败，将重试（第 %s 次）", self.request.retries, exc_info=True)
+        logger.error(
+            "[regime] 切片任务失败，将重试（第 %s 次）",
+            self.request.retries,
+            exc_info=True,
+        )
         raise self.retry(exc=exc)
 
     logger.info(
@@ -284,7 +290,9 @@ def deliver_report(self, run_day=None) -> dict:
         return summary
     except Exception as exc:  # noqa: BLE001
         logger.error(
-            "[regime] 日报投递失败，将重试（第 %s 次）", self.request.retries, exc_info=True
+            "[regime] 日报投递失败，将重试（第 %s 次）",
+            self.request.retries,
+            exc_info=True,
         )
         raise self.retry(exc=exc)
     finally:
@@ -324,7 +332,9 @@ def check_report_delivery(self, run_day=None) -> dict:
         return summary
     except Exception as exc:  # noqa: BLE001
         logger.error(
-            "[regime] 投递看门狗失败，将重试（第 %s 次）", self.request.retries, exc_info=True
+            "[regime] 投递看门狗失败，将重试（第 %s 次）",
+            self.request.retries,
+            exc_info=True,
         )
         raise self.retry(exc=exc)
     finally:
@@ -426,7 +436,9 @@ def sync_gate() -> dict:
             # 但正文那一档不同（第③段 Q1）：这一档的豁免是**人可以给的**
             # （`manage_deactivation_exemptions`），而事件熔断那一档不可人工豁免。照抄
             # 那一段会让读的人以为无路可走，所以走 `alert_gate_write_failure`。
-            logger.error("[regime] 行情阶段 gate 对账失败，已发告警后继续往上抛", exc_info=True)
+            logger.error(
+                "[regime] 行情阶段 gate 对账失败，已发告警后继续往上抛", exc_info=True
+            )
             logger.error(
                 "[regime] 声明写入失败告警结果：%s",
                 halt_notify.alert_gate_write_failure(exc),
@@ -474,7 +486,9 @@ def expire_candidates() -> dict:
 
 #: `check_beat_health` 的**空转**档位：这几档不记日志。这条任务一天 288 轮，每轮印一行
 #: 「没有异常」等于把日志变成噪声（`halt_notify.notify_pending` 同一条：没事就不说话）。
-_QUIET_BEAT_REASONS = frozenset({"no_problems", "nothing_to_say", "already_alerted_today"})
+_QUIET_BEAT_REASONS = frozenset(
+    {"no_problems", "nothing_to_say", "already_alerted_today"}
+)
 
 
 @app.task(acks_late=True)

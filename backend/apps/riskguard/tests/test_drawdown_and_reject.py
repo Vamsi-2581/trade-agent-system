@@ -233,7 +233,9 @@ class TestRejectIsVisible(unittest.IsolatedAsyncioTestCase):
 
     async def test_daily_trade_limit_rejection_notifies(self):
         notify = self._patch_notify()
-        with patch.object(self.guard, "_get_daily_trade_count", AsyncMock(return_value=999)):
+        with patch.object(
+            self.guard, "_get_daily_trade_count", AsyncMock(return_value=999)
+        ):
             approved, reason = await self.guard.pre_trade_check(self.request, "user-1")
 
         self.assertFalse(approved)
@@ -245,7 +247,9 @@ class TestRejectIsVisible(unittest.IsolatedAsyncioTestCase):
 
     async def test_position_limit_rejection_notifies(self):
         notify = self._patch_notify()
-        with patch.object(self.guard, "_get_daily_trade_count", AsyncMock(return_value=0)):
+        with patch.object(
+            self.guard, "_get_daily_trade_count", AsyncMock(return_value=0)
+        ):
             with patch.object(
                 self.guard,
                 "_check_position_limit",
@@ -259,7 +263,9 @@ class TestRejectIsVisible(unittest.IsolatedAsyncioTestCase):
 
     async def test_drawdown_rejection_notifies(self):
         notify = self._patch_notify()
-        with patch.object(self.guard, "_get_daily_trade_count", AsyncMock(return_value=0)):
+        with patch.object(
+            self.guard, "_get_daily_trade_count", AsyncMock(return_value=0)
+        ):
             with patch.object(
                 self.guard, "_check_position_limit", AsyncMock(return_value=(True, ""))
             ):
@@ -268,7 +274,9 @@ class TestRejectIsVisible(unittest.IsolatedAsyncioTestCase):
                     "_check_drawdown",
                     AsyncMock(return_value=(False, "日内回撤 8.0% 超过上限 5%")),
                 ):
-                    approved, _ = await self.guard.pre_trade_check(self.request, "user-1")
+                    approved, _ = await self.guard.pre_trade_check(
+                        self.request, "user-1"
+                    )
 
         self.assertFalse(approved)
         notify.assert_awaited_once()
@@ -276,14 +284,18 @@ class TestRejectIsVisible(unittest.IsolatedAsyncioTestCase):
 
     async def test_approved_order_does_not_notify(self):
         notify = self._patch_notify()
-        with patch.object(self.guard, "_get_daily_trade_count", AsyncMock(return_value=0)):
+        with patch.object(
+            self.guard, "_get_daily_trade_count", AsyncMock(return_value=0)
+        ):
             with patch.object(
                 self.guard, "_check_position_limit", AsyncMock(return_value=(True, ""))
             ):
                 with patch.object(
                     self.guard, "_check_drawdown", AsyncMock(return_value=(True, ""))
                 ):
-                    approved, _ = await self.guard.pre_trade_check(self.request, "user-1")
+                    approved, _ = await self.guard.pre_trade_check(
+                        self.request, "user-1"
+                    )
 
         self.assertTrue(approved)
         notify.assert_not_awaited()
@@ -291,9 +303,13 @@ class TestRejectIsVisible(unittest.IsolatedAsyncioTestCase):
     async def test_notification_failure_does_not_flip_the_decision(self):
         """通知是旁路，不是判定的一部分：投递炸了也必须返回「拒绝」。"""
         self._patch_notify(error=RuntimeError("redis down"))
-        with patch.object(self.guard, "_get_daily_trade_count", AsyncMock(return_value=999)):
+        with patch.object(
+            self.guard, "_get_daily_trade_count", AsyncMock(return_value=999)
+        ):
             with self.assertLogs("apps.riskguard.guard", level="ERROR"):
-                approved, reason = await self.guard.pre_trade_check(self.request, "user-1")
+                approved, reason = await self.guard.pre_trade_check(
+                    self.request, "user-1"
+                )
 
         self.assertFalse(approved)
         self.assertIn("交易次数", reason)
@@ -310,9 +326,10 @@ class TestRejectIsVisible(unittest.IsolatedAsyncioTestCase):
         `_reject` 里那条 except 是为了「通知炸了也不改判定」；这里反向确认它没有
         把「无接收人」误当成异常路径吞掉——那种沉默正是本单元要消灭的。
         """
-        with patch("apps.trading.alerts._persist") as persist, patch(
-            "apps.trading.alerts._publish"
-        ) as publish:
+        with (
+            patch("apps.trading.alerts._persist") as persist,
+            patch("apps.trading.alerts._publish") as publish,
+        ):
             with self.assertLogs("apps.trading.alerts", level="ERROR"):
                 approved, reason = await self.guard._reject(None, "原始原因")
 

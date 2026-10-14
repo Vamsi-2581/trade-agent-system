@@ -4,16 +4,19 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('backtest', '0010_add_celery_task_id_to_backtest_result'),
+        ("backtest", "0010_add_celery_task_id_to_backtest_result"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='backtestresult',
-            name='cost_detail',
-            field=models.JSONField(blank=True, default=dict, help_text='回测成本明细 {"commission": x, "slippage": y, "funding": z}'),
+            model_name="backtestresult",
+            name="cost_detail",
+            field=models.JSONField(
+                blank=True,
+                default=dict,
+                help_text='回测成本明细 {"commission": x, "slippage": y, "funding": z}',
+            ),
         ),
         # 说明：此 AlterField 非 P0 设计，而是 makemigrations 检测到代码模型
         # （BacktestTrade 未显式声明 id → Django 默认 BigAutoField）与迁移历史
@@ -22,8 +25,10 @@ class Migration(migrations.Migration):
         # 成 UUID。此处保留以让迁移链与代码一致，非 P0 新增行为，也不改动
         # 运行期主键类型（数据库实际列本就由运行模型决定）。
         migrations.AlterField(
-            model_name='backtesttrade',
-            name='id',
-            field=models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID'),
+            model_name="backtesttrade",
+            name="id",
+            field=models.BigAutoField(
+                auto_created=True, primary_key=True, serialize=False, verbose_name="ID"
+            ),
         ),
     ]

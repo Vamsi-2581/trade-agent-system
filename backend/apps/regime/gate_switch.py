@@ -284,7 +284,8 @@ def confirmation(*, now: datetime | None = None) -> Confirmation:
         for strategy_id, code in plan.close_reasons.items()
     }
     desired = {
-        halt.strategy_scope(declaration.strategy_id) for declaration in plan.declarations
+        halt.strategy_scope(declaration.strategy_id)
+        for declaration in plan.declarations
     }
     live_scopes = list(
         HaltDeclaration.objects.filter(
@@ -430,10 +431,14 @@ def _declaration_line(data: Confirmation) -> str:
         f"本轮写/刷新 {data.declared} 条、解除 {data.closing} 条"
     )
     if data.closing_by_code:
-        line += "（" + "、".join(
-            f"{gate_close_reason_display(code)} {count} 条"
-            for code, count in data.closing_by_code
-        ) + "）"
+        line += (
+            "（"
+            + "、".join(
+                f"{gate_close_reason_display(code)} {count} 条"
+                for code, count in data.closing_by_code
+            )
+            + "）"
+        )
     return line
 
 
@@ -469,9 +474,7 @@ def _blocking_note(data: Confirmation) -> str:
             "与保命档同一取向）；阶段说清楚之后再敲一次本命令才会补上"
         )
     if data.blanket_hold:
-        return (
-            "它们已经不拦人了（档位本来就是 Shadow）；活行等保命档过去之后由下一轮自动对账"
-        )
+        return "它们已经不拦人了（档位本来就是 Shadow）；活行等保命档过去之后由下一轮自动对账"
     return (
         "它们已经不拦人了（档位本来就是 Shadow）；"
         "阶段说清楚之后再敲一次本命令会把声明表对干净"
@@ -565,7 +568,9 @@ def _render_body(data: Confirmation, *, closing: bool) -> str:
         lines.extend(_no_effect_lines(data))
     lines.append(_declaration_line(data))
     lines.extend(_orphan_line(data))
-    lines.append("操作：/regime gate on 打开（执行态） ／ /regime gate off 关掉（回到 Shadow）")
+    lines.append(
+        "操作：/regime gate on 打开（执行态） ／ /regime gate off 关掉（回到 Shadow）"
+    )
     return "\n".join(lines)
 
 
@@ -621,11 +626,7 @@ def closing_summary(data: Confirmation) -> str:
             f"人工关闭行情阶段 gate（回到 Shadow）：{why}；{_blocking_note(data)}；"
             "人工豁免不受影响（关闭是撤防，不收回人给的豁免）" + blanket
         )
-    tail = (
-        f"，其中 {data.orphan} 条对不出决策行、会原样留着"
-        if data.orphan
-        else ""
-    )
+    tail = f"，其中 {data.orphan} 条对不出决策行、会原样留着" if data.orphan else ""
     return (
         f"人工关闭行情阶段 gate（回到 Shadow）：此刻活着的策略档声明 "
         f"{data.live_declarations} 条按「行情阶段 gate 已回 Shadow」解除{tail}；"

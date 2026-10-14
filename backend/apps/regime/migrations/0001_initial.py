@@ -4,37 +4,81 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
-    dependencies = [
-    ]
+    dependencies = []
 
     operations = [
         migrations.CreateModel(
-            name='DailyCandle',
+            name="DailyCandle",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('symbol', models.CharField(max_length=32, verbose_name='标的')),
-                ('date', models.DateField(verbose_name='自然日（UTC 开盘日 = 北京时间同日）')),
-                ('open_time', models.DateTimeField(verbose_name='开盘时刻（UTC）')),
-                ('open', models.DecimalField(decimal_places=8, max_digits=20, verbose_name='开盘价')),
-                ('high', models.DecimalField(decimal_places=8, max_digits=20, verbose_name='最高价')),
-                ('low', models.DecimalField(decimal_places=8, max_digits=20, verbose_name='最低价')),
-                ('close', models.DecimalField(decimal_places=8, max_digits=20, verbose_name='收盘价')),
-                ('volume', models.DecimalField(decimal_places=8, max_digits=30, verbose_name='成交量（基础币）')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
-                ('updated_at', models.DateTimeField(auto_now=True, verbose_name='更新时间')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("symbol", models.CharField(max_length=32, verbose_name="标的")),
+                (
+                    "date",
+                    models.DateField(
+                        verbose_name="自然日（UTC 开盘日 = 北京时间同日）"
+                    ),
+                ),
+                ("open_time", models.DateTimeField(verbose_name="开盘时刻（UTC）")),
+                (
+                    "open",
+                    models.DecimalField(
+                        decimal_places=8, max_digits=20, verbose_name="开盘价"
+                    ),
+                ),
+                (
+                    "high",
+                    models.DecimalField(
+                        decimal_places=8, max_digits=20, verbose_name="最高价"
+                    ),
+                ),
+                (
+                    "low",
+                    models.DecimalField(
+                        decimal_places=8, max_digits=20, verbose_name="最低价"
+                    ),
+                ),
+                (
+                    "close",
+                    models.DecimalField(
+                        decimal_places=8, max_digits=20, verbose_name="收盘价"
+                    ),
+                ),
+                (
+                    "volume",
+                    models.DecimalField(
+                        decimal_places=8, max_digits=30, verbose_name="成交量（基础币）"
+                    ),
+                ),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
+                (
+                    "updated_at",
+                    models.DateTimeField(auto_now=True, verbose_name="更新时间"),
+                ),
             ],
             options={
-                'verbose_name': '日线（原始 OHLCV）',
-                'verbose_name_plural': '日线（原始 OHLCV）',
-                'db_table': 'regime_daily_candles',
-                'ordering': ['symbol', 'date'],
+                "verbose_name": "日线（原始 OHLCV）",
+                "verbose_name_plural": "日线（原始 OHLCV）",
+                "db_table": "regime_daily_candles",
+                "ordering": ["symbol", "date"],
             },
         ),
         migrations.AddConstraint(
-            model_name='dailycandle',
-            constraint=models.UniqueConstraint(fields=('symbol', 'date'), name='uniq_daily_candle_symbol_date'),
+            model_name="dailycandle",
+            constraint=models.UniqueConstraint(
+                fields=("symbol", "date"), name="uniq_daily_candle_symbol_date"
+            ),
         ),
     ]

@@ -95,7 +95,9 @@ def _event(
         impact=impact,
         halt_at=halt_at,
         resume_at=(
-            resume_at if resume_at is not None else max(halt_at, NOW) + timedelta(hours=1)
+            resume_at
+            if resume_at is not None
+            else max(halt_at, NOW) + timedelta(hours=1)
         ),
         status=status,
         created_by="tester",
@@ -150,7 +152,11 @@ class TestEventWindows(SimpleTestCase):
 
     def test_a_medium_impact_event_is_not_planned(self):
         """档位不是「高」的事件**不产生熔断**（ADR 0002 的两轴：档位那一轴才管熔断）。"""
-        event = _event("低影响事件", halt_at=NOW - timedelta(hours=1), impact=EventImpact.MEDIUM.value)
+        event = _event(
+            "低影响事件",
+            halt_at=NOW - timedelta(hours=1),
+            impact=EventImpact.MEDIUM.value,
+        )
         self.assertEqual(halt_sync._event_rows([event], NOW), [])
 
     def test_a_cancelled_event_is_not_planned(self):
@@ -189,14 +195,26 @@ class TestEventWindows(SimpleTestCase):
         时间——多拦是「用户眼里机制莫名在拦」，比一段有界的敞口难排查得多，而事件熔断
         又没有豁免通道。
         """
-        past = _event("刚过去的", halt_at=NOW - timedelta(hours=2), resume_at=NOW - timedelta(hours=1))
-        upcoming = _event("待开的", halt_at=NOW + timedelta(hours=1), resume_at=NOW + timedelta(hours=2))
+        past = _event(
+            "刚过去的",
+            halt_at=NOW - timedelta(hours=2),
+            resume_at=NOW - timedelta(hours=1),
+        )
+        upcoming = _event(
+            "待开的",
+            halt_at=NOW + timedelta(hours=1),
+            resume_at=NOW + timedelta(hours=2),
+        )
 
         rows = halt_sync._event_rows([past, upcoming], NOW)
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0].label, "待开的", "空隙期写的是**下一段**，不是刚结束的那段")
-        self.assertEqual(rows[0].opened_at, upcoming.halt_at, "窗口不许往前伸去盖住空隙")
+        self.assertEqual(
+            rows[0].label, "待开的", "空隙期写的是**下一段**，不是刚结束的那段"
+        )
+        self.assertEqual(
+            rows[0].opened_at, upcoming.halt_at, "窗口不许往前伸去盖住空隙"
+        )
 
     def test_the_resume_moment_is_already_out_of_the_window(self):
         """**截止那一刻已不再拦**（`halt.live_declarations` 的 `expires_at__gt` 同向）。
@@ -206,10 +224,14 @@ class TestEventWindows(SimpleTestCase):
         多出来的那一拍正好落在事件结果已经出来之后。
         """
         event = _event("正好到点", halt_at=NOW - timedelta(hours=1), resume_at=NOW)
-        self.assertEqual(halt_sync._event_rows([event], NOW), [], "取等号方向错了就是多拦一拍")
+        self.assertEqual(
+            halt_sync._event_rows([event], NOW), [], "取等号方向错了就是多拦一拍"
+        )
 
     def test_a_window_entirely_in_the_past_leaves_no_row(self):
-        event = _event("上周的", halt_at=NOW - timedelta(days=3), resume_at=NOW - timedelta(days=2))
+        event = _event(
+            "上周的", halt_at=NOW - timedelta(days=3), resume_at=NOW - timedelta(days=2)
+        )
         self.assertEqual(halt_sync._event_rows([event], NOW), [])
 
     def test_the_next_window_is_planned_before_it_opens(self):
@@ -286,7 +308,9 @@ class TestBlanketRow(SimpleTestCase):
 
     def test_a_high_vol_state_is_the_blanket_row(self):
         effective = NOW - timedelta(days=1)
-        rows = halt_sync._plan([], NOW, state=_state(BaseRegime.HIGH_VOL, effective_at=effective))
+        rows = halt_sync._plan(
+            [], NOW, state=_state(BaseRegime.HIGH_VOL, effective_at=effective)
+        )
 
         self.assertEqual(len(rows), 1)
         row = rows[0]
@@ -303,7 +327,9 @@ class TestBlanketRow(SimpleTestCase):
     def test_a_non_high_vol_state_writes_no_blanket_row(self):
         for regime in (BaseRegime.DOWNTREND, BaseRegime.UPTREND, BaseRegime.RANGE):
             with self.subTest(regime=regime):
-                rows = halt_sync._plan([], NOW, state=_state(regime, effective_at=NOW - timedelta(days=1)))
+                rows = halt_sync._plan(
+                    [], NOW, state=_state(regime, effective_at=NOW - timedelta(days=1))
+                )
                 self.assertEqual(rows, [])
 
     def test_a_cold_state_writes_no_blanket_row(self):
@@ -316,12 +342,18 @@ class TestBlanketRow(SimpleTestCase):
         正是「什么时候开始拦的」的唯一答案。宁可炸。
         """
         with self.assertRaises(RuntimeError):
-            halt_sync._plan([], NOW, state=_state(BaseRegime.HIGH_VOL, effective_at=None))
+            halt_sync._plan(
+                [], NOW, state=_state(BaseRegime.HIGH_VOL, effective_at=None)
+            )
 
     def test_the_blanket_row_joins_the_events_rather_than_replacing_them(self):
         """两层各占一把键（触发源不同），所以同时存在——用户眼里是一个集合。"""
         event = _event("FOMC", halt_at=NOW - timedelta(hours=1))
-        rows = halt_sync._plan([event], NOW, state=_state(BaseRegime.HIGH_VOL, effective_at=NOW - timedelta(days=1)))
+        rows = halt_sync._plan(
+            [event],
+            NOW,
+            state=_state(BaseRegime.HIGH_VOL, effective_at=NOW - timedelta(days=1)),
+        )
 
         self.assertEqual(
             _keys(rows),
@@ -361,7 +393,9 @@ class _SyncTestBase(TestCase):
             effective_regime=regime.value if hasattr(regime, "value") else regime,
         )
 
-    def _switch(self, kind: MechanismKind, mode: MechanismMode) -> RegimeMechanismSwitch:
+    def _switch(
+        self, kind: MechanismKind, mode: MechanismMode
+    ) -> RegimeMechanismSwitch:
         return RegimeMechanismSwitch.objects.create(
             kind=kind.value,
             from_mode=MechanismMode.SHADOW.value,
@@ -381,7 +415,9 @@ class TestSyncPersistence(_SyncTestBase):
         event = self._create_event()
         first = halt_sync.sync(now=self.AT)
 
-        self.assertEqual(first, {"created": 1, "updated": 0, "unchanged": 0, "closed": 0})
+        self.assertEqual(
+            first, {"created": 1, "updated": 0, "unchanged": 0, "closed": 0}
+        )
         row = HaltDeclaration.objects.get()
         self.assertEqual(row.trigger, HaltTrigger.EVENT.value)
         self.assertEqual(row.opened_at, event.halt_at)
@@ -393,7 +429,9 @@ class TestSyncPersistence(_SyncTestBase):
         self.assertEqual(row.actor_name, ACTOR_NAME)
 
         second = halt_sync.sync(now=self.AT)
-        self.assertEqual(second, {"created": 0, "updated": 0, "unchanged": 1, "closed": 0})
+        self.assertEqual(
+            second, {"created": 0, "updated": 0, "unchanged": 1, "closed": 0}
+        )
 
     def test_the_row_is_rewritten_in_place_when_the_event_moves(self):
         """改期 → **原地改写**，不关一行再开一行。
@@ -411,7 +449,9 @@ class TestSyncPersistence(_SyncTestBase):
         summary = halt_sync.sync(now=self.AT)
         after = HaltDeclaration.objects.get()
 
-        self.assertEqual(summary, {"created": 0, "updated": 1, "unchanged": 0, "closed": 0})
+        self.assertEqual(
+            summary, {"created": 0, "updated": 1, "unchanged": 0, "closed": 0}
+        )
         self.assertEqual(after.pk, before.pk, "同一把键上只能有一行活着——原地改写")
         self.assertEqual(after.expires_at, NOW + timedelta(hours=5))
 
@@ -422,7 +462,7 @@ class TestSyncPersistence(_SyncTestBase):
 
         于是这一行记的是「这个源此刻的态度」：正在拦就是当前这段，没在拦就是**下一段**。
         """
-        early = self._create_event(
+        _early = self._create_event(
             "早的", halt_at=NOW - timedelta(hours=2), resume_at=NOW + timedelta(hours=1)
         )
         later = self._create_event(
@@ -441,7 +481,9 @@ class TestSyncPersistence(_SyncTestBase):
         row = HaltDeclaration.objects.get()
         self.assertEqual(row.label, "晚的")
         self.assertEqual(row.opened_at, later.halt_at)
-        self.assertEqual(halt.live_declarations(now=NOW + timedelta(hours=1, minutes=30)), [])
+        self.assertEqual(
+            halt.live_declarations(now=NOW + timedelta(hours=1, minutes=30)), []
+        )
         # ↑ 空隙期不拦：这一条与「提前写」是同一次改写的两面，缺一条就说不清代价。
 
         self.assertEqual(
@@ -470,7 +512,9 @@ class TestSyncPersistence(_SyncTestBase):
         event.save(update_fields=["status"])
         halt_sync.sync(now=self.AT)
 
-        self.assertEqual(HaltDeclaration.objects.get().closed_reason, CLOSE_REASON_EVENT_CANCELLED)
+        self.assertEqual(
+            HaltDeclaration.objects.get().closed_reason, CLOSE_REASON_EVENT_CANCELLED
+        )
 
     def test_a_downgraded_event_is_a_different_close_reason_again(self):
         """改档（高 → 中）之后不再覆盖此刻。四个码按「先看事实自己，再看是不是有人撤了它」
@@ -483,7 +527,9 @@ class TestSyncPersistence(_SyncTestBase):
         event.save(update_fields=["impact"])
         halt_sync.sync(now=self.AT)
 
-        self.assertEqual(HaltDeclaration.objects.get().closed_reason, CLOSE_REASON_NO_LONGER_COVERS)
+        self.assertEqual(
+            HaltDeclaration.objects.get().closed_reason, CLOSE_REASON_NO_LONGER_COVERS
+        )
 
     def test_the_blanket_row_appears_and_leaves_with_the_phase(self):
         self._judge(BaseRegime.HIGH_VOL, effective_at=NOW - timedelta(days=1))
@@ -499,7 +545,9 @@ class TestSyncPersistence(_SyncTestBase):
         halt_sync.sync(now=self.AT)
 
         self.assertEqual(HaltDeclaration.objects.count(), 1)
-        self.assertEqual(HaltDeclaration.objects.get().closed_reason, CLOSE_REASON_REGIME_LEFT)
+        self.assertEqual(
+            HaltDeclaration.objects.get().closed_reason, CLOSE_REASON_REGIME_LEFT
+        )
 
     def test_a_deactivation_row_is_left_alone(self):
         """`DEACTIVATION` 的行归第③段（`REGIME_GATE` 管辖），本模块**算不出**它的期望值。
@@ -538,7 +586,9 @@ class TestSyncWritesBeforeTheSwitchIsOn(_SyncTestBase):
 
         self.assertEqual(HaltDeclaration.objects.count(), 1)
         self.assertEqual(halt.live_declarations(now=self.AT).__len__(), 1, "行是活的")
-        self.assertEqual(halt.blocking_declarations(now=self.AT), [], "但开关关着，不拦")
+        self.assertEqual(
+            halt.blocking_declarations(now=self.AT), [], "但开关关着，不拦"
+        )
         self.assertEqual(halt.block_reason("BTC/USDT", now=self.AT), "")
 
     def test_flipping_the_switch_on_mid_window_blocks_immediately(self):
@@ -591,9 +641,13 @@ class TestTheGateRound(_SyncTestBase):
             )
         )
 
-        summary = halt_sync.sync(now=self.AT, gate_plan=plan, actor_name=GATE_ACTOR_NAME)
+        summary = halt_sync.sync(
+            now=self.AT, gate_plan=plan, actor_name=GATE_ACTOR_NAME
+        )
 
-        self.assertEqual(summary, {"created": 1, "updated": 0, "unchanged": 0, "closed": 0})
+        self.assertEqual(
+            summary, {"created": 1, "updated": 0, "unchanged": 0, "closed": 0}
+        )
         row = HaltDeclaration.objects.get()
         self.assertEqual(row.trigger, HaltTrigger.DEACTIVATION.value)
         self.assertEqual(row.scope, halt.strategy_scope("s-1"))
@@ -606,7 +660,9 @@ class TestTheGateRound(_SyncTestBase):
         self.assertNotEqual(GATE_ACTOR_NAME, ACTOR_NAME)
 
         again = halt_sync.sync(now=self.AT, gate_plan=plan, actor_name=GATE_ACTOR_NAME)
-        self.assertEqual(again, {"created": 0, "updated": 0, "unchanged": 1, "closed": 0})
+        self.assertEqual(
+            again, {"created": 0, "updated": 0, "unchanged": 1, "closed": 0}
+        )
 
     def test_a_gate_round_leaves_the_event_and_blanket_rows_alone(self):
         """本轮的 `sources` 只有 `DEACTIVATION`：另外两档的行既不是「计划里没有」，也不是
@@ -615,7 +671,9 @@ class TestTheGateRound(_SyncTestBase):
         self._create_event()
         self._judge(BaseRegime.HIGH_VOL, effective_at=NOW - timedelta(days=1))
         halt_sync.sync(now=self.AT)
-        self.assertEqual(HaltDeclaration.objects.filter(closed_at__isnull=True).count(), 2)
+        self.assertEqual(
+            HaltDeclaration.objects.filter(closed_at__isnull=True).count(), 2
+        )
 
         plan = gate.GatePlan(
             declarations=(
@@ -628,10 +686,16 @@ class TestTheGateRound(_SyncTestBase):
             ),
             close_reasons={"s-9": gate.CLOSE_BECAME_FIT},
         )
-        summary = halt_sync.sync(now=self.AT, gate_plan=plan, actor_name=GATE_ACTOR_NAME)
+        summary = halt_sync.sync(
+            now=self.AT, gate_plan=plan, actor_name=GATE_ACTOR_NAME
+        )
 
-        self.assertEqual(summary, {"created": 1, "updated": 0, "unchanged": 0, "closed": 0})
-        self.assertEqual(HaltDeclaration.objects.filter(closed_at__isnull=True).count(), 3)
+        self.assertEqual(
+            summary, {"created": 1, "updated": 0, "unchanged": 0, "closed": 0}
+        )
+        self.assertEqual(
+            HaltDeclaration.objects.filter(closed_at__isnull=True).count(), 3
+        )
         # 事件与保命档那两行连字段都没被碰过（`_rewrite` 的「没变化就不写」）。
         self.assertEqual(
             HaltDeclaration.objects.filter(
@@ -653,9 +717,13 @@ class TestTheGateRound(_SyncTestBase):
         row = self._live_deactivation_row(sid)
         plan = gate.GatePlan(close_reasons={sid: gate.CLOSE_BECAME_FIT})
 
-        summary = halt_sync.sync(now=self.AT, gate_plan=plan, actor_name=GATE_ACTOR_NAME)
+        summary = halt_sync.sync(
+            now=self.AT, gate_plan=plan, actor_name=GATE_ACTOR_NAME
+        )
 
-        self.assertEqual(summary, {"created": 0, "updated": 0, "unchanged": 0, "closed": 1})
+        self.assertEqual(
+            summary, {"created": 0, "updated": 0, "unchanged": 0, "closed": 1}
+        )
         row.refresh_from_db()
         self.assertEqual(row.closed_at, self.AT)
         self.assertEqual(row.closed_reason, gate.CLOSE_BECAME_FIT)

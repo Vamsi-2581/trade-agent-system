@@ -97,7 +97,9 @@ def _patch_llm(*responses, plain_chat=""):
 
 
 def _msg(text="创建策略"):
-    return AgentMessage(sender="user", recipient="test_fab_agent", payload={"text": text})
+    return AgentMessage(
+        sender="user", recipient="test_fab_agent", payload={"text": text}
+    )
 
 
 FABRICATED_SUMMARY = (
@@ -192,7 +194,9 @@ def test_claims_unwritten_file_no_claim():
 def test_claims_unwritten_file_missing_file():
     assert BaseAgent._claims_unwritten_file(f"`{NEVER_WRITTEN}` 已写入") is True
     assert BaseAgent._claims_unwritten_file(f"已写入 {NEVER_WRITTEN}") is True
-    assert BaseAgent._claims_unwritten_file("/nonexistent/abs_path_xyz.py 已生成") is True
+    assert (
+        BaseAgent._claims_unwritten_file("/nonexistent/abs_path_xyz.py 已生成") is True
+    )
 
 
 def test_claims_unwritten_file_existing_file(tmp_path, monkeypatch):

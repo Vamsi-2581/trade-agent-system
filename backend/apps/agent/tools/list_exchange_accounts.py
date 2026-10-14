@@ -34,7 +34,7 @@ def _query_exchange_accounts(user_id: str, filters: dict) -> tuple[list[dict], i
 
     # 尝试转换为 UUID
     try:
-        user_uuid = uuid.UUID(str(user_id))
+        _user_uuid = uuid.UUID(str(user_id))
         # ExchangeAccount 没有 user 字段，返回所有账户（未来可扩展为 user 关联）
         queryset = ExchangeAccount.objects.all()
     except (ValueError, TypeError):
@@ -59,14 +59,16 @@ def _query_exchange_accounts(user_id: str, filters: dict) -> tuple[list[dict], i
     # 转换为字典列表（脱敏：不返回 api_key_enc/api_secret_enc）
     results = []
     for obj in queryset:
-        results.append({
-            "id": str(obj.id),  # UUID → 字符串（完整）
-            "exchange": obj.exchange,
-            "label": obj.label,
-            "is_active": obj.is_active,
-            "testnet": obj.testnet,
-            "created_at": obj.created_at.isoformat(),  # datetime → ISO 8601
-        })
+        results.append(
+            {
+                "id": str(obj.id),  # UUID → 字符串（完整）
+                "exchange": obj.exchange,
+                "label": obj.label,
+                "is_active": obj.is_active,
+                "testnet": obj.testnet,
+                "created_at": obj.created_at.isoformat(),  # datetime → ISO 8601
+            }
+        )
 
     return results, total
 
@@ -150,5 +152,7 @@ class ListExchangeAccountsTool(BaseTool):
                 },
             )
         except Exception as e:
-            logger.error("[ListExchangeAccountsTool] query failed: %s", e, exc_info=True)
+            logger.error(
+                "[ListExchangeAccountsTool] query failed: %s", e, exc_info=True
+            )
             return ToolResult(success=False, error=f"查询失败: {e}")

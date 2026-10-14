@@ -183,7 +183,10 @@ class TestBacktestResultModel(TestCase):
 
 def test_serializer_includes_metrics_field():
     """BacktestResultSerializer and BacktestDetailSerializer must include metrics field."""
-    from apps.backtest.serializers import BacktestResultSerializer, BacktestDetailSerializer
+    from apps.backtest.serializers import (
+        BacktestResultSerializer,
+        BacktestDetailSerializer,
+    )
 
     assert "metrics" in BacktestResultSerializer.Meta.fields
     assert "metrics" in BacktestDetailSerializer.Meta.fields
@@ -196,7 +199,9 @@ def test_grouped_list_returns_groups():
     from django.contrib.auth import get_user_model
 
     User = get_user_model()
-    user = User.objects.create_user(email="test@example.com", username="testuser", password="testpass123")
+    user = User.objects.create_user(
+        email="test@example.com", username="testuser", password="testpass123"
+    )
     client = APIClient()
     client.force_authenticate(user=user)
 
@@ -221,25 +226,50 @@ def test_grouped_list_grid_search_group():
     from datetime import date, timedelta
 
     User = get_user_model()
-    user = User.objects.create_user(email="test@example.com", username="testuser", password="testpass123")
-    strategy = Strategy.objects.create(name="TestStrategy", code_path="/test", git_commit_hash="abc123")
-    job = GridSearchJob.objects.create(
-        strategy=strategy, symbol="BTC/USDT", timeframe="1h",
-        start_date=date.today() - timedelta(days=30), end_date=date.today(),
-        initial_capital=10000, user=user, search_config={"parameters": {}},
+    user = User.objects.create_user(
+        email="test@example.com", username="testuser", password="testpass123"
     )
-    r1 = BacktestResult.objects.create(
-        strategy=strategy, user=user, symbol="BTC/USDT", timeframe="1h",
-        start_date=date.today() - timedelta(days=30), end_date=date.today(),
-        initial_capital=10000, final_capital=11000, total_return_pct=10.0,
-        sharpe_ratio=1.5, grid_search_id=job.id, is_grid_search=True,
+    strategy = Strategy.objects.create(
+        name="TestStrategy", code_path="/test", git_commit_hash="abc123"
+    )
+    job = GridSearchJob.objects.create(
+        strategy=strategy,
+        symbol="BTC/USDT",
+        timeframe="1h",
+        start_date=date.today() - timedelta(days=30),
+        end_date=date.today(),
+        initial_capital=10000,
+        user=user,
+        search_config={"parameters": {}},
+    )
+    _r1 = BacktestResult.objects.create(
+        strategy=strategy,
+        user=user,
+        symbol="BTC/USDT",
+        timeframe="1h",
+        start_date=date.today() - timedelta(days=30),
+        end_date=date.today(),
+        initial_capital=10000,
+        final_capital=11000,
+        total_return_pct=10.0,
+        sharpe_ratio=1.5,
+        grid_search_id=job.id,
+        is_grid_search=True,
         parameters={"period": 20},
     )
-    r2 = BacktestResult.objects.create(
-        strategy=strategy, user=user, symbol="BTC/USDT", timeframe="1h",
-        start_date=date.today() - timedelta(days=30), end_date=date.today(),
-        initial_capital=10000, final_capital=10500, total_return_pct=5.0,
-        sharpe_ratio=1.0, grid_search_id=job.id, is_grid_search=True,
+    _r2 = BacktestResult.objects.create(
+        strategy=strategy,
+        user=user,
+        symbol="BTC/USDT",
+        timeframe="1h",
+        start_date=date.today() - timedelta(days=30),
+        end_date=date.today(),
+        initial_capital=10000,
+        final_capital=10500,
+        total_return_pct=5.0,
+        sharpe_ratio=1.0,
+        grid_search_id=job.id,
+        is_grid_search=True,
         parameters={"period": 26},
     )
 
@@ -270,13 +300,24 @@ def test_grouped_list_single_backtest():
     from datetime import date, timedelta
 
     User = get_user_model()
-    user = User.objects.create_user(email="test@example.com", username="testuser", password="testpass123")
-    strategy = Strategy.objects.create(name="SingleStrategy", code_path="/test", git_commit_hash="abc123")
+    user = User.objects.create_user(
+        email="test@example.com", username="testuser", password="testpass123"
+    )
+    strategy = Strategy.objects.create(
+        name="SingleStrategy", code_path="/test", git_commit_hash="abc123"
+    )
     BacktestResult.objects.create(
-        strategy=strategy, user=user, symbol="ETH/USDT", timeframe="4h",
-        start_date=date.today() - timedelta(days=30), end_date=date.today(),
-        initial_capital=10000, final_capital=10800, total_return_pct=8.0,
-        sharpe_ratio=1.2, is_grid_search=False,
+        strategy=strategy,
+        user=user,
+        symbol="ETH/USDT",
+        timeframe="4h",
+        start_date=date.today() - timedelta(days=30),
+        end_date=date.today(),
+        initial_capital=10000,
+        final_capital=10800,
+        total_return_pct=8.0,
+        sharpe_ratio=1.2,
+        is_grid_search=False,
         parameters={"rsi_period": 14},
     )
 

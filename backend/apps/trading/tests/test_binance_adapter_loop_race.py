@@ -50,7 +50,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     """
 
     protocol_version = "HTTP/1.1"  # keep-alive：连接会跨 loop 复用（生产即如此）
-    TIME_DELAY = 0.2   # 拉长重建窗口，把线上数百毫秒的往返放大成确定性
+    TIME_DELAY = 0.2  # 拉长重建窗口，把线上数百毫秒的往返放大成确定性
     POSITION_DELAY = 0.03
 
     def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler 接口
@@ -93,8 +93,8 @@ class TestSharedAdapterAcrossLoops(SimpleTestCase):
         self._serve()
         adapter = self._adapter()
 
-        maker_loop: dict[int, object] = {}   # id(client) → 造它的 loop
-        cross_loop: list[str] = []           # 发起 loop ≠ 客户端所属 loop 的请求
+        maker_loop: dict[int, object] = {}  # id(client) → 造它的 loop
+        cross_loop: list[str] = []  # 发起 loop ≠ 客户端所属 loop 的请求
         errors: list[str] = []
         rebuilds: list[object] = []
 
@@ -126,9 +126,7 @@ class TestSharedAdapterAcrossLoops(SimpleTestCase):
         BinanceAdapter._create_client = traced_create
         self.addCleanup(lambda: setattr(httpx.AsyncClient, "__init__", real_init))
         self.addCleanup(lambda: setattr(httpx.AsyncClient, "get", real_get))
-        self.addCleanup(
-            lambda: setattr(BinanceAdapter, "_create_client", real_create)
-        )
+        self.addCleanup(lambda: setattr(BinanceAdapter, "_create_client", real_create))
 
         # 预置一个「由别的 loop 造的」客户端：这是线上并发那一刻的形态（持有者既不是 A
         # 也不是 B）。修复前它让两个 loop **同时**判自己不是持有者、同时进入重建路径，
@@ -167,7 +165,9 @@ class TestSharedAdapterAcrossLoops(SimpleTestCase):
             t.join(timeout=120)
 
         # 症状：用户看到的那条报错
-        self.assertEqual(errors, [], "不得出现跨 loop 报错（持仓同步 fail-loud 的 reason）")
+        self.assertEqual(
+            errors, [], "不得出现跨 loop 报错（持仓同步 fail-loud 的 reason）"
+        )
         # 根因：请求落在了别的 loop 造的客户端上
         self.assertEqual(
             cross_loop,
@@ -176,5 +176,7 @@ class TestSharedAdapterAcrossLoops(SimpleTestCase):
         )
         # 重建必须收敛到「每 loop 一次」，而不是随请求数线性增长（线上 = 每个请求都刷）
         self.assertLessEqual(
-            len(rebuilds), 4, f"客户端重建不收敛：{len(rebuilds)} 次 / {2 * rounds} 个请求"
+            len(rebuilds),
+            4,
+            f"客户端重建不收敛：{len(rebuilds)} 次 / {2 * rounds} 个请求",
         )

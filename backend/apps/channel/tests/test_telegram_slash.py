@@ -112,11 +112,15 @@ class TestTheFallbackFilterAdmitsUnregisteredCommands:
         assert not (filters.TEXT & ~filters.COMMAND).check_update(update)
 
     def test_ordinary_text_still_passes(self):
-        assert _MESSAGE_FILTER.check_update(_update("帮我看下现在的行情", command=False))
+        assert _MESSAGE_FILTER.check_update(
+            _update("帮我看下现在的行情", command=False)
+        )
 
     def test_a_slash_that_is_only_a_path_is_not_a_command(self):
         # 「/usr/local 这个路径」没有 bot_command 实体——它本来就该照常走 Agent。
-        assert _MESSAGE_FILTER.check_update(_update("/usr/local 这个路径", command=False))
+        assert _MESSAGE_FILTER.check_update(
+            _update("/usr/local 这个路径", command=False)
+        )
 
 
 class TestTheRegisteredHandlersSplitTheTraffic:
@@ -141,9 +145,10 @@ class TestTheRegisteredHandlersSplitTheTraffic:
     def test_the_agent_side_commands_fall_through_to_the_pipeline(self):
         assert self._handler_name("/new") == "_on_message"
         assert self._handler_name("/cancel") == "_on_message"
-        assert self._handler_name(
-            "/event add 高 全市场 2026-09-25 20:30 FOMC"
-        ) == "_on_message"
+        assert (
+            self._handler_name("/event add 高 全市场 2026-09-25 20:30 FOMC")
+            == "_on_message"
+        )
 
     def test_an_unknown_command_also_falls_through(self):
         # 未知命令要让 Agent 回一句「未知命令: /halt」并列出可用命令；在 Telegram 这一层

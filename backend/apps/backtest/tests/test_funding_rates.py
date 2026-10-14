@@ -1,10 +1,12 @@
 """Ticket 002: FundingRateRecord model + sync task idempotency."""
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from django.db import IntegrityError
+from django.test import override_settings
 from django.utils import timezone as dj_tz
 
 from apps.backtest.models import FundingRateRecord
@@ -67,13 +69,13 @@ class TestSyncFundingRates:
         fetched = [
             {"dt": _dt(2024, 1, 9, 16), "rate": 0.0002},
         ]
-        with patch.object(bt, "_fetch_funding_history", new=AsyncMock(return_value=fetched)) as m:
+        with patch.object(
+            bt, "_fetch_funding_history", new=AsyncMock(return_value=fetched)
+        ) as m:
             result = bt.sync_funding_rates(["BTC/USDT:USDT"])
 
         # since = latest + 1ms
-        assert m.call_args.args[2] == int(
-            _dt(2024, 1, 1, 8).timestamp() * 1000
-        ) + 1
+        assert m.call_args.args[2] == int(_dt(2024, 1, 1, 8).timestamp() * 1000) + 1
         assert result["new_records"] == 1
         assert FundingRateRecord.objects.filter(rate=0.0002).exists()
 
@@ -82,7 +84,9 @@ class TestSyncFundingRates:
         from apps.backtest import tasks as bt
 
         fetched = [{"dt": _dt(2024, 1, 9, 16), "rate": 0.0002}]
-        with patch.object(bt, "_fetch_funding_history", new=AsyncMock(return_value=fetched)):
+        with patch.object(
+            bt, "_fetch_funding_history", new=AsyncMock(return_value=fetched)
+        ):
             bt.sync_funding_rates(["BTC/USDT:USDT"])
             result = bt.sync_funding_rates(["BTC/USDT:USDT"])
 
@@ -94,7 +98,9 @@ class TestSyncFundingRates:
         from apps.backtest import tasks as bt
 
         fetched = [{"dt": _dt(2024, 1, 1, 0), "rate": 0.0001}]
-        with patch.object(bt, "_fetch_funding_history", new=AsyncMock(return_value=fetched)) as m:
+        with patch.object(
+            bt, "_fetch_funding_history", new=AsyncMock(return_value=fetched)
+        ) as m:
             bt.sync_funding_rates(["ETH/USDT:USDT"])
 
         assert m.call_args.args[2] is None
@@ -105,7 +111,9 @@ class TestSyncFundingRates:
         from apps.backtest import tasks as bt
 
         fetched = [{"dt": _dt(2024, 1, 9, 16), "rate": 0.0002}]
-        with patch.object(bt, "_fetch_funding_history", new=AsyncMock(return_value=fetched)):
+        with patch.object(
+            bt, "_fetch_funding_history", new=AsyncMock(return_value=fetched)
+        ):
             bt.sync_funding_rates(["BTC/USDT:USDT"])
 
         rec = FundingRateRecord.objects.get(symbol="BTC/USDT:USDT")
@@ -225,19 +233,63 @@ class TestSlippageColumnRoundTrip:
             ],
         }
         result = await save_backtest_result(
-                strategy_id=str(strategy.id),
-                symbol="BTC/USDT",
-                timeframe="1h",
-                start_date="2024-01-01",
-                end_date="2024-01-02",
-                initial_capital=10000.0,
-                parameters={},
-                stats=stats,
+            strategy_id=str(strategy.id),
+            symbol="BTC/USDT",
+            timeframe="1h",
+            start_date="2024-01-01",
+            end_date="2024-01-02",
+            initial_capital=10000.0,
+            parameters={},
+            stats=stats,
         )
         assert result["trade_count"] == 1
         trade = BacktestTrade.objects.get(backtest_id=result["result_id"])
         assert float(trade.slippage) == pytest.approx(2.0)
         assert float(trade.commission) == pytest.approx(5.0)
+
+
+class TestFundingSyncProxyInjection:
+    """_fetch_all_symbols 必须与 _fetch_ohlcv_sync 一样注入 WEB_PROXY。
+
+    回归护栏：该路径曾漏注入代理 → 在需要代理出网的环境下 K 线能拉、资金费率
+    拉不到；而 sync_funding_rates 不检查失败、beat 也不告警，缺陷是静默的。
+    """
+
+    @staticmethod
+    def _options_passed_to_binance() -> dict:
+        from apps.backtest import tasks as bt
+
+        captured: dict = {}
+
+        class _FakeExchange:
+            async def close(self):
+                return None
+
+        def fake_binance(options=None, *args, **kwargs):
+            captured["options"] = options
+            return _FakeExchange()
+
+        # plans 为空 → 不进网络循环；只验证构造参数与 close() 收尾
+        with patch("ccxt.async_support.binance", side_effect=fake_binance):
+            asyncio.run(bt._fetch_all_symbols([]))
+
+        return captured["options"]
+
+    @override_settings(WEB_PROXY="http://host.docker.internal:7890")
+    def test_proxy_injected_when_configured(self):
+        options = self._options_passed_to_binance()
+        assert options["aiohttp_proxy"] == "http://host.docker.internal:7890"
+
+    @override_settings(WEB_PROXY="")
+    def test_no_proxy_key_when_unset(self):
+        options = self._options_passed_to_binance()
+        assert "aiohttp_proxy" not in options
+
+    @override_settings(WEB_PROXY="")
+    def test_rate_limit_still_enabled(self):
+        """注入代理不得挤掉既有的 enableRateLimit。"""
+        options = self._options_passed_to_binance()
+        assert options["enableRateLimit"] is True
 
 
 class TestBeatScheduleTimezoneIntent:

@@ -100,7 +100,7 @@ class FetchOHLCVTool(BaseTool):
 
             try:
                 # 降级 DSML 路径可能把 limit 传成字符串，转 int 再取上界
-                #（与 box_range 对数字参数的处理一致）
+                # （与 box_range 对数字参数的处理一致）
                 ohlcv = await ex.fetch_ohlcv(
                     symbol_normalized, timeframe, limit=min(int(limit), 500)
                 )

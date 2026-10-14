@@ -53,7 +53,9 @@ def _make_kline(ts: str, close: float) -> dict:
 def _ohlcv(n: int = 10) -> list[dict]:
     base = datetime(2024, 1, 1, 0, 0)
     return [
-        _make_kline(ts=datetime.isoformat(base.replace(hour=i)), close=42000.0 + i * 100)
+        _make_kline(
+            ts=datetime.isoformat(base.replace(hour=i)), close=42000.0 + i * 100
+        )
         for i in range(n)
     ]
 
@@ -116,7 +118,9 @@ class TestFundingSettlement:
         engine = _engine(ohlcv, funding_rates={T8: -0.0001})
         engine._process_signal(_buy_signal(float(ohlcv[1]["close"])), ohlcv[1])
         engine._settle_funding(ohlcv[8])
-        assert engine.cost_detail["funding"] == pytest.approx(-0.0001 * 42800.0, rel=1e-6)
+        assert engine.cost_detail["funding"] == pytest.approx(
+            -0.0001 * 42800.0, rel=1e-6
+        )
 
     def test_no_position_no_settlement(self):
         ohlcv = _ohlcv()
@@ -159,7 +163,11 @@ class TestFundingSettlement:
         engine._settle_funding(ohlcv[8])
         engine._settle_funding(ohlcv[16])
         # notional at each settlement bar's close
-        expected = float(qty * (Decimal(str(ohlcv[8]["close"])) + Decimal(str(ohlcv[16]["close"]))) * Decimal("0.0001"))
+        expected = float(
+            qty
+            * (Decimal(str(ohlcv[8]["close"])) + Decimal(str(ohlcv[16]["close"])))
+            * Decimal("0.0001")
+        )
         assert engine.cost_detail["funding"] == pytest.approx(expected, rel=1e-6)
 
     def test_missing_rate_logs_warning_not_zero(self, caplog):
@@ -169,7 +177,9 @@ class TestFundingSettlement:
         ohlcv = _ohlcv()
         engine = _engine(ohlcv, funding_rates={})  # no data at all
         engine._process_signal(_buy_signal(float(ohlcv[1]["close"])), ohlcv[1])
-        with caplog.at_level(logging.WARNING, logger="apps.strategy_engine.backtest_mode"):
+        with caplog.at_level(
+            logging.WARNING, logger="apps.strategy_engine.backtest_mode"
+        ):
             engine._settle_funding(ohlcv[8])
         assert engine.cost_detail["funding"] == 0.0
         assert any("funding" in r.message.lower() for r in caplog.records)
@@ -198,7 +208,9 @@ class TestFundingSettlement:
         ohlcv = _ohlcv()
         engine = _engine(ohlcv, funding_rates={"2024-01-01T03:00:00+00:00": 0.0001})
         engine._position = Decimal("1")
-        engine._settle_funding(_make_kline(ts="2024-01-01T03:00:00+00:00", close=42000.0))
+        engine._settle_funding(
+            _make_kline(ts="2024-01-01T03:00:00+00:00", close=42000.0)
+        )
         assert engine.cost_detail["funding"] == 0.0
 
     @pytest.mark.asyncio

@@ -172,9 +172,7 @@ class TestContract(SimpleTestCase):
         # 「哪一档是保命档」只能有一处判据（`deactivation.is_blanket`），日报这边不自己写
         # `regime == "high_vol"`。判错了不会报错，只会把抬升日渲染成一片「将解除」——
         # 那是「写下去没有复活路径」的那一类。所以把条目里的 slug 钉在那个判据上。
-        self.assertTrue(
-            deactivation.is_blanket(report._blanket_item("halt")["regime"])
-        )
+        self.assertTrue(deactivation.is_blanket(report._blanket_item("halt")["regime"]))
 
     def test_the_horizon_matches_the_slash_command(self):
         # 日报第③段与 `/event list` 回答的是同一个问题。天数一旦分成两个数，
@@ -212,7 +210,9 @@ class TestContract(SimpleTestCase):
             {"no_candles", "stale_candles", "empty_series", "undecidable"},
         )
         for slug in report._SKIP_DISPLAY:
-            self.assertEqual(report._SKIP_DISPLAY.get(slug, slug), report._SKIP_DISPLAY[slug])
+            self.assertEqual(
+                report._SKIP_DISPLAY.get(slug, slug), report._SKIP_DISPLAY[slug]
+            )
 
     def test_blocked_display_falls_back_to_the_raw_slug(self):
         # 推导层有三种收场，其中「还没有一代池化表」不在 `BLOCKED_DISPLAY` 里。两处都
@@ -221,7 +221,9 @@ class TestContract(SimpleTestCase):
         self.assertEqual(deactivation_run.SKIPPED_NO_GENERATION, "no_generation")
         self.assertIn(deactivation.BLOCKED_COLD_START, deactivation.BLOCKED_DISPLAY)
         self.assertIn(deactivation.BLOCKED_STALE_STATE, deactivation.BLOCKED_DISPLAY)
-        self.assertNotIn(deactivation_run.SKIPPED_NO_GENERATION, deactivation.BLOCKED_DISPLAY)
+        self.assertNotIn(
+            deactivation_run.SKIPPED_NO_GENERATION, deactivation.BLOCKED_DISPLAY
+        )
         self.assertTrue(
             deactivation.BLOCKED_DISPLAY.get(
                 deactivation_run.SKIPPED_NO_GENERATION,
@@ -248,7 +250,9 @@ class TestPureRendering(TestCase):
 
     def test_ready_is_true_the_moment_there_is_a_conclusion(self):
         self.assertTrue(
-            report._ready(concluded_payload(with_record=False), RUN_DAY, BEFORE_DEADLINE)
+            report._ready(
+                concluded_payload(with_record=False), RUN_DAY, BEFORE_DEADLINE
+            )
         )
 
     def test_ready_waits_out_a_conclusion_less_day(self):
@@ -374,7 +378,9 @@ class TestPureRendering(TestCase):
         body = "\n".join(report._switch_lines(now=NOW))
 
         self.assertEqual(body.count("无切换流水"), 3)  # 机制整体 + 另两个开关
-        self.assertIn(f"  事件熔断：执行态（最近一次生效 {format_business(NOW)}）", body)
+        self.assertIn(
+            f"  事件熔断：执行态（最近一次生效 {format_business(NOW)}）", body
+        )
         self.assertIn("机制当前档：Shadow（只记录，不执行）", body)
 
     def test_render_body_omits_the_change_section_when_it_is_empty(self):
@@ -396,7 +402,9 @@ class TestPureRendering(TestCase):
     def test_render_body_carries_the_horizon_from_config(self):
         sections = {name: "内容" for name in report.SECTIONS}
         body = report.render_body(sections, symbol=SYMBOL, run_day=RUN_DAY)
-        self.assertIn(f"【三、未来 {config.REPORT.event_horizon_days} 天的高影响事件】", body)
+        self.assertIn(
+            f"【三、未来 {config.REPORT.event_horizon_days} 天的高影响事件】", body
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -469,7 +477,9 @@ class TestTheDeclarationLine(TestCase):
 
         self.assertEqual(
             report._declaration_lines(now=NOW, regime=BaseRegime.HIGH_VOL.value),
-            ["停止声明：此刻 1 条在拦（保命档（高波动） 1 条；按生效中的阶段：高波动）"],
+            [
+                "停止声明：此刻 1 条在拦（保命档（高波动） 1 条；按生效中的阶段：高波动）"
+            ],
         )
 
     def test_nothing_at_all_is_a_statement_not_a_blank(self):
@@ -513,7 +523,9 @@ class TestTheDeclarationLine(TestCase):
         body = report._section_health(
             SYMBOL, {}, {"regime": BaseRegime.RANGE.value}, now=NOW
         )
-        self.assertIn("停止声明：此刻没有任何一层在拦（按生效中的阶段：箱体震荡）", body)
+        self.assertIn(
+            "停止声明：此刻没有任何一层在拦（按生效中的阶段：箱体震荡）", body
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -619,7 +631,10 @@ class TestTheCandidateSection(TestCase):
         _dropped(name="已经没人理的")
 
         lines = report._candidate_lines(now=NOW)
-        self.assertEqual(lines[0], "待人工处置的候选事件：1 条（**不产生任何熔断**，转正需人工重新给出时间/档位/作用域）")
+        self.assertEqual(
+            lines[0],
+            "待人工处置的候选事件：1 条（**不产生任何熔断**，转正需人工重新给出时间/档位/作用域）",
+        )
         self.assertIn(f"候选 #{pending.id} 还没人理的", lines[1])
         self.assertEqual(
             lines[2], "到期未确认而自动丢弃（近 14 天）：1 条——机制提过、没人处置"
@@ -641,19 +656,25 @@ class TestTheStructuredChange(SimpleTestCase):
     """做差与渲染都是纯函数：给出的两份 `by_regime` 都是普通字典。"""
 
     def test_a_new_strategy_in_a_layer_is_a_halt(self):
-        items = report.diff_regimes({"downtrend": _layer("s1")}, {"downtrend": _layer("s1", "s2")})
+        items = report.diff_regimes(
+            {"downtrend": _layer("s1")}, {"downtrend": _layer("s1", "s2")}
+        )
         self.assertEqual([i["kind"] for i in items], ["halt"])
         self.assertEqual([s["strategy_id"] for s in items[0]["strategies"]], ["s2"])
 
     def test_a_strategy_leaving_a_layer_is_a_release(self):
         # 「将解除」是第②段的一半，而它在决策表上永远不可能出现（那边的行只增不减）。
-        items = report.diff_regimes({"downtrend": _layer("s1", "s2")}, {"downtrend": _layer("s1")})
+        items = report.diff_regimes(
+            {"downtrend": _layer("s1", "s2")}, {"downtrend": _layer("s1")}
+        )
         self.assertEqual([i["kind"] for i in items], ["release"])
         self.assertEqual([s["strategy_id"] for s in items[0]["strategies"]], ["s2"])
 
     def test_moving_across_layers_is_two_facts_not_one(self):
         # 「它其实换了个阶段继续被停着」正是读的人要的判断，报成一件会掩盖它。
-        items = report.diff_regimes({"downtrend": _layer("s1")}, {"high_vol": _layer("s1")})
+        items = report.diff_regimes(
+            {"downtrend": _layer("s1")}, {"high_vol": _layer("s1")}
+        )
         self.assertEqual(
             {(i["kind"], i["regime"]) for i in items},
             {("release", "downtrend"), ("halt", "high_vol")},
@@ -661,7 +682,9 @@ class TestTheStructuredChange(SimpleTestCase):
 
     def test_no_movement_is_no_items(self):
         same = {"downtrend": _layer("s1", "s2")}
-        self.assertEqual(report.diff_regimes(same, {"downtrend": _layer("s2", "s1")}), [])
+        self.assertEqual(
+            report.diff_regimes(same, {"downtrend": _layer("s2", "s1")}), []
+        )
 
     def test_headline_names_the_layer_not_just_the_count(self):
         items = report.diff_regimes({}, {"downtrend": _layer("s1", "s2")})
@@ -718,7 +741,8 @@ class TestTheStructuredChange(SimpleTestCase):
             ("unchanged", "与 2026-09-21 的日报相比无变化"),
         ):
             self.assertEqual(
-                report.render_change({"status": status, "note": note, "items": []}), note
+                report.render_change({"status": status, "note": note, "items": []}),
+                note,
             )
         self.assertEqual(report.render_change(None), "")
 
@@ -802,7 +826,9 @@ class TestCropForOneUser(SimpleTestCase):
         )
         self.assertIn(
             "高波动",
-            report.crop_for(_report(landscape=landscape), {"s9"})[report.SECTION_CHANGE],
+            report.crop_for(_report(landscape=landscape), {"s9"})[
+                report.SECTION_CHANGE
+            ],
         )
 
     def test_the_other_four_sections_are_untouched(self):
@@ -854,7 +880,9 @@ class TestTheWrittenRow(TestCase):
         row = DailyReport.objects.get(symbol=SYMBOL, run_day=RUN_DAY)
         body = row.sections[report.SECTION_TODAY]
         # 「自明日 08:00 起生效」那句话的字面出处。
-        self.assertIn(report.format_business(business_midnight(RUN_DAY + timedelta(days=1))), body)
+        self.assertIn(
+            report.format_business(business_midnight(RUN_DAY + timedelta(days=1))), body
+        )
 
     def test_it_snapshots_the_days_suggestions(self):
         # Q3：`DeactivationDecision` 的行是原地更新的，所以「昨天说了什么」只能靠这份快照，
@@ -881,7 +909,10 @@ class TestTheWrittenRow(TestCase):
         missing = _new_id()
         self.assertEqual(report._strategy_names([missing]), {})
         report.write_daily_report(
-            concluded_payload(), derivation(suggestion(missing, "downtrend")), {}, now=NOW
+            concluded_payload(),
+            derivation(suggestion(missing, "downtrend")),
+            {},
+            now=NOW,
         )
         row = DailyReport.objects.get(symbol=SYMBOL, run_day=RUN_DAY)
         self.assertEqual(row.landscape["by_regime"]["downtrend"][0]["name"], "")
@@ -893,7 +924,10 @@ class TestTheWrittenRow(TestCase):
         # 判定行是 `(symbol, effective_at)` 唯一的，心跳的第二轮走 `get_or_create` 拿到的是
         # 同一行；`concluded_payload` 的工厂用的是 `create()`，再建一次会撞唯一约束。
         summary = report.write_daily_report(
-            concluded_payload(regime="uptrend", with_record=False), derivation(), {}, now=NOW
+            concluded_payload(regime="uptrend", with_record=False),
+            derivation(),
+            {},
+            now=NOW,
         )
         self.assertEqual(summary["outcome"], report.OUTCOME_KEPT)
         self.assertFalse(summary["written"])
@@ -982,11 +1016,16 @@ class TestTheWrittenRow(TestCase):
             landscape={"by_regime": {"downtrend": _layer("s_old")}},
         )
         report.write_daily_report(
-            concluded_payload(), derivation(suggestion(_new_id(), "downtrend")), {}, now=NOW
+            concluded_payload(),
+            derivation(suggestion(_new_id(), "downtrend")),
+            {},
+            now=NOW,
         )
         row = DailyReport.objects.get(symbol=SYMBOL, run_day=RUN_DAY)
         change = row.landscape[report.SECTION_CHANGE]
-        self.assertEqual(change["baseline_run_day"], (RUN_DAY - timedelta(days=3)).isoformat())
+        self.assertEqual(
+            change["baseline_run_day"], (RUN_DAY - timedelta(days=3)).isoformat()
+        )
         self.assertEqual(change["status"], "diff")
 
 
@@ -1217,7 +1256,9 @@ class TestTheExpiryLine(TestCase):
         at = next(i for i, line in enumerate(lines) if line.startswith("机制当前档："))
         self.assertTrue(lines[at + 1].startswith("出 Shadow"), lines[at : at + 2])
         # 而且要在三个开关之前：它说的是「机制整体」那一档的事，不是某一个开关的事。
-        switches = next(i for i, line in enumerate(lines) if line.startswith("三个开关"))
+        switches = next(
+            i for i, line in enumerate(lines) if line.startswith("三个开关")
+        )
         self.assertLess(at, switches)
 
 
@@ -1249,7 +1290,9 @@ class TestTheSelfFuseLine(TestCase):
         self.assertIn("regime.self_fuse", body)
 
     def test_no_back_record_at_all_says_so(self):
-        self.assertIn("自熔断：未触发过（切换流水里没有一条退回 Shadow 的记录）", self.health())
+        self.assertIn(
+            "自熔断：未触发过（切换流水里没有一条退回 Shadow 的记录）", self.health()
+        )
 
     def test_a_row_from_another_switch_is_not_a_back_at_all(self):
         """事件熔断被关掉写的也是 `to_mode=shadow` 的行——那不是机制退回过 Shadow。"""
@@ -1262,7 +1305,9 @@ class TestTheSelfFuseLine(TestCase):
             actor_name="alice",
             reason="关掉事件熔断",
         )
-        self.assertIn("自熔断：未触发过（切换流水里没有一条退回 Shadow 的记录）", self.health())
+        self.assertIn(
+            "自熔断：未触发过（切换流水里没有一条退回 Shadow 的记录）", self.health()
+        )
 
 
 class TestTheHealthSection(TestCase):

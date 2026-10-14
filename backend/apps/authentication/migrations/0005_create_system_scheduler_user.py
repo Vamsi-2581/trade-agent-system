@@ -6,6 +6,7 @@ def create_system_scheduler_user(apps, schema_editor):
     User = apps.get_model("authentication", "User")
     if not User.objects.filter(username="system_scheduler").exists():
         from django.contrib.auth.hashers import make_password
+
         user = User(
             username="system_scheduler",
             email="scheduler@tradeclaw.local",
@@ -27,5 +28,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunPython(create_system_scheduler_user, remove_system_scheduler_user),
+        migrations.RunPython(
+            create_system_scheduler_user, remove_system_scheduler_user
+        ),
     ]

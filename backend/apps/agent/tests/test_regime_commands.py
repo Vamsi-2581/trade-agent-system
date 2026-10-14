@@ -469,7 +469,10 @@ class TestTheCommandAgainstARealDatabase:
                 RegimeMechanismSwitch.objects.all().delete()
                 result = _run(_call(f"/regime {group} {word}"))
                 assert result.success, result.error
-                assert _only_row().to_mode == MechanismMode.EXECUTING.value, (group, word)
+                assert _only_row().to_mode == MechanismMode.EXECUTING.value, (
+                    group,
+                    word,
+                )
 
             for word in ("关", "关闭", "关掉", "close", "OFF"):
                 RegimeMechanismSwitch.objects.all().delete()
@@ -477,7 +480,10 @@ class TestTheCommandAgainstARealDatabase:
                 result = _run(_call(f"/regime {group} {word}"))
                 assert result.success, result.error
                 assert RegimeMechanismSwitch.objects.count() == 2, (group, word)
-                assert _latest_row().to_mode == MechanismMode.SHADOW.value, (group, word)
+                assert _latest_row().to_mode == MechanismMode.SHADOW.value, (
+                    group,
+                    word,
+                )
 
     def test_the_gate_reason_is_its_own_page_s_summary(self):
         # 流水里的原因与屏幕上读到的数是**同一次快照**（`gate_switch.page`）：各算一遍的话，
@@ -611,7 +617,9 @@ class TestTheExemptSubcommands:
 
     def test_granting_writes_one_row_whose_granter_is_the_person_who_typed_it(self):
         strategy = _strategy()
-        result = _run(_call("/regime exempt grant AlphaStem 下行趋势 回测里这个阶段还行"))
+        result = _run(
+            _call("/regime exempt grant AlphaStem 下行趋势 回测里这个阶段还行")
+        )
         assert result.success, result.error
         assert "已发出豁免 #" in result.data
         assert "要看现在的清单：/regime exempt" in result.data
@@ -741,7 +749,9 @@ class TestTheMechSubcommands:
     def test_exit_shows_the_page_then_writes_one_row(self):
         result = _run(_call("/regime mech exit"))
         assert result.success, result.error
-        assert MECH_PAGE_TITLE in result.data, "先回显体检页，再落流水（与另外两级同形）"
+        assert MECH_PAGE_TITLE in result.data, (
+            "先回显体检页，再落流水（与另外两级同形）"
+        )
         row = _only_row()
         assert row.kind == MechanismKind.MECHANISM.value
         assert row.from_mode == MechanismMode.SHADOW.value
@@ -872,7 +882,12 @@ class TestTheLabelSubcommands:
         _run(_call("/regime label add 2024-01-05 2024-01-20 下行趋势 某轮熊市"))
         expected = "\n".join(truth_run.roster_lines())
         # 组名的中英两个写法、加上动作的三个别名（裸的 `label` 就是清单本身）。
-        for text in ("/regime label", "/regime 标注", "/regime label list", "/regime 标注 清单"):
+        for text in (
+            "/regime label",
+            "/regime 标注",
+            "/regime label list",
+            "/regime 标注 清单",
+        ):
             result = _run(_call(text))
             assert result.success, result.error
             assert result.data == expected, text
@@ -882,7 +897,9 @@ class TestTheLabelSubcommands:
         assert "一致率" in expected, "清单底下要摆出①那一句（第 164 条的那条标准）"
 
     def test_add_records_who_what_and_when(self):
-        result = _run(_call("/regime label add 2024-01-05 2024-01-20 下行趋势 某轮熊市"))
+        result = _run(
+            _call("/regime label add 2024-01-05 2024-01-20 下行趋势 某轮熊市")
+        )
         assert result.success, result.error
         assert "已录入 #" in result.data
 

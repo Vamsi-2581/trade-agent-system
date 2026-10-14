@@ -234,7 +234,9 @@ def newest_entry(entries: Iterable[Entry]) -> Entry | None:
 
 #: 消息层认的档位。`NEVER_RAN` 不在其中，而 `LATE` 还要额外过一道旁证——理由见模块
 #: docstring 的「消息层只认三档」。**体检页照旧四档都印**：收窄的只是「喊人」。
-_ALERTABLE = frozenset({BeatProblem.UNSCHEDULED, BeatProblem.DISABLED, BeatProblem.LATE})
+_ALERTABLE = frozenset(
+    {BeatProblem.UNSCHEDULED, BeatProblem.DISABLED, BeatProblem.LATE}
+)
 
 
 def alerts(

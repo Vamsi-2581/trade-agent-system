@@ -50,7 +50,11 @@ def test_bnb_4h_100_does_not_return_tight_local_cluster():
     else:
         # 拒绝 4h 100 根这种"明显震荡"的数据也算正确（保守）
         # 关键是 reason 必须是粗筛/pivot/触碰类——而不是因为静默接受错误箱体
-        assert "上沿" in result["reason"] or "下沿" in result["reason"] or "宽度" in result["reason"]
+        assert (
+            "上沿" in result["reason"]
+            or "下沿" in result["reason"]
+            or "宽度" in result["reason"]
+        )
 
 
 def test_bnb_4h_100_with_tight_threshold_no_false_box():
@@ -83,9 +87,7 @@ def test_bnb_4h_100_with_min_width_pct_filters_tight():
     """min_width_pct 下限：能拦住所有宽度太小的候选。"""
     klines = _load_fixture("bnb_4h_100.json")
     # 不管什么 pct 上限，要求宽度至少 5%
-    result = detect_box_range(
-        klines=klines, max_width_pct=0.20, min_width_pct=0.05
-    )
+    result = detect_box_range(klines=klines, max_width_pct=0.20, min_width_pct=0.05)
     if result["is_ranging"]:
         assert result["box"]["width_pct"] >= 0.05
 

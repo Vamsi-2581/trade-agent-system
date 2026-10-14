@@ -205,9 +205,7 @@ class TestTheWordList(_Fixture):
         readopted = self.live_row(self.alpha)
         self.decision(self.gamma)
         self.decision(self.alpha, status=DecisionStatus.APPLIED.value)
-        make_generation(
-            cells=((self.alpha, DOWNTREND, {"state": sl.STATE_FIT}),)
-        )
+        make_generation(cells=((self.alpha, DOWNTREND, {"state": sl.STATE_FIT}),))
 
         data = gsw.confirmation(now=NOW)
 
@@ -306,9 +304,7 @@ class TestTheRenderedPage(_Fixture):
     def test_the_mode_line_reads_the_tier_from_the_table(self):
         """档位是从流水表现读的，不是写死的。写死的话，命令落了库而页面仍显示 Shadow，
         一边说「打开了」一边说「此刻不拦任何人」，两边都正常。"""
-        self.assertIn(
-            f"当前档位：{MechanismMode.SHADOW.display}", self.preview().body
-        )
+        self.assertIn(f"当前档位：{MechanismMode.SHADOW.display}", self.preview().body)
         self.switch(MechanismMode.EXECUTING)
         body = self.preview().body
         self.assertIn(f"当前档位：{MechanismMode.EXECUTING.display}", body)
@@ -366,9 +362,7 @@ class TestTheRenderedPage(_Fixture):
 class TestWhatThePageSaysWhenItWouldNotBlock(_Fixture):
     def test_a_cold_start_says_the_round_will_do_nothing(self):
         """先跑 recompute 的那种「没法问」在这里也是一句话，而不是一次静默的空转动。"""
-        make_generation(
-            cells=((self.alpha, DOWNTREND, {"state": sl.STATE_UNFIT}),)
-        )
+        make_generation(cells=((self.alpha, DOWNTREND, {"state": sl.STATE_UNFIT}),))
         self.decision(self.alpha)
 
         data = self.preview().data

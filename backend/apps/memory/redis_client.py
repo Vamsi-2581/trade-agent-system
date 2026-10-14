@@ -82,7 +82,8 @@ class RedisPool:
             except Exception as e:
                 logger.warning(
                     "[RedisPool] Failed to schedule client close for PID %d: %s",
-                    pid, e,
+                    pid,
+                    e,
                 )
             return
 

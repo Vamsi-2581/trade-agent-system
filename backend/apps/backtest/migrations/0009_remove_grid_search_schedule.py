@@ -4,13 +4,12 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('backtest', '0008_grid_search'),
+        ("backtest", "0008_grid_search"),
     ]
 
     operations = [
         migrations.DeleteModel(
-            name='GridSearchSchedule',
+            name="GridSearchSchedule",
         ),
     ]

@@ -120,7 +120,9 @@ class TestSubmitScheduledTaskRejectsUnknownAgent:
 
         assert result.success is True, result.error
         mock_apply.assert_called_once()
-        assert ScheduledOneTimeTask.objects.filter(id=result.data["schedule_id"]).exists()
+        assert ScheduledOneTimeTask.objects.filter(
+            id=result.data["schedule_id"]
+        ).exists()
         # 这一行必须落在本用例的外层 atomic 里，随用例回滚——**不能**留在真实表上。
         #
         # 曾经这里打的是真的 `db_async`：`sync_to_async(thread_sensitive=False)` 让写入

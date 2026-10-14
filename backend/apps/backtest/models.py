@@ -238,5 +238,3 @@ class GridSearchJob(models.Model):
 
     def __str__(self):
         return f"GridSearchJob({self.symbol}/{self.timeframe} status={self.status})"
-
-

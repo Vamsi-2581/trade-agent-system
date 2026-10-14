@@ -233,7 +233,9 @@ class TestRecipientsForScope(TestCase):
 
     def test_every_active_status_is_a_recipient(self):
         """`pending` / `paused` 都算——口径是「这个会话还在、将来还可能持仓」。"""
-        users = [_user(f"s{i}@t.local") for i in range(len(LiveSession.ACTIVE_STATUSES))]
+        users = [
+            _user(f"s{i}@t.local") for i in range(len(LiveSession.ACTIVE_STATUSES))
+        ]
         for user, status in zip(users, LiveSession.ACTIVE_STATUSES):
             _session(user, status=status)
 
@@ -250,7 +252,8 @@ class TestRecipientsForScope(TestCase):
         _session(eth, symbol="ETH/USDT")
 
         self.assertEqual(
-            halt_notify.recipients_for_scope(halt.symbol_scope("BTC/USDT")), (str(btc.pk),)
+            halt_notify.recipients_for_scope(halt.symbol_scope("BTC/USDT")),
+            (str(btc.pk),),
         )
 
     def test_a_strategy_scope_hits_only_that_strategy(self):
@@ -321,7 +324,7 @@ class TestPendingQueues(TestCase):
         这条谓词顺带把上线首轮的补发限制在一处：②e 之前解除掉的历史行没有开窗账，
         于是不会被补一条莫名其妙的「已结束」。
         """
-        never_opened = _declaration(
+        _never_opened = _declaration(
             opened_at=NOW - timedelta(hours=2),
             closed_at=NOW - timedelta(hours=1),
             opened_notified_at=None,
@@ -355,7 +358,8 @@ class TestPendingQueues(TestCase):
         而机制以为通知过了。这是本模块之外唯一一处替 ②e 做的写入，所以在这里钉死。
         """
         row = _declaration(
-            opened_at=NOW - timedelta(hours=1), opened_notified_at=NOW - timedelta(hours=1)
+            opened_at=NOW - timedelta(hours=1),
+            opened_notified_at=NOW - timedelta(hours=1),
         )
         halt_sync_rewrite(row, opened_at=NOW + timedelta(hours=3))
 
@@ -368,7 +372,8 @@ class TestPendingQueues(TestCase):
         已经通知过的那条消息没有被推翻，第二轮必须是整表空转（`halt_sync` 的幂等）。
         """
         row = _declaration(
-            opened_at=NOW - timedelta(hours=1), opened_notified_at=NOW - timedelta(hours=1)
+            opened_at=NOW - timedelta(hours=1),
+            opened_notified_at=NOW - timedelta(hours=1),
         )
         halt_sync_rewrite(row, label="FOMC 议息、CPI 公布")
 
@@ -405,7 +410,8 @@ class TestNotifyBody(SimpleTestCase):
         lines = body.splitlines()
 
         self.assertEqual(
-            lines[0], f"🔒 【{HaltTrigger.EVENT.display}】窗口已开启｜作用域 全市场（global）"
+            lines[0],
+            f"🔒 【{HaltTrigger.EVENT.display}】窗口已开启｜作用域 全市场（global）",
         )
         # 窗口两个时刻都走 `events.format_moment`：同一个时刻在事件库、日报与这里必须是
         # 同一句话，而读者是同一批人。
@@ -438,7 +444,9 @@ class TestNotifyBody(SimpleTestCase):
         「生效：… 起」，两处不许一处分岔另一处不分岔。
         """
         row = _unpersisted(
-            trigger=HaltTrigger.DEACTIVATION, label="本阶段不适配", reason="趋势里逆势策略"
+            trigger=HaltTrigger.DEACTIVATION,
+            label="本阶段不适配",
+            reason="趋势里逆势策略",
         )
         body = halt_notify.notify_body(row, halt_notify.KIND_OPENED, shadow=False)
 
@@ -554,8 +562,12 @@ class TestNotifyBody(SimpleTestCase):
         )
         body = halt_notify.notify_body(row, halt_notify.KIND_CLOSED, shadow=False)
 
-        self.assertIn(gate_switch.GATE_CLOSE_REASON_DISPLAY[gate.CLOSE_REGIME_LEFT], body)
-        self.assertNotIn(halt_sync.CLOSE_REASON_DISPLAY[halt_sync.CLOSE_REASON_REGIME_LEFT], body)
+        self.assertIn(
+            gate_switch.GATE_CLOSE_REASON_DISPLAY[gate.CLOSE_REGIME_LEFT], body
+        )
+        self.assertNotIn(
+            halt_sync.CLOSE_REASON_DISPLAY[halt_sync.CLOSE_REASON_REGIME_LEFT], body
+        )
 
     def test_an_event_close_reason_is_read_from_the_window_word_list(self):
         """反向：事件熔断那几档的码归 `halt_sync` 的词表——路由不能反过来把窗口消息
@@ -566,7 +578,9 @@ class TestNotifyBody(SimpleTestCase):
         )
         body = halt_notify.notify_body(row, halt_notify.KIND_CLOSED, shadow=False)
 
-        self.assertIn(halt_sync.CLOSE_REASON_DISPLAY[halt_sync.CLOSE_REASON_REGIME_LEFT], body)
+        self.assertIn(
+            halt_sync.CLOSE_REASON_DISPLAY[halt_sync.CLOSE_REASON_REGIME_LEFT], body
+        )
         self.assertNotIn(
             gate_switch.GATE_CLOSE_REASON_DISPLAY[gate.CLOSE_REGIME_LEFT], body
         )
@@ -595,7 +609,9 @@ class TestNotifyBody(SimpleTestCase):
         self.assertIn("could not connect to server", body)
         # 「不可人工豁免」在这一档是**假话**：说了它，读的人就不会去找那条豁免。
         self.assertNotIn("不可人工豁免", body)
-        self.assertNotEqual(body, halt_notify.write_failure_body("could not connect to server"))
+        self.assertNotEqual(
+            body, halt_notify.write_failure_body("could not connect to server")
+        )
 
     def test_the_event_tier_body_does_not_point_at_the_deactivation_exemption(self):
         """反向：事件熔断那一档**不许**出现策略停用那一路的补救动作。
@@ -629,7 +645,9 @@ class TestShadowFlag(TestCase):
     def test_the_blanket_line_has_no_switch_and_is_never_shadow(self):
         """`HALT_TRIGGER_SWITCH[BLANKET] = None`：保命档没有开关、永远作数
         （「高波动算生效」）。**这条行为不得改变**，所以在这里钉死。"""
-        self.assertFalse(halt_notify._shadowed(_unpersisted(trigger=HaltTrigger.BLANKET)))
+        self.assertFalse(
+            halt_notify._shadowed(_unpersisted(trigger=HaltTrigger.BLANKET))
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -647,7 +665,9 @@ class TestNotifyPending(TestCase):
         with _notify(True) as mock:
             summary = halt_notify.notify_pending(now=NOW)
 
-        self.assertEqual(summary, {"opened": 1, "closed": 0, "failed": 0, "no_recipients": 0})
+        self.assertEqual(
+            summary, {"opened": 1, "closed": 0, "failed": 0, "no_recipients": 0}
+        )
         self.assertEqual(mock.await_count, 1)
         self.assertEqual(mock.call_args.args[0], str(self.user.pk))
         row.refresh_from_db()
@@ -661,7 +681,9 @@ class TestNotifyPending(TestCase):
         with _notify(True) as mock:
             second = halt_notify.notify_pending(now=NOW + timedelta(minutes=5))
 
-        self.assertEqual(second, {"opened": 0, "closed": 0, "failed": 0, "no_recipients": 0})
+        self.assertEqual(
+            second, {"opened": 0, "closed": 0, "failed": 0, "no_recipients": 0}
+        )
         self.assertEqual(mock.await_count, 0)
 
     def test_no_recipient_is_terminal_and_counted_separately(self):
@@ -736,12 +758,13 @@ class TestNotifyPending(TestCase):
         self.assertTrue(_texts(mock)[0].startswith("⚠️"))
 
         _switch(MechanismKind.EVENT_BREAKER, MechanismMode.EXECUTING)
-        _declaration(scope=halt.symbol_scope("BTC/USDT"), opened_at=NOW - timedelta(minutes=5))
+        _declaration(
+            scope=halt.symbol_scope("BTC/USDT"), opened_at=NOW - timedelta(minutes=5)
+        )
         with _notify(True) as mock:
             halt_notify.notify_pending(now=NOW)
 
         self.assertFalse(_texts(mock)[0].startswith("⚠️"))
-
 
     def test_a_closing_notice_names_the_layer_that_still_blocks(self):
         """两层共存时关掉一层（第③段 Q4）→ 用户在消息里读到「仍被 1 层拦住」并看到是
@@ -881,12 +904,15 @@ class TestWriteFailureAlert(TestCase):
         _user("gone@t.local", active=False)
 
         with _notify(True) as mock:
-            summary = halt_notify.alert_declaration_write_failure(RuntimeError("表写不进去"))
+            summary = halt_notify.alert_declaration_write_failure(
+                RuntimeError("表写不进去")
+            )
 
         self.assertEqual(summary, {"recipients": 2, "delivered": 2})
         self.assertEqual(mock.await_count, 2)
         self.assertEqual(
-            {call.args[0] for call in mock.call_args_list}, {str(first.pk), str(second.pk)}
+            {call.args[0] for call in mock.call_args_list},
+            {str(first.pk), str(second.pk)},
         )
 
     def test_the_body_names_the_error_and_its_consequence(self):
@@ -920,7 +946,8 @@ class TestWriteFailureAlert(TestCase):
 
         self.assertEqual(summary, {"recipients": 2, "delivered": 2})
         self.assertEqual(
-            {call.args[0] for call in mock.call_args_list}, {str(first.pk), str(second.pk)}
+            {call.args[0] for call in mock.call_args_list},
+            {str(first.pk), str(second.pk)},
         )
         body = _texts(mock)[0]
         self.assertIn("策略停用决策档", body)
@@ -978,11 +1005,15 @@ class TestTheTaskWiring(TestCase):
         order: list[str] = []
         with self._patch(
             **{
-                "apps.regime.halt_sync.sync": lambda *a, **kw: order.append("sync") or {},
-                "apps.regime.halt_notify.notify_pending": lambda *a, **kw: order.append("notify")
-                or {},
-                "apps.regime.reduce_run.dispatch": lambda *a, **kw: order.append("dispatch")
-                or {"rows": 3},
+                "apps.regime.halt_sync.sync": lambda *a, **kw: (
+                    order.append("sync") or {}
+                ),
+                "apps.regime.halt_notify.notify_pending": lambda *a, **kw: (
+                    order.append("notify") or {}
+                ),
+                "apps.regime.reduce_run.dispatch": lambda *a, **kw: (
+                    order.append("dispatch") or {"rows": 3}
+                ),
             }
         ):
             summary = tasks.sync_halt_windows.run()
@@ -1001,11 +1032,12 @@ class TestTheTaskWiring(TestCase):
         sent: list[str] = []
         with self._patch(
             **{
-                "apps.regime.halt_notify.notify_pending": lambda *a, **kw: sent.append("sent")
-                or {},
-                "apps.regime.reduce_run.dispatch": lambda *a, **kw: (_ for _ in ()).throw(
-                    RuntimeError("减仓那边炸了")
+                "apps.regime.halt_notify.notify_pending": lambda *a, **kw: (
+                    sent.append("sent") or {}
                 ),
+                "apps.regime.reduce_run.dispatch": lambda *a, **kw: (
+                    _ for _ in ()
+                ).throw(RuntimeError("减仓那边炸了")),
             }
         ):
             with self.assertRaises(RuntimeError):
@@ -1028,10 +1060,9 @@ class TestTheTaskWiring(TestCase):
         with self._patch(
             **{
                 "apps.regime.halt_sync.sync": boom,
-                "apps.regime.halt_notify.alert_declaration_write_failure": lambda exc: alerted.append(
-                    exc
-                )
-                or {"recipients": 1, "delivered": 1},
+                "apps.regime.halt_notify.alert_declaration_write_failure": lambda exc: (
+                    alerted.append(exc) or {"recipients": 1, "delivered": 1}
+                ),
             }
         ):
             with self.assertRaises(RuntimeError):
@@ -1052,8 +1083,12 @@ class TestTheTaskWiring(TestCase):
         with self._patch(
             **{
                 "apps.regime.halt_sync.sync": boom,
-                "apps.regime.halt_notify.notify_pending": lambda *a, **kw: touched.append("notify"),
-                "apps.regime.reduce_run.dispatch": lambda *a, **kw: touched.append("dispatch"),
+                "apps.regime.halt_notify.notify_pending": lambda *a, **kw: (
+                    touched.append("notify")
+                ),
+                "apps.regime.reduce_run.dispatch": lambda *a, **kw: touched.append(
+                    "dispatch"
+                ),
             }
         ):
             with self.assertRaises(RuntimeError):
@@ -1081,14 +1116,12 @@ class TestTheTaskWiring(TestCase):
         with self._patch(
             **{
                 "apps.regime.gate_run.sync": boom,
-                "apps.regime.halt_notify.alert_gate_write_failure": lambda exc: gate_alerted.append(
-                    exc
-                )
-                or {"recipients": 1, "delivered": 1},
-                "apps.regime.halt_notify.alert_declaration_write_failure": lambda exc: event_alerted.append(
-                    exc
-                )
-                or {"recipients": 1, "delivered": 1},
+                "apps.regime.halt_notify.alert_gate_write_failure": lambda exc: (
+                    gate_alerted.append(exc) or {"recipients": 1, "delivered": 1}
+                ),
+                "apps.regime.halt_notify.alert_declaration_write_failure": lambda exc: (
+                    event_alerted.append(exc) or {"recipients": 1, "delivered": 1}
+                ),
             }
         ):
             with self.assertRaises(RuntimeError):

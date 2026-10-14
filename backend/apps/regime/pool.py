@@ -90,9 +90,9 @@ POOL_VERSION = 1
 #: 一份切片被排除在池化之外的原因。**按原因分开计数**，不记一个「跳过了几个」：
 #: 「三个是本金为 0」与「三个是版本太旧」需要两个完全不同的动作（前者要人去查回测
 #: 参数，后者跑一次重算入口就好），混成一个数就没法决定该做哪个。
-EXCLUDED_NO_MERGE_INPUTS = "no_merge_inputs"    # 版本 1 的载荷 / 形状不符，没有样本
+EXCLUDED_NO_MERGE_INPUTS = "no_merge_inputs"  # 版本 1 的载荷 / 形状不符，没有样本
 EXCLUDED_UNUSABLE_CAPITAL = "unusable_capital"  # 本金 ≤ 0，归一化没有分母
-EXCLUDED_NO_PAYLOAD = "no_payload"              # `metrics` 里压根没有切片
+EXCLUDED_NO_PAYLOAD = "no_payload"  # `metrics` 里压根没有切片
 
 #: 一节 `merge_inputs` 必须具备的两个键（`slice._merge_inputs` 恒同时给这两个）。
 #: 拿它当**存在性**判据而不是「读到空就当没有」：后者会把一节的缺失读成「这一格
@@ -124,7 +124,18 @@ ARCHETYPE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "均值回归",
-        ("均值回归", "回归", "超卖", "超买", "反转", "反弹", "震荡", "布林", "网格", "rsi"),
+        (
+            "均值回归",
+            "回归",
+            "超卖",
+            "超买",
+            "反转",
+            "反弹",
+            "震荡",
+            "布林",
+            "网格",
+            "rsi",
+        ),
     ),
     (
         "突破",
@@ -378,7 +389,10 @@ class _Merged:
     @property
     def enough(self) -> bool:
         """两条门槛**并列**，不是乘积。见模块 docstring 里那段。"""
-        return self.trades >= self.params.min_trades and self.months >= self.params.min_months
+        return (
+            self.trades >= self.params.min_trades
+            and self.months >= self.params.min_months
+        )
 
 
 def _merge(
@@ -393,9 +407,7 @@ def _merge(
     批样本，这是使比较可比的那条不变量。
     """
     daily = _sum_daily(s.cell_daily.get(regime, {}) for s in samples)
-    trades = [
-        trade for s in samples for trade in s.cell_trades.get(regime, ())
-    ]
+    trades = [trade for s in samples for trade in s.cell_trades.get(regime, ())]
     entry_days = [day for day, _ in trades]
     return _Merged(
         metrics=_segment_metrics(daily, _UNIT_CAPITAL),

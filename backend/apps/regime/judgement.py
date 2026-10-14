@@ -146,7 +146,9 @@ def current_judgement(
     与「结论是箱体震荡」，所以这里不给默认值。
     """
     now = now or timezone.now()
-    return _records(symbol).filter(effective_at__lte=now).order_by("-effective_at").first()
+    return (
+        _records(symbol).filter(effective_at__lte=now).order_by("-effective_at").first()
+    )
 
 
 def in_force_days(
@@ -198,7 +200,9 @@ def pending_judgement(
     恢复）时，先说出口的是最先咬人的那条。
     """
     now = now or timezone.now()
-    return _records(symbol).filter(effective_at__gt=now).order_by("effective_at").first()
+    return (
+        _records(symbol).filter(effective_at__gt=now).order_by("effective_at").first()
+    )
 
 
 def last_judgement(symbol: str = SYMBOL) -> RegimeJudgement | None:
@@ -312,10 +316,14 @@ def apply_min_dwell(
     if in_force_days >= min_dwell_days:
         return candidate, "", numbers
 
-    return _regime_of(current), _REASON_MIN_DWELL, {
-        "in_force_days": in_force_days,
-        "carried_from_effective_at": current.effective_at.isoformat(),
-    }
+    return (
+        _regime_of(current),
+        _REASON_MIN_DWELL,
+        {
+            "in_force_days": in_force_days,
+            "carried_from_effective_at": current.effective_at.isoformat(),
+        },
+    )
 
 
 def _regime_of(record: RegimeJudgement) -> BaseRegime:
@@ -395,7 +403,11 @@ def run_daily_judgement(
     candles = load_candles(symbol)
     if not candles:
         logger.warning("[regime] %s 没有任何日线，无法判定", symbol)
-        return {"skipped": "no_candles", "symbol": symbol, "run_day": run_day.isoformat()}
+        return {
+            "skipped": "no_candles",
+            "symbol": symbol,
+            "run_day": run_day.isoformat(),
+        }
 
     attribute_date: date = candles[-1]["date"]
     expected = latest_complete_date(now)

@@ -275,7 +275,9 @@ class TestJudgementWithoutConclusion(TestCase):
                 self.assertIsNone(row.judgement_id)
                 self.assertEqual(summary["judgement_skipped"], kind)
                 self.assertFalse(summary["judged"])
-                self.assertTrue(summary["written"], "没有结论也要落行，否则这一天查不出发生过什么")
+                self.assertTrue(
+                    summary["written"], "没有结论也要落行，否则这一天查不出发生过什么"
+                )
 
     def test_the_note_names_the_skip_code(self):
         """那一行要自己说得出为什么是空的——日志不算被看见，`note` 的正经出口是日报。"""
@@ -301,7 +303,9 @@ class TestDerivationSkippedIsNormalised(TestCase):
 
     def test_none_becomes_the_empty_string(self):
         """正常推导落成空串。让 `None` 落库的话，CharField 会把两个不同的意思混成一个。"""
-        summary = shadow.write_shadow_record(concluded_payload(), derivation(skipped=None))
+        summary = shadow.write_shadow_record(
+            concluded_payload(), derivation(skipped=None)
+        )
         row = ShadowDailyRecord.objects.get(symbol=SYMBOL, run_day=RUN_DAY)
         self.assertEqual(row.derivation_skipped, "")
         self.assertEqual(summary["derivation_skipped"], "")
@@ -337,7 +341,9 @@ class TestTheRowCanBeFilledButNeverBlanked(TestCase):
         self.assertEqual(row.base_regime, BaseRegime.DOWNTREND.value)
         self.assertEqual(row.effective_regime, BaseRegime.DOWNTREND.value)
         self.assertEqual(row.suggested_count, 1)
-        self.assertEqual(row.derivation_skipped, "", "补写要把占位那一轮的空收场一起改掉")
+        self.assertEqual(
+            row.derivation_skipped, "", "补写要把占位那一轮的空收场一起改掉"
+        )
         self.assertIsNotNone(row.judgement_id, "补写要把外键一起补上")
 
     def test_a_conclusion_is_never_blanked_by_a_later_tick(self):
@@ -374,7 +380,9 @@ class TestTheRowCanBeFilledButNeverBlanked(TestCase):
 
         self.assertEqual(again["outcome"], shadow.OUTCOME_KEPT_CONCLUSION)
         self.assertEqual(
-            again["suggested_count"], 3, "摘要说的是现实（库里那一行），不是这一轮的产出"
+            again["suggested_count"],
+            3,
+            "摘要说的是现实（库里那一行），不是这一轮的产出",
         )
         row = ShadowDailyRecord.objects.get(symbol=SYMBOL, run_day=RUN_DAY)
         self.assertEqual(row.suggestions, first)
@@ -383,7 +391,9 @@ class TestTheRowCanBeFilledButNeverBlanked(TestCase):
     def test_a_placeholder_repeated_is_left_alone(self):
         """占位行遇到「仍然没有结论」的那一轮：不动，也不新建。"""
         shadow.write_shadow_record(skipped_payload("stale_candles"), derivation())
-        again = shadow.write_shadow_record(skipped_payload("stale_candles"), derivation())
+        again = shadow.write_shadow_record(
+            skipped_payload("stale_candles"), derivation()
+        )
         self.assertEqual(again["outcome"], shadow.OUTCOME_KEPT_PLACEHOLDER)
         self.assertFalse(again["written"])
         self.assertEqual(
@@ -411,7 +421,8 @@ class TestTheRowCanBeFilledButNeverBlanked(TestCase):
             concluded_payload(run_day=RUN_DAY + timedelta(days=1)), derivation()
         )
         self.assertEqual(
-            ShadowDailyRecord.objects.get(symbol=SYMBOL, run_day=RUN_DAY).base_regime, ""
+            ShadowDailyRecord.objects.get(symbol=SYMBOL, run_day=RUN_DAY).base_regime,
+            "",
         )
 
 

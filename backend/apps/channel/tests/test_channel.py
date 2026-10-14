@@ -82,7 +82,7 @@ class TestChunkMessage(unittest.TestCase):
         """模拟 Agent 长回复：中文 markdown 报告，确保所有文字保留"""
         from apps.channel.base import chunk_message
 
-        text = ("# 分析报告\n\n" + "这是一段分析内容。" * 300)
+        text = "# 分析报告\n\n" + "这是一段分析内容。" * 300
         result = chunk_message(text, max_length=1000)
         self.assertTrue(len(result) >= 2)
         # 文字内容完整（分片边界处换行可能丢失，但字符不应丢失）
@@ -270,17 +270,19 @@ class TestLarkChannel(unittest.TestCase):
         from django.test import RequestFactory
 
         factory = RequestFactory()
-        body = json.dumps({
-            "header": {"event_type": "im.message.receive_v1"},
-            "event": {
-                "message": {
-                    "chat_id": "test_chat",
-                    "message_type": "image",
-                    "content": '{"image_key": "img_123"}',
+        body = json.dumps(
+            {
+                "header": {"event_type": "im.message.receive_v1"},
+                "event": {
+                    "message": {
+                        "chat_id": "test_chat",
+                        "message_type": "image",
+                        "content": '{"image_key": "img_123"}',
+                    },
+                    "sender": {"sender_id": {"open_id": "user_123"}},
                 },
-                "sender": {"sender_id": {"open_id": "user_123"}},
-            },
-        })
+            }
+        )
         request = factory.post(
             "/api/channel/webhook/lark/",
             data=body,

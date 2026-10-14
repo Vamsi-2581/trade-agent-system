@@ -195,7 +195,9 @@ Body
         agent_dir = self.skills_root.parent / "workspace" / "myagent" / "skills"
         agent_dir.mkdir(parents=True, exist_ok=True)
         _create_skill_dir(self.skills_root, "shared", "---\nname: shared\n---\nG")
-        agent_skill = _create_skill_dir(agent_dir, "shared", "---\nname: shared\n---\nA")
+        agent_skill = _create_skill_dir(
+            agent_dir, "shared", "---\nname: shared\n---\nA"
+        )
         loader = AgentSkillsLoader(agent_name="myagent")
         loader.global_skills_dir = self.skills_root
         loader.agent_skills_dir = agent_dir

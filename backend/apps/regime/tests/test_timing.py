@@ -79,7 +79,9 @@ class TestBusinessDayBoundaryIsTheCandleBoundary(TestCase):
             "业务时区若与 TIME_ZONE 相同，判定链路的显式时区构造就成了死代码，"
             "下一步必然被删；而 TIME_ZONE 改成非 UTC 时结论就会整体平移",
         )
-        self.assertNotEqual(str(django_timezone.get_current_timezone()), business_tz_name())
+        self.assertNotEqual(
+            str(django_timezone.get_current_timezone()), business_tz_name()
+        )
 
     def test_business_timezone_is_a_real_iana_zone(self):
         """必须是可解析的 IANA 时区：将来真要挂 crontab 时，它要能直接写进
@@ -189,7 +191,11 @@ def run_heartbeat(
         if deactivation_error is not None:
             raise deactivation_error
         # `skipped` 恒存在于真实返回值里（这是它刻意与判定不同的地方），替身照抄这一形状。
-        return {"skipped": "no_generation", "note": "还没有任何一代池化表", "targets": 0}
+        return {
+            "skipped": "no_generation",
+            "note": "还没有任何一代池化表",
+            "targets": 0,
+        }
 
     def fake_shadow(*args, **kwargs):
         events.append("shadow")
@@ -260,7 +266,9 @@ class TestJudgementRidesTheSnapshotHeartbeat(TestCase):
             # 只关心「判定失败往上抛」，别让 candles 一步把它变成环境相关的测试。
             # 返回值不被检视（任务在判定处就抛了），MagicMock 的自动属性足够。
             patch.object(candles, "sync_daily_candles", new=MagicMock()),
-            patch.object(judgement, "run_daily_judgement", side_effect=RuntimeError("boom")),
+            patch.object(
+                judgement, "run_daily_judgement", side_effect=RuntimeError("boom")
+            ),
         ):
             with self.assertRaises(RuntimeError):
                 tasks.snapshot_daily_equity.run()

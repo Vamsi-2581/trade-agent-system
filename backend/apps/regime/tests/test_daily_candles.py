@@ -36,7 +36,9 @@ TODAY = NOW.date()  # 2026-09-22，日线刚开盘
 
 
 def ms_of(day: date) -> int:
-    return int(datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp() * 1000)
+    return int(
+        datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp() * 1000
+    )
 
 
 def row(day: date, *, o=100.0, h=110.0, low=90.0, c=105.0, v=1000.0):
@@ -110,7 +112,11 @@ class TestFailureIsDistinguishableFromEmpty(TestCase):
         ):
             with self.assertRaises(CommandError):
                 call_command(
-                    "backfill_daily_candles", "--start", "2026-01-01", "--end", "2026-01-03"
+                    "backfill_daily_candles",
+                    "--start",
+                    "2026-01-01",
+                    "--end",
+                    "2026-01-03",
                 )
 
 
@@ -145,7 +151,11 @@ class TestIncompleteCandleIsNeverPersisted(TestCase):
         for offset in (0, 1, 5, 60, 1439, 1440, 1441):
             now = NOW + timedelta(minutes=offset)
             expected = latest_complete_date(now)
-            days = [expected - timedelta(days=1), expected, expected + timedelta(days=1)]
+            days = [
+                expected - timedelta(days=1),
+                expected,
+                expected + timedelta(days=1),
+            ]
             result = fetch_daily_candles(
                 start=days[0],
                 end=days[-1],
@@ -179,7 +189,9 @@ class TestCandleValidation(TestCase):
             fetch_daily_candles(
                 start=TODAY - timedelta(days=1),
                 end=TODAY - timedelta(days=1),
-                fetch_page=FakePages([[row(TODAY - timedelta(days=1), h=80.0, low=90.0)]]),
+                fetch_page=FakePages(
+                    [[row(TODAY - timedelta(days=1), h=80.0, low=90.0)]]
+                ),
                 now=NOW,
             )
 
@@ -188,7 +200,9 @@ class TestCandleValidation(TestCase):
             fetch_daily_candles(
                 start=TODAY - timedelta(days=1),
                 end=TODAY - timedelta(days=1),
-                fetch_page=FakePages([[row(TODAY - timedelta(days=1), h=101.0, c=105.0)]]),
+                fetch_page=FakePages(
+                    [[row(TODAY - timedelta(days=1), h=101.0, c=105.0)]]
+                ),
                 now=NOW,
             )
 
@@ -236,7 +250,10 @@ class TestPagination(TestCase):
         with patch.object(config, "CANDLES", replace(config.CANDLES, page_limit=3)):
             with self.assertRaises(CandleFetchError) as ctx:
                 fetch_daily_candles(
-                    start=TODAY - timedelta(days=40), end=TODAY, fetch_page=stuck, now=NOW
+                    start=TODAY - timedelta(days=40),
+                    end=TODAY,
+                    fetch_page=stuck,
+                    now=NOW,
                 )
         self.assertIn("游标未推进", str(ctx.exception))
 
@@ -274,9 +291,7 @@ class TestSyncIsIdempotent(TestCase):
 
         self.assertEqual((changed.created, changed.updated), (0, 1))
         self.assertEqual(DailyCandle.objects.count(), 1)
-        self.assertEqual(
-            DailyCandle.objects.get().close, Decimal("123.00000000")
-        )
+        self.assertEqual(DailyCandle.objects.get().close, Decimal("123.00000000"))
 
     def test_values_are_quantized_to_the_column_scale(self):
         """不量化 → 读回的值 ≠ 刚解析的值 → 每次同步都「更新」同一批行。
@@ -285,9 +300,7 @@ class TestSyncIsIdempotent(TestCase):
         """
         day = TODAY - timedelta(days=1)
         noisy = row(day, h=70000.0, c=62345.123456789012)
-        sync_daily_candles(
-            start=day, end=day, fetch_page=FakePages([[noisy]]), now=NOW
-        )
+        sync_daily_candles(start=day, end=day, fetch_page=FakePages([[noisy]]), now=NOW)
         stored = DailyCandle.objects.get().close
         self.assertEqual(stored, Decimal("62345.12345679"))
 

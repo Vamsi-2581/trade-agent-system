@@ -178,8 +178,8 @@ DAYS_PER_YEAR = 365.0
 Z95 = 1.96
 
 #: 四态 + `blanket`。取值即落库契约，改名等于让新旧 metrics 出现两套键。
-STATE_FIT = "fit"          # 适用
-STATE_UNFIT = "unfit"      # 不适用
+STATE_FIT = "fit"  # 适用
+STATE_UNFIT = "unfit"  # 不适用
 STATE_NEUTRAL = "neutral"  # 中性（证据不足 / 样本噪声）——不构成停用理由
 STATE_UNKNOWN = "unknown"  # 未知（该阶段在本窗口内没出现过）
 STATE_BLANKET = "blanket"  # 保命档：不做适用性判断，与证据无关
@@ -288,7 +288,9 @@ def _held_days(entry: datetime, exit_: datetime) -> list[date]:
 # --------------------------------------------------------------------------- #
 
 
-def _annualized_pct(total_pnl: float, initial_capital: float, span_days: int) -> float | None:
+def _annualized_pct(
+    total_pnl: float, initial_capital: float, span_days: int
+) -> float | None:
     """分段年化收益率（%）。
 
     分母用**回测的初始资金**而不是分段自己的起点权益：分段曲线是一份反事实
@@ -355,7 +357,9 @@ def _segment_metrics(daily: Mapping[date, float], initial_capital: float) -> dic
     return {
         "total_pnl": round(total, _ROUND),
         "span_days": span_days,
-        "annualized_return_pct": None if annualized is None else round(annualized, _ROUND),
+        "annualized_return_pct": None
+        if annualized is None
+        else round(annualized, _ROUND),
         "max_drawdown_pct": round(max_dd * 100.0, _ROUND),
         "calmar": None if calmar is None else round(calmar, _ROUND),
     }
@@ -374,7 +378,10 @@ def wilson_interval(successes: int, n: int, z: float = Z95) -> list[float] | Non
     denom = 1.0 + z * z / n
     center = (p + z * z / (2 * n)) / denom
     half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
-    return [round(max(0.0, center - half), _ROUND), round(min(1.0, center + half), _ROUND)]
+    return [
+        round(max(0.0, center - half), _ROUND),
+        round(min(1.0, center + half), _ROUND),
+    ]
 
 
 def mean_pnl_interval(values: Sequence[float], z: float = Z95) -> list[float] | None:
@@ -398,7 +405,9 @@ def mean_pnl_interval(values: Sequence[float], z: float = Z95) -> list[float] | 
 # --------------------------------------------------------------------------- #
 
 
-def scaled_min_trades(day_share: float, params: config.EvidenceConfig = config.EVIDENCE) -> int:
+def scaled_min_trades(
+    day_share: float, params: config.EvidenceConfig = config.EVIDENCE
+) -> int:
     """稀有阶段的笔数门槛：按该阶段占天数的比例缩放。
 
     两条护栏，缺一不可：
@@ -412,7 +421,9 @@ def scaled_min_trades(day_share: float, params: config.EvidenceConfig = config.E
     一个只出现过三天的稀有阶段，即使笔数门槛被缩到 1，也永远凑不满 3 个自然月的
     覆盖，仍归中性。CONTEXT.md 要求的「必须同时满足 min_months」正是这道保险。
     """
-    return min(params.min_trades, max(1, round(params.min_trades * max(0.0, day_share))))
+    return min(
+        params.min_trades, max(1, round(params.min_trades * max(0.0, day_share)))
+    )
 
 
 def covered_months(dates: Sequence[date]) -> int:
@@ -528,7 +539,8 @@ def _merge_inputs(
     capital = float(initial_capital)
     return {
         "daily_return": {
-            day.isoformat(): round(daily[day] / capital, _ROUND) for day in sorted(daily)
+            day.isoformat(): round(daily[day] / capital, _ROUND)
+            for day in sorted(daily)
         },
         "trades": [
             [entry.isoformat(), round(pnl / capital, _ROUND)]

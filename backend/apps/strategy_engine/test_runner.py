@@ -28,16 +28,22 @@ def _generate_mock_klines(n: int = 100) -> list[dict]:
         change = Decimal(str(random.uniform(-0.02, 0.02)))
         open_price = base_price * (Decimal("1") + change)
         close_price = base_price * (Decimal("1") + change * Decimal("0.5"))
-        high_price = max(open_price, close_price) * (Decimal("1") + abs(Decimal(str(random.uniform(0, 0.01)))))
-        low_price = min(open_price, close_price) * (Decimal("1") - abs(Decimal(str(random.uniform(0, 0.01)))))
-        klines.append({
-            "timestamp": f"2024-01-{(i // 24) + 1:02d}T{i % 24:02d}:00:00",
-            "open": open_price.quantize(Decimal("0.01")),
-            "high": high_price.quantize(Decimal("0.01")),
-            "low": low_price.quantize(Decimal("0.01")),
-            "close": close_price.quantize(Decimal("0.01")),
-            "volume": Decimal(str(round(random.uniform(100, 1000), 2))),
-        })
+        high_price = max(open_price, close_price) * (
+            Decimal("1") + abs(Decimal(str(random.uniform(0, 0.01))))
+        )
+        low_price = min(open_price, close_price) * (
+            Decimal("1") - abs(Decimal(str(random.uniform(0, 0.01))))
+        )
+        klines.append(
+            {
+                "timestamp": f"2024-01-{(i // 24) + 1:02d}T{i % 24:02d}:00:00",
+                "open": open_price.quantize(Decimal("0.01")),
+                "high": high_price.quantize(Decimal("0.01")),
+                "low": low_price.quantize(Decimal("0.01")),
+                "close": close_price.quantize(Decimal("0.01")),
+                "volume": Decimal(str(round(random.uniform(100, 1000), 2))),
+            }
+        )
         base_price = close_price
     return klines
 
@@ -60,7 +66,9 @@ def _run_coro_blocking(coro):
 class StrategyTester:
     """策略验证器：加载策略文件 → 验证语法 → 运行模拟回测"""
 
-    def __init__(self, kline_count: int = 200, initial_capital: Decimal = Decimal("10000")):
+    def __init__(
+        self, kline_count: int = 200, initial_capital: Decimal = Decimal("10000")
+    ):
         self.kline_count = kline_count
         self.initial_capital = initial_capital
 
@@ -68,12 +76,24 @@ class StrategyTester:
         """测试单个策略文件"""
         path = Path(file_path)
         if not path.exists():
-            return {"success": False, "strategy_name": None, "errors": [f"策略文件不存在: {file_path}"], "stats": None, "warnings": []}
+            return {
+                "success": False,
+                "strategy_name": None,
+                "errors": [f"策略文件不存在: {file_path}"],
+                "stats": None,
+                "warnings": [],
+            }
 
         # 1) 语法检查
         syntax_ok, syntax_error = self._check_syntax(path)
         if not syntax_ok:
-            return {"success": False, "strategy_name": None, "errors": [f"语法错误: {syntax_error}"], "stats": None, "warnings": []}
+            return {
+                "success": False,
+                "strategy_name": None,
+                "errors": [f"语法错误: {syntax_error}"],
+                "stats": None,
+                "warnings": [],
+            }
 
         # 1.5) 静态分析 — 扫描 Decimal 类型误用
         type_warnings = self._scan_type_misuse(path)
@@ -83,11 +103,23 @@ class StrategyTester:
 
         strategy_cls, load_error = self._load_strategy_module(path)
         if load_error:
-            return {"success": False, "strategy_name": None, "errors": [f"加载失败: {load_error}"], "stats": None, "warnings": type_warnings + ctx_attr_warnings}
+            return {
+                "success": False,
+                "strategy_name": None,
+                "errors": [f"加载失败: {load_error}"],
+                "stats": None,
+                "warnings": type_warnings + ctx_attr_warnings,
+            }
 
         validate_errors = self._validate_strategy_class(strategy_cls)
         if validate_errors:
-            return {"success": False, "strategy_name": getattr(strategy_cls, "name", None), "errors": validate_errors, "stats": None, "warnings": type_warnings + ctx_attr_warnings}
+            return {
+                "success": False,
+                "strategy_name": getattr(strategy_cls, "name", None),
+                "errors": validate_errors,
+                "stats": None,
+                "warnings": type_warnings + ctx_attr_warnings,
+            }
 
         strategy_name = getattr(strategy_cls, "name", "unnamed")
 
@@ -105,13 +137,26 @@ class StrategyTester:
             all_warnings.insert(0, signal_warning)
 
         if run_result["errors"]:
-            return {"success": False, "strategy_name": strategy_name, "errors": run_result["errors"], "stats": run_result.get("stats"), "warnings": type_warnings + ctx_attr_warnings + all_warnings}
+            return {
+                "success": False,
+                "strategy_name": strategy_name,
+                "errors": run_result["errors"],
+                "stats": run_result.get("stats"),
+                "warnings": type_warnings + ctx_attr_warnings + all_warnings,
+            }
 
-        return {"success": True, "strategy_name": strategy_name, "errors": [], "stats": run_result["stats"], "warnings": type_warnings + ctx_attr_warnings + all_warnings}
+        return {
+            "success": True,
+            "strategy_name": strategy_name,
+            "errors": [],
+            "stats": run_result["stats"],
+            "warnings": type_warnings + ctx_attr_warnings + all_warnings,
+        }
 
     def _check_syntax(self, path: Path) -> tuple[bool, str | None]:
         """验证 Python 语法"""
         import py_compile
+
         try:
             with tempfile.NamedTemporaryFile(suffix=".pyc", delete=False) as f:
                 py_compile.compile(str(path), f.name, doraise=True)
@@ -129,7 +174,8 @@ class StrategyTester:
 
         # 检查是否导入了 Decimal
         uses_decimal = any(
-            re.search(r"from\s+decimal\s+import", line) or re.search(r"import\s+decimal", line)
+            re.search(r"from\s+decimal\s+import", line)
+            or re.search(r"import\s+decimal", line)
             for line in lines
         )
         if not uses_decimal:
@@ -153,14 +199,14 @@ class StrategyTester:
                 op = m[0] or m[3]
                 warnings.append(
                     f"第 {i} 行: Decimal 与 float 字面量 {float_val} 直接{op}运算，"
-                    f"将抛出 TypeError。应使用 Decimal(\"{float_val}\") 包裹。"
+                    f'将抛出 TypeError。应使用 Decimal("{float_val}") 包裹。'
                 )
 
             # Pattern 2: kline 字段（已知为 Decimal）与 float 字面量运算
             # 匹配: kline["close"] * 0.XX 或 0.XX * kline["close"]
             kline_float_ops = re.findall(
                 r'kline\[[\'"](open|high|low|close|volume)[\'"]\]\s*([+\-*/])\s*(\d+\.\d+)'
-                r'|'
+                r"|"
                 r'(\d+\.\d+)\s*([+\-*/])\s*kline\[[\'"](open|high|low|close|volume)[\'"]\]',
                 stripped,
             )
@@ -170,8 +216,8 @@ class StrategyTester:
                 else:  # float op kline["field"]
                     float_val, op, field = m[3], m[4], m[5]
                 warnings.append(
-                    f"第 {i} 行: kline[\"{field}\"]（Decimal 类型）与 float 字面量 {float_val} 直接{op}运算，"
-                    f"将抛出 TypeError。应使用 Decimal(\"{float_val}\") 包裹。"
+                    f'第 {i} 行: kline["{field}"]（Decimal 类型）与 float 字面量 {float_val} 直接{op}运算，'
+                    f'将抛出 TypeError。应使用 Decimal("{float_val}") 包裹。'
                 )
 
         return warnings
@@ -209,12 +255,16 @@ class StrategyTester:
         """动态加载策略模块"""
         try:
             from apps.strategy_engine.base import BaseStrategy
+
             module_name = path.stem
             spec = importlib.util.spec_from_file_location(module_name, str(path))
             if spec is None or spec.loader is None:
                 return None, "无法创建模块 spec"
             module = importlib.util.module_from_spec(spec)
-            for mod_name in ["apps.strategy_engine.base", "apps.strategy_engine.indicators"]:
+            for mod_name in [
+                "apps.strategy_engine.base",
+                "apps.strategy_engine.indicators",
+            ]:
                 if mod_name not in sys.modules:
                     try:
                         __import__(mod_name)
@@ -223,7 +273,11 @@ class StrategyTester:
             spec.loader.exec_module(module)
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
-                if isinstance(attr, type) and attr is not BaseStrategy and issubclass(attr, BaseStrategy):
+                if (
+                    isinstance(attr, type)
+                    and attr is not BaseStrategy
+                    and issubclass(attr, BaseStrategy)
+                ):
                     return attr, None
             return None, "未找到继承自 BaseStrategy 的策略类"
         except Exception as e:
@@ -239,6 +293,7 @@ class StrategyTester:
 
         # 验证 description 是否符合 4 字段模板
         from apps.strategy_engine.registry import StrategyRegistry
+
         try:
             StrategyRegistry.validate_description(strategy_cls)
         except ValueError as e:
@@ -252,8 +307,12 @@ class StrategyTester:
 
                 # 创建临时context验证返回值
                 context = StrategyContext(
-                    symbol="BTC/USDT", timeframe="1h", mode="paper",
-                    params={}, balance=Decimal("10000"), position=Decimal("0"),
+                    symbol="BTC/USDT",
+                    timeframe="1h",
+                    mode="paper",
+                    params={},
+                    balance=Decimal("10000"),
+                    position=Decimal("0"),
                 )
                 strategy = strategy_cls(context)
                 signals = strategy.get_watch_signals()
@@ -283,9 +342,13 @@ class StrategyTester:
                         if "condition" in signal:
                             cond = signal["condition"]
                             if not isinstance(cond, dict):
-                                errors.append(f"get_watch_signals()[{i}].condition 应为 dict")
+                                errors.append(
+                                    f"get_watch_signals()[{i}].condition 应为 dict"
+                                )
                             elif "operator" not in cond:
-                                errors.append(f"get_watch_signals()[{i}].condition 缺少 'operator' 字段")
+                                errors.append(
+                                    f"get_watch_signals()[{i}].condition 缺少 'operator' 字段"
+                                )
 
             except Exception as e:
                 errors.append(f"get_watch_signals() 调用失败：{e}")
@@ -326,8 +389,12 @@ class StrategyTester:
         # 已覆盖方法，但返回空列表
         try:
             context = StrategyContext(
-                symbol="BTC/USDT", timeframe="1h", mode="paper",
-                params={}, balance=Decimal("10000"), position=Decimal("0"),
+                symbol="BTC/USDT",
+                timeframe="1h",
+                mode="paper",
+                params={},
+                balance=Decimal("10000"),
+                position=Decimal("0"),
             )
             strategy = strategy_cls(context)
             signals = strategy.get_watch_signals()
@@ -357,10 +424,17 @@ class StrategyTester:
 
         warnings: list[str] = []
         schema: dict = getattr(strategy_cls, "params_schema", {})
-        params = {key: val.get("default") if isinstance(val, dict) else val for key, val in schema.items()}
+        params = {
+            key: val.get("default") if isinstance(val, dict) else val
+            for key, val in schema.items()
+        }
         context = StrategyContext(
-            symbol="BTC/USDT", timeframe="1h", mode="backtest",
-            params=params, balance=self.initial_capital, position=Decimal("0"),
+            symbol="BTC/USDT",
+            timeframe="1h",
+            mode="backtest",
+            params=params,
+            balance=self.initial_capital,
+            position=Decimal("0"),
         )
         try:
             strategy = strategy_cls(context)
@@ -379,7 +453,11 @@ class StrategyTester:
         try:
             stats = _run_coro_blocking(engine.run())
         except Exception as e:
-            return {"stats": None, "errors": [self._enrich_runtime_error(e)], "warnings": warnings}
+            return {
+                "stats": None,
+                "errors": [self._enrich_runtime_error(e)],
+                "warnings": warnings,
+            }
 
         trades = stats.get("trades", []) or []
         buy_count = sum(1 for t in trades if t.get("trade_type") in ("open", "add"))

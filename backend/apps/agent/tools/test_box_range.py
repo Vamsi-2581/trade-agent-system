@@ -187,7 +187,14 @@ async def test_width_params_both_set():
 async def test_klines_too_short():
     """用例 8：K 线数 < 2*pivot_window+1 → success=False，error 提示。"""
     klines = [
-        {"timestamp": f"2026-01-01T00:{i:02d}:00Z", "open": 105, "high": 110, "low": 100, "close": 105, "volume": 1000}
+        {
+            "timestamp": f"2026-01-01T00:{i:02d}:00Z",
+            "open": 105,
+            "high": 110,
+            "low": 100,
+            "close": 105,
+            "volume": 1000,
+        }
         for i in range(3)  # pivot_window=2 需要至少 5 根
     ]
     result = await DetectBoxRangeTool().execute(
@@ -251,22 +258,58 @@ async def test_coarse_filter_rejects_low_upper():
     for i in range(n):
         if i < 10:
             # 大高点 200
-            klines.append({"timestamp": f"2026-01-01T{i:02d}:00Z", "open": 195, "high": 200, "low": 190, "close": 195, "volume": 1000})
+            klines.append(
+                {
+                    "timestamp": f"2026-01-01T{i:02d}:00Z",
+                    "open": 195,
+                    "high": 200,
+                    "low": 190,
+                    "close": 195,
+                    "volume": 1000,
+                }
+            )
         elif i < 15:
             # 跌到 110
-            klines.append({"timestamp": f"2026-01-01T{i:02d}:00Z", "open": 150, "high": 155, "low": 110, "close": 130, "volume": 1000})
+            klines.append(
+                {
+                    "timestamp": f"2026-01-01T{i:02d}:00Z",
+                    "open": 150,
+                    "high": 155,
+                    "low": 110,
+                    "close": 130,
+                    "volume": 1000,
+                }
+            )
         elif i < 30:
             # 小箱体 110-130
             cycle = (i - 15) % 5
             h = 130 if cycle < 3 else 125
             lo = 110 if cycle < 3 else 108
-            klines.append({"timestamp": f"2026-01-01T{i:02d}:00Z", "open": (h+lo)/2, "high": h, "low": lo, "close": (h+lo)/2, "volume": 1000})
+            klines.append(
+                {
+                    "timestamp": f"2026-01-01T{i:02d}:00Z",
+                    "open": (h + lo) / 2,
+                    "high": h,
+                    "low": lo,
+                    "close": (h + lo) / 2,
+                    "volume": 1000,
+                }
+            )
         else:
             # 继续小箱体
             cycle = (i - 30) % 5
             h = 130 if cycle < 3 else 125
             lo = 110 if cycle < 3 else 108
-            klines.append({"timestamp": f"2026-01-01T{i:02d}:00Z", "open": (h+lo)/2, "high": h, "low": lo, "close": (h+lo)/2, "volume": 1000})
+            klines.append(
+                {
+                    "timestamp": f"2026-01-01T{i:02d}:00Z",
+                    "open": (h + lo) / 2,
+                    "high": h,
+                    "low": lo,
+                    "close": (h + lo) / 2,
+                    "volume": 1000,
+                }
+            )
     result = await DetectBoxRangeTool().execute(
         klines=klines,
         max_width_pct=0.30,  # 宽阈值，避免宽度拦截
@@ -292,15 +335,31 @@ async def test_min_width_pct_rejects_tight_cluster():
             h, lo = 103, 100
         else:
             h, lo = 102, 100
-        klines.append({"timestamp": f"2026-01-01T{i:02d}:00Z", "open": (h+lo)/2, "high": h, "low": lo, "close": (h+lo)/2, "volume": 1000})
+        klines.append(
+            {
+                "timestamp": f"2026-01-01T{i:02d}:00Z",
+                "open": (h + lo) / 2,
+                "high": h,
+                "low": lo,
+                "close": (h + lo) / 2,
+                "volume": 1000,
+            }
+        )
     # 不带 min_width_pct 应该能识别为箱体
     r_ok = await DetectBoxRangeTool().execute(
-        klines=klines, max_width_pct=0.15, pivot_window=2, atr_period=3,
+        klines=klines,
+        max_width_pct=0.15,
+        pivot_window=2,
+        atr_period=3,
     )
     assert r_ok.data["is_ranging"] is True
     # 带 min_width_pct=0.05 (5%) 5% 临界 → 实际 ~3% 宽，应被拒
     r_tight = await DetectBoxRangeTool().execute(
-        klines=klines, max_width_pct=0.15, min_width_pct=0.05, pivot_window=2, atr_period=3,
+        klines=klines,
+        max_width_pct=0.15,
+        min_width_pct=0.05,
+        pivot_window=2,
+        atr_period=3,
     )
     assert r_tight.data["is_ranging"] is False
     assert "宽度" in r_tight.data["reason"]

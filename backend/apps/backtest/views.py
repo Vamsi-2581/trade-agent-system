@@ -9,14 +9,14 @@ from django.core.paginator import Paginator
 from django.db import models
 from django.utils import timezone
 
-logger = logging.getLogger(__name__)
-
 from .models import BacktestResult, BacktestTrade
 from .serializers import (
     BacktestResultSerializer,
     BacktestDetailSerializer,
     BacktestTradeSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @api_view(["GET"])
@@ -31,7 +31,10 @@ def result_list(request):
     page = int(request.query_params.get("page", 1))
     page_size = min(int(request.query_params.get("page_size", 20)), 200)
     queryset = BacktestResult.objects.defer(
-        "ohlcv_data", "equity_curve", "drawdown_curve", "indicator_data",
+        "ohlcv_data",
+        "equity_curve",
+        "drawdown_curve",
+        "indicator_data",
     ).order_by("-created_at")
     paginator = Paginator(queryset, page_size)
     page_obj = paginator.get_page(page)
@@ -67,13 +70,20 @@ def _build_grouped_response(request):
     - single: 单个回测结果
     """
     from .models import GridSearchJob
-    from .serializers import BacktestResultSerializer, GridSearchGroupSerializer, SingleGroupSerializer
+    from .serializers import BacktestResultSerializer
     from collections import defaultdict
 
     user = request.user
     user_filter = models.Q(user=user) | models.Q(user__isnull=True)
-    results = BacktestResult.objects.filter(user_filter).select_related("strategy").defer(
-        "ohlcv_data", "equity_curve", "drawdown_curve", "indicator_data",
+    results = (
+        BacktestResult.objects.filter(user_filter)
+        .select_related("strategy")
+        .defer(
+            "ohlcv_data",
+            "equity_curve",
+            "drawdown_curve",
+            "indicator_data",
+        )
     )
 
     # 按 grid_search_id 分组
@@ -92,7 +102,9 @@ def _build_grouped_response(request):
     # prefetch jobs
     jobs_by_id = {}
     if existing_job_ids:
-        for job in GridSearchJob.objects.filter(id__in=existing_job_ids).select_related("strategy"):
+        for job in GridSearchJob.objects.filter(id__in=existing_job_ids).select_related(
+            "strategy"
+        ):
             jobs_by_id[str(job.id)] = job
 
     for job_id, job_results in grid_map.items():
@@ -103,75 +115,88 @@ def _build_grouped_response(request):
             # 计算最佳指标
             best_return = max((r.total_return_pct or 0) for r in job_results)
             best_sharpe = max((r.sharpe_ratio or 0) for r in job_results)
-            groups.append({
+            groups.append(
+                {
+                    "type": "grid_search",
+                    "job_id": str(job_id),
+                    "job_name": job_name,
+                    "symbol": job.symbol,
+                    "timeframe": job.timeframe,
+                    "status": job.status,
+                    "total_combinations": job.total_combinations,
+                    "completed": job.completed_combinations,
+                    "best_return_pct": best_return,
+                    "best_sharpe": best_sharpe,
+                    "created_at": job.created_at,
+                    "error": _grid_job_error_summary(job),
+                    "results": BacktestResultSerializer(job_results, many=True).data,
+                }
+            )
+        else:
+            # 已删除的 job → orphaned
+            first = job_results[0]
+            groups.append(
+                {
+                    "type": "orphaned_grid_search",
+                    "job_id": str(job_id),
+                    "job_name": "未知任务",
+                    "symbol": first.symbol,
+                    "timeframe": first.timeframe,
+                    "status": "completed",
+                    "total_combinations": len(job_results),
+                    "completed": len(job_results),
+                    "best_return_pct": max(
+                        (r.total_return_pct or 0) for r in job_results
+                    ),
+                    "best_sharpe": max((r.sharpe_ratio or 0) for r in job_results),
+                    "created_at": first.created_at,
+                    "results": BacktestResultSerializer(job_results, many=True).data,
+                }
+            )
+
+    # ── 2. 构建无结果的网格搜索分组（pending/running，暂无 BacktestResult） ──
+    pending_jobs = (
+        GridSearchJob.objects.filter(user_filter)
+        .exclude(id__in=list(existing_job_ids))
+        .select_related("strategy")
+        .order_by("-created_at")
+    )
+
+    for job in pending_jobs:
+        strategy_name = job.strategy.name if job.strategy else "Unknown"
+        job_name = f"{strategy_name} - {job.symbol}/{job.timeframe}"
+        groups.append(
+            {
                 "type": "grid_search",
-                "job_id": str(job_id),
+                "job_id": str(job.id),
                 "job_name": job_name,
                 "symbol": job.symbol,
                 "timeframe": job.timeframe,
                 "status": job.status,
                 "total_combinations": job.total_combinations,
                 "completed": job.completed_combinations,
-                "best_return_pct": best_return,
-                "best_sharpe": best_sharpe,
+                "best_return_pct": None,
+                "best_sharpe": None,
                 "created_at": job.created_at,
                 "error": _grid_job_error_summary(job),
-                "results": BacktestResultSerializer(job_results, many=True).data,
-            })
-        else:
-            # 已删除的 job → orphaned
-            first = job_results[0]
-            groups.append({
-                "type": "orphaned_grid_search",
-                "job_id": str(job_id),
-                "job_name": "未知任务",
-                "symbol": first.symbol,
-                "timeframe": first.timeframe,
-                "status": "completed",
-                "total_combinations": len(job_results),
-                "completed": len(job_results),
-                "best_return_pct": max((r.total_return_pct or 0) for r in job_results),
-                "best_sharpe": max((r.sharpe_ratio or 0) for r in job_results),
-                "created_at": first.created_at,
-                "results": BacktestResultSerializer(job_results, many=True).data,
-            })
-
-    # ── 2. 构建无结果的网格搜索分组（pending/running，暂无 BacktestResult） ──
-    pending_jobs = GridSearchJob.objects.filter(
-        user_filter
-    ).exclude(
-        id__in=list(existing_job_ids)
-    ).select_related("strategy").order_by("-created_at")
-
-    for job in pending_jobs:
-        strategy_name = job.strategy.name if job.strategy else "Unknown"
-        job_name = f"{strategy_name} - {job.symbol}/{job.timeframe}"
-        groups.append({
-            "type": "grid_search",
-            "job_id": str(job.id),
-            "job_name": job_name,
-            "symbol": job.symbol,
-            "timeframe": job.timeframe,
-            "status": job.status,
-            "total_combinations": job.total_combinations,
-            "completed": job.completed_combinations,
-            "best_return_pct": None,
-            "best_sharpe": None,
-            "created_at": job.created_at,
-            "error": _grid_job_error_summary(job),
-            "results": [],
-        })
+                "results": [],
+            }
+        )
 
     # ── 3. 单次回测 ──
     for r in singles:
-        groups.append({
-            "type": "single",
-            "result": BacktestResultSerializer(r).data,
-        })
+        groups.append(
+            {
+                "type": "single",
+                "result": BacktestResultSerializer(r).data,
+            }
+        )
 
     # 按 created_at 倒序（统一转为字符串避免 datetime vs str 比较错误）
     groups.sort(
-        key=lambda g: str(g.get("created_at") or g.get("result", {}).get("created_at") or ""),
+        key=lambda g: str(
+            g.get("created_at") or g.get("result", {}).get("created_at") or ""
+        ),
         reverse=True,
     )
 
@@ -180,13 +205,15 @@ def _build_grouped_response(request):
     page_num = int(request.query_params.get("page", 1))
     page_obj = paginator.get_page(page_num)
 
-    return Response({
-        "groups": page_obj.object_list,
-        "group_count": paginator.count,
-        "total_records": results.count(),
-        "num_pages": paginator.num_pages,
-        "current_page": page_obj.number,
-    })
+    return Response(
+        {
+            "groups": page_obj.object_list,
+            "group_count": paginator.count,
+            "total_records": results.count(),
+            "num_pages": paginator.num_pages,
+            "current_page": page_obj.number,
+        }
+    )
 
 
 @api_view(["GET"])
@@ -205,9 +232,15 @@ def result_detail_full(request, pk):
 
 
 TIMEFRAME_SECONDS: dict[str, int] = {
-    "1m": 60, "3m": 180, "5m": 300, "15m": 900,
-    "30m": 1800, "1h": 3600, "4h": 14400,
-    "1d": 86400, "1w": 604800,
+    "1m": 60,
+    "3m": 180,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "1h": 3600,
+    "4h": 14400,
+    "1d": 86400,
+    "1w": 604800,
 }
 
 
@@ -585,9 +618,7 @@ def grid_search_create(request):
 
     symbol = normalize_binance_symbol(symbol)
     if not grid_search or not grid_search.get("parameters"):
-        return Response(
-            {"error": "grid_search.parameters 为必填项"}, status=400
-        )
+        return Response({"error": "grid_search.parameters 为必填项"}, status=400)
 
     try:
         strategy = Strategy.objects.get(id=strategy_id)
@@ -709,17 +740,37 @@ def grid_search_results(request, pk):
         return Response({"error": "无权访问此任务"}, status=403)
 
     # Whitelist allowed sort fields
-    ALLOWED_SORT_FIELDS = {"sharpe_ratio", "total_return_pct", "win_rate", "max_drawdown", "total_trades", "-sharpe_ratio", "-total_return_pct", "-win_rate", "-max_drawdown", "-total_trades"}
+    ALLOWED_SORT_FIELDS = {
+        "sharpe_ratio",
+        "total_return_pct",
+        "win_rate",
+        "max_drawdown",
+        "total_trades",
+        "-sharpe_ratio",
+        "-total_return_pct",
+        "-win_rate",
+        "-max_drawdown",
+        "-total_trades",
+    }
     sort = request.query_params.get("sort", job.sort_by or "-sharpe_ratio")
     if sort not in ALLOWED_SORT_FIELDS:
-        sort = f"-{job.sort_by}" if job.sort_by and not job.sort_by.startswith("-") else f"-{job.sort_by or 'sharpe_ratio'}"
+        sort = (
+            f"-{job.sort_by}"
+            if job.sort_by and not job.sort_by.startswith("-")
+            else f"-{job.sort_by or 'sharpe_ratio'}"
+        )
     page_size = min(int(request.query_params.get("page_size", 20)), 200)
 
-    results = BacktestResult.objects.filter(
-        grid_search_id=job.id
-    ).defer(
-        "ohlcv_data", "equity_curve", "drawdown_curve", "indicator_data",
-    ).order_by(sort)
+    results = (
+        BacktestResult.objects.filter(grid_search_id=job.id)
+        .defer(
+            "ohlcv_data",
+            "equity_curve",
+            "drawdown_curve",
+            "indicator_data",
+        )
+        .order_by(sort)
+    )
 
     paginator = Paginator(results, page_size)
     page_obj = paginator.get_page(request.query_params.get("page", 1))
@@ -763,7 +814,9 @@ def grid_search_cancel(request, pk):
 
     if job.celery_task_id:
         try:
-            celery_app.control.revoke(job.celery_task_id, terminate=True, signal="SIGTERM")
+            celery_app.control.revoke(
+                job.celery_task_id, terminate=True, signal="SIGTERM"
+            )
         except Exception:
             logger.warning("Failed to revoke celery task %s", job.celery_task_id)
 

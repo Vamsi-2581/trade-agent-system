@@ -5,107 +5,319 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0005_shadow_and_mechanism_state'),
+        ("regime", "0005_shadow_and_mechanism_state"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='MajorEvent',
+            name="MajorEvent",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=128, verbose_name='事件名称')),
-                ('scope_kind', models.CharField(choices=[('market', '全市场'), ('symbols', '指定品种')], max_length=16, verbose_name='作用域种类')),
-                ('symbols', models.JSONField(default=list, verbose_name='作用域品种列表（全市场时为空）')),
-                ('event_time', models.DateTimeField(db_index=True, verbose_name='事件时刻（UTC）')),
-                ('impact', models.CharField(choices=[('high', '高'), ('medium', '中'), ('low', '低')], max_length=16, verbose_name='冲击档位')),
-                ('halt_at', models.DateTimeField(db_index=True, verbose_name='停止时刻（录入时按当时配置算好）')),
-                ('resume_at', models.DateTimeField(db_index=True, verbose_name='恢复时刻（录入时按当时配置算好）')),
-                ('status', models.CharField(choices=[('scheduled', '已排期'), ('cancelled', '已取消')], default='scheduled', max_length=16, verbose_name='状态')),
-                ('created_by', models.CharField(max_length=128, verbose_name='录入人')),
-                ('note', models.TextField(blank=True, default='', verbose_name='备注')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
-                ('updated_at', models.DateTimeField(auto_now=True, verbose_name='更新时间')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("name", models.CharField(max_length=128, verbose_name="事件名称")),
+                (
+                    "scope_kind",
+                    models.CharField(
+                        choices=[("market", "全市场"), ("symbols", "指定品种")],
+                        max_length=16,
+                        verbose_name="作用域种类",
+                    ),
+                ),
+                (
+                    "symbols",
+                    models.JSONField(
+                        default=list, verbose_name="作用域品种列表（全市场时为空）"
+                    ),
+                ),
+                (
+                    "event_time",
+                    models.DateTimeField(db_index=True, verbose_name="事件时刻（UTC）"),
+                ),
+                (
+                    "impact",
+                    models.CharField(
+                        choices=[("high", "高"), ("medium", "中"), ("low", "低")],
+                        max_length=16,
+                        verbose_name="冲击档位",
+                    ),
+                ),
+                (
+                    "halt_at",
+                    models.DateTimeField(
+                        db_index=True, verbose_name="停止时刻（录入时按当时配置算好）"
+                    ),
+                ),
+                (
+                    "resume_at",
+                    models.DateTimeField(
+                        db_index=True, verbose_name="恢复时刻（录入时按当时配置算好）"
+                    ),
+                ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[("scheduled", "已排期"), ("cancelled", "已取消")],
+                        default="scheduled",
+                        max_length=16,
+                        verbose_name="状态",
+                    ),
+                ),
+                ("created_by", models.CharField(max_length=128, verbose_name="录入人")),
+                ("note", models.TextField(blank=True, default="", verbose_name="备注")),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
+                (
+                    "updated_at",
+                    models.DateTimeField(auto_now=True, verbose_name="更新时间"),
+                ),
             ],
             options={
-                'verbose_name': '重大事件',
-                'verbose_name_plural': '重大事件',
-                'db_table': 'regime_major_events',
-                'ordering': ['event_time', 'id'],
+                "verbose_name": "重大事件",
+                "verbose_name_plural": "重大事件",
+                "db_table": "regime_major_events",
+                "ordering": ["event_time", "id"],
             },
         ),
         migrations.CreateModel(
-            name='MajorEventChange',
+            name="MajorEventChange",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('kind', models.CharField(choices=[('created', '录入'), ('rescheduled', '改期'), ('impact_changed', '改档'), ('cancelled', '取消')], max_length=24, verbose_name='动作')),
-                ('at', models.DateTimeField(db_index=True, verbose_name='动作时刻（UTC）')),
-                ('actor_kind', models.CharField(choices=[('cli', '命令行'), ('task', '定时任务'), ('chat', '聊天渠道')], max_length=16, verbose_name='触发方类别')),
-                ('actor_name', models.CharField(max_length=128, verbose_name='触发方')),
-                ('before', models.JSONField(default=dict, verbose_name='改动前（只含被改动的键）')),
-                ('after', models.JSONField(default=dict, verbose_name='改动后（只含被改动的键）')),
-                ('note', models.TextField(blank=True, default='', verbose_name='备注')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "kind",
+                    models.CharField(
+                        choices=[
+                            ("created", "录入"),
+                            ("rescheduled", "改期"),
+                            ("impact_changed", "改档"),
+                            ("cancelled", "取消"),
+                        ],
+                        max_length=24,
+                        verbose_name="动作",
+                    ),
+                ),
+                (
+                    "at",
+                    models.DateTimeField(db_index=True, verbose_name="动作时刻（UTC）"),
+                ),
+                (
+                    "actor_kind",
+                    models.CharField(
+                        choices=[
+                            ("cli", "命令行"),
+                            ("task", "定时任务"),
+                            ("chat", "聊天渠道"),
+                        ],
+                        max_length=16,
+                        verbose_name="触发方类别",
+                    ),
+                ),
+                ("actor_name", models.CharField(max_length=128, verbose_name="触发方")),
+                (
+                    "before",
+                    models.JSONField(
+                        default=dict, verbose_name="改动前（只含被改动的键）"
+                    ),
+                ),
+                (
+                    "after",
+                    models.JSONField(
+                        default=dict, verbose_name="改动后（只含被改动的键）"
+                    ),
+                ),
+                ("note", models.TextField(blank=True, default="", verbose_name="备注")),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
             ],
             options={
-                'verbose_name': '重大事件维护流水',
-                'verbose_name_plural': '重大事件维护流水',
-                'db_table': 'regime_major_event_changes',
-                'ordering': ['-at', '-id'],
+                "verbose_name": "重大事件维护流水",
+                "verbose_name_plural": "重大事件维护流水",
+                "db_table": "regime_major_event_changes",
+                "ordering": ["-at", "-id"],
             },
         ),
         migrations.AlterField(
-            model_name='regimemechanismswitch',
-            name='actor_kind',
-            field=models.CharField(choices=[('cli', '命令行'), ('task', '定时任务'), ('chat', '聊天渠道')], max_length=16, verbose_name='触发方类别'),
+            model_name="regimemechanismswitch",
+            name="actor_kind",
+            field=models.CharField(
+                choices=[("cli", "命令行"), ("task", "定时任务"), ("chat", "聊天渠道")],
+                max_length=16,
+                verbose_name="触发方类别",
+            ),
         ),
         migrations.AlterField(
-            model_name='regimepoolrebuild',
-            name='actor_kind',
-            field=models.CharField(choices=[('cli', '命令行'), ('task', '定时任务'), ('chat', '聊天渠道')], max_length=16, verbose_name='触发方类别'),
+            model_name="regimepoolrebuild",
+            name="actor_kind",
+            field=models.CharField(
+                choices=[("cli", "命令行"), ("task", "定时任务"), ("chat", "聊天渠道")],
+                max_length=16,
+                verbose_name="触发方类别",
+            ),
         ),
         migrations.CreateModel(
-            name='CandidateEvent',
+            name="CandidateEvent",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('name', models.CharField(max_length=128, verbose_name='推测的事件名称')),
-                ('origin', models.CharField(choices=[('news', '资讯判定'), ('agent', 'Agent 建议')], max_length=16, verbose_name='提出方')),
-                ('guessed_time', models.DateTimeField(blank=True, null=True, verbose_name='推测时刻（UTC，可空）')),
-                ('raised_at', models.DateField(verbose_name='提出日期（业务日）')),
-                ('raised_by', models.CharField(max_length=128, verbose_name='提出方标识（资讯源名 / sender id）')),
-                ('note', models.TextField(blank=True, default='', verbose_name='备注（推测依据）')),
-                ('expires_at', models.DateTimeField(db_index=True, verbose_name='失效时刻（写入时按当时配置换算）')),
-                ('status', models.CharField(choices=[('pending', '待确认'), ('confirmed', '已转正'), ('discarded', '已丢弃')], default='pending', max_length=16, verbose_name='状态')),
-                ('decided_at', models.DateTimeField(blank=True, null=True, verbose_name='处置时刻（UTC）')),
-                ('decided_by', models.CharField(blank=True, default='', max_length=128, verbose_name='处置人')),
-                ('discard_reason', models.CharField(blank=True, default='', max_length=16, verbose_name='丢弃原因（expired / rejected）')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
-                ('news_item', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='candidate_events', to='regime.newsitem', verbose_name='来源资讯条目')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "name",
+                    models.CharField(max_length=128, verbose_name="推测的事件名称"),
+                ),
+                (
+                    "origin",
+                    models.CharField(
+                        choices=[("news", "资讯判定"), ("agent", "Agent 建议")],
+                        max_length=16,
+                        verbose_name="提出方",
+                    ),
+                ),
+                (
+                    "guessed_time",
+                    models.DateTimeField(
+                        blank=True, null=True, verbose_name="推测时刻（UTC，可空）"
+                    ),
+                ),
+                ("raised_at", models.DateField(verbose_name="提出日期（业务日）")),
+                (
+                    "raised_by",
+                    models.CharField(
+                        max_length=128,
+                        verbose_name="提出方标识（资讯源名 / sender id）",
+                    ),
+                ),
+                (
+                    "note",
+                    models.TextField(
+                        blank=True, default="", verbose_name="备注（推测依据）"
+                    ),
+                ),
+                (
+                    "expires_at",
+                    models.DateTimeField(
+                        db_index=True, verbose_name="失效时刻（写入时按当时配置换算）"
+                    ),
+                ),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("pending", "待确认"),
+                            ("confirmed", "已转正"),
+                            ("discarded", "已丢弃"),
+                        ],
+                        default="pending",
+                        max_length=16,
+                        verbose_name="状态",
+                    ),
+                ),
+                (
+                    "decided_at",
+                    models.DateTimeField(
+                        blank=True, null=True, verbose_name="处置时刻（UTC）"
+                    ),
+                ),
+                (
+                    "decided_by",
+                    models.CharField(
+                        blank=True, default="", max_length=128, verbose_name="处置人"
+                    ),
+                ),
+                (
+                    "discard_reason",
+                    models.CharField(
+                        blank=True,
+                        default="",
+                        max_length=16,
+                        verbose_name="丢弃原因（expired / rejected）",
+                    ),
+                ),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
+                (
+                    "news_item",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="candidate_events",
+                        to="regime.newsitem",
+                        verbose_name="来源资讯条目",
+                    ),
+                ),
             ],
             options={
-                'verbose_name': '候选事件（未入库）',
-                'verbose_name_plural': '候选事件（未入库）',
-                'db_table': 'regime_candidate_events',
-                'ordering': ['-raised_at', '-id'],
+                "verbose_name": "候选事件（未入库）",
+                "verbose_name_plural": "候选事件（未入库）",
+                "db_table": "regime_candidate_events",
+                "ordering": ["-raised_at", "-id"],
             },
         ),
         migrations.AddConstraint(
-            model_name='majorevent',
-            constraint=models.CheckConstraint(check=models.Q(('resume_at__gte', models.F('halt_at'))), name='ck_major_event_window_ordered'),
+            model_name="majorevent",
+            constraint=models.CheckConstraint(
+                check=models.Q(("resume_at__gte", models.F("halt_at"))),
+                name="ck_major_event_window_ordered",
+            ),
         ),
         migrations.AddField(
-            model_name='candidateevent',
-            name='confirmed_event',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='confirmed_from', to='regime.majorevent', verbose_name='转正后的重大事件'),
+            model_name="candidateevent",
+            name="confirmed_event",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="confirmed_from",
+                to="regime.majorevent",
+                verbose_name="转正后的重大事件",
+            ),
         ),
         migrations.AddField(
-            model_name='majoreventchange',
-            name='event',
-            field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='changes', to='regime.majorevent', verbose_name='所属事件'),
+            model_name="majoreventchange",
+            name="event",
+            field=models.ForeignKey(
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="changes",
+                to="regime.majorevent",
+                verbose_name="所属事件",
+            ),
         ),
         migrations.AddConstraint(
-            model_name='candidateevent',
-            constraint=models.CheckConstraint(check=models.Q(models.Q(('status', 'confirmed'), _negated=True), ('confirmed_event__isnull', False), _connector='OR'), name='ck_candidate_confirmed_has_event'),
+            model_name="candidateevent",
+            constraint=models.CheckConstraint(
+                check=models.Q(
+                    models.Q(("status", "confirmed"), _negated=True),
+                    ("confirmed_event__isnull", False),
+                    _connector="OR",
+                ),
+                name="ck_candidate_confirmed_has_event",
+            ),
         ),
     ]

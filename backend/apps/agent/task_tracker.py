@@ -175,8 +175,7 @@ class TaskTracker:
         """
         # Filter out internal args
         display_args = {
-            k: v for k, v in arguments.items()
-            if k not in ("user_id", "agent_name")
+            k: v for k, v in arguments.items() if k not in ("user_id", "agent_name")
         }
 
         # Format args: key=value, key=value
@@ -194,16 +193,16 @@ class TaskTracker:
         # Update last_alive (existing behavior)
         self.alive()
 
-        logger.debug(
-            "[TaskTracker] tool_call pushed: %s(%s)",
-            tool_name, args_str
-        )
+        logger.debug("[TaskTracker] tool_call pushed: %s(%s)", tool_name, args_str)
 
     def alive(self) -> None:
         """Update last_alive timestamp (call after long tool executions)."""
-        self._save_redis("running", {
-            "last_alive": datetime.now(timezone.utc).isoformat(),
-        })
+        self._save_redis(
+            "running",
+            {
+                "last_alive": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
     def complete(self, result: str) -> None:
         """Mark task completed: push final result, update Redis, trigger async archive."""
@@ -265,7 +264,9 @@ class TaskTracker:
             logger.info("[TaskTracker] task %s cancelled", task_id)
             return True
         except Exception:
-            logger.warning("[TaskTracker] failed to cancel task %s", task_id, exc_info=True)
+            logger.warning(
+                "[TaskTracker] failed to cancel task %s", task_id, exc_info=True
+            )
             return False
 
     def is_cancelled(self) -> bool:
@@ -480,7 +481,8 @@ class TaskTracker:
             except Exception:
                 logger.info(
                     "[TaskTracker] direct PG archive failed for %s, falling back to Celery",
-                    self.task_id, exc_info=True,
+                    self.task_id,
+                    exc_info=True,
                 )
                 self._archive_via_celery(result)
         else:
@@ -488,12 +490,14 @@ class TaskTracker:
             async def _do_archive() -> None:
                 try:
                     from asgiref.sync import sync_to_async as sta
+
                     await sta(_do_sync_archive)()
                 except Exception:
                     logger.info(
                         "[TaskTracker] async PG archive failed for %s, "
                         "falling back to Celery",
-                        self.task_id, exc_info=True,
+                        self.task_id,
+                        exc_info=True,
                     )
                     self._archive_via_celery(result)
 
@@ -516,7 +520,8 @@ class TaskTracker:
         except Exception:
             logger.warning(
                 "[TaskTracker] Celery archive dispatch also failed for %s",
-                self.task_id, exc_info=True,
+                self.task_id,
+                exc_info=True,
             )
 
     def _get_current_status(self) -> str:

@@ -80,7 +80,9 @@ SHARD_MAX_SENDS = 3
 
 #: 子单结果的四种形态。前三种是**有结论**的，第四种不是。
 SHARD_STATUS_FILLED = "filled"  # 全部成交
-SHARD_STATUS_PARTIAL = "partial"  # 部分成交且**已了结**（余量已被交易所撤掉，不会再成交）
+SHARD_STATUS_PARTIAL = (
+    "partial"  # 部分成交且**已了结**（余量已被交易所撤掉，不会再成交）
+)
 SHARD_STATUS_REJECTED = "rejected"  # **确定**没成交（终态 + 成交量为 0）
 SHARD_STATUS_UNFINISHED = "unfinished"  # 没有结论：**可能有一张活单**
 
@@ -139,7 +141,10 @@ def is_opening_order(side: str, position_side: str | None) -> bool:
         return True
     if position_side not in ("long", "short"):
         return True
-    return not ((position_side == "long" and side == "sell") or (position_side == "short" and side == "buy"))
+    return not (
+        (position_side == "long" and side == "sell")
+        or (position_side == "short" and side == "buy")
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -217,7 +222,9 @@ def _retryable(exc: Exception) -> bool:
     return not isinstance(exc, ValueError)
 
 
-async def place_reduce_shard(adapter: BaseExchangeAdapter, order: ShardOrder) -> ShardResult:
+async def place_reduce_shard(
+    adapter: BaseExchangeAdapter, order: ShardOrder
+) -> ShardResult:
     """下一张**只减不增**的市价子单，失败时按 ``SHARD_MAX_SENDS`` 用同一个单号重发。
 
     这里**只承诺一件事**：``ShardResult`` 说的是这张子单的下场。至于「这一片该不该发」
@@ -419,9 +426,7 @@ def _merged(known: _Known, newer: _Known) -> _Known:
     return replace(
         newer,
         filled_qty=filled,
-        avg_price=(
-            newer.avg_price if newer.avg_price is not None else known.avg_price
-        ),
+        avg_price=(newer.avg_price if newer.avg_price is not None else known.avg_price),
         exchange_order_id=newer.exchange_order_id or known.exchange_order_id,
     )
 
@@ -493,7 +498,9 @@ async def _settle_order(
                 last_error,
             )
             continue
-        known = _merged(known, _Known.of(fill, fallback_order_id=known.exchange_order_id))
+        known = _merged(
+            known, _Known.of(fill, fallback_order_id=known.exchange_order_id)
+        )
         if _is_terminal(known.status):
             return _conclude_or_untrusted(known, order)
 
@@ -629,11 +636,10 @@ class CancelReport:
         lines: list[str] = []
         if not self.enumeration.complete:
             detail = "；".join(
-                f"{symbol}: {error}" for symbol, error in sorted(self.enumeration.failed.items())
+                f"{symbol}: {error}"
+                for symbol, error in sorted(self.enumeration.failed.items())
             )
-            lines.append(
-                f"**本次未能枚举挂单，敞口在窗口内仍可能增加**（{detail}）"
-            )
+            lines.append(f"**本次未能枚举挂单，敞口在窗口内仍可能增加**（{detail}）")
         if not self.enumeration.orders:
             if self.enumeration.complete:
                 lines.append("挂单：交易所侧没有开仓意图的挂单。")
@@ -699,13 +705,19 @@ async def cancel_opening_orders(
     它的后果是「敞口可能还会变大」这句话必须出现，而不是「所以这次不减了」：熔断里
     少减一半的代价，比多留一会儿挂单的代价大得多。
     """
-    report = CancelReport(enumeration=await enumerate_open_orders(adapter, symbols, position_side=position_side))
+    report = CancelReport(
+        enumeration=await enumerate_open_orders(
+            adapter, symbols, position_side=position_side
+        )
+    )
     for info in report.enumeration.orders:
         try:
             ok = await adapter.cancel_order(info.exchange_order_id, info.symbol)
         except Exception as exc:  # noqa: BLE001
             report.outcomes.append(
-                CancelOutcome(order=info, cancelled=False, error=f"{type(exc).__name__}: {exc}")
+                CancelOutcome(
+                    order=info, cancelled=False, error=f"{type(exc).__name__}: {exc}"
+                )
             )
             logger.warning(
                 "[Reduce] 撤单失败 order=%s symbol=%s：%s",
@@ -728,7 +740,9 @@ async def cancel_opening_orders(
 # --------------------------------------------------------------------------- #
 
 
-async def account_positions(adapter: BaseExchangeAdapter) -> dict[str, tuple[str, Decimal]]:
+async def account_positions(
+    adapter: BaseExchangeAdapter,
+) -> dict[str, tuple[str, Decimal]]:
     """账户此刻的持仓：``{交易所口径品种: (方向, 数量)}``。
 
     **交易所是持仓的唯一真相**（本地没有持仓表）。所以减仓的「一半」只能从这里算：
@@ -779,7 +793,9 @@ def volume_weighted_price(results: list[ShardResult]) -> Decimal | None:
     return total_value / total_qty
 
 
-def slippage_pct(reference: Decimal | None, vwap: Decimal | None, side: str) -> Decimal | None:
+def slippage_pct(
+    reference: Decimal | None, vwap: Decimal | None, side: str
+) -> Decimal | None:
     """一次减仓的滑点（**正 = 不利**），取不到基准或没有成交则 ``None``。
 
     方向按「不利为正」记，而不是记绝对值：一次成交得比中间价好的减仓，与一次成交得

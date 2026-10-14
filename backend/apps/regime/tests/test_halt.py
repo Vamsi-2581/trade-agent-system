@@ -99,8 +99,12 @@ class _HaltTestBase(TestCase):
 class TestScopeHelpers(TestCase):
     def test_the_three_scopes_round_trip(self):
         self.assertEqual(halt.parse_scope(halt.global_scope()), ("global", None))
-        self.assertEqual(halt.parse_scope(halt.symbol_scope(SYMBOL)), ("symbol", SYMBOL))
-        self.assertEqual(halt.parse_scope(halt.strategy_scope("s-1")), ("strategy", "s-1"))
+        self.assertEqual(
+            halt.parse_scope(halt.symbol_scope(SYMBOL)), ("symbol", SYMBOL)
+        )
+        self.assertEqual(
+            halt.parse_scope(halt.strategy_scope("s-1")), ("strategy", "s-1")
+        )
 
     def test_an_unreadable_scope_is_treated_as_global(self):
         """读不懂的作用域当**全市场**，而不是「不拦」。
@@ -115,7 +119,9 @@ class TestScopeHelpers(TestCase):
     def test_scope_display_is_one_sentence_for_all_callers(self):
         # 日报、query_halt 与拒绝理由共用同一句人话；各写一句就是「同一件事两处说法不同」。
         self.assertEqual(halt.scope_display(halt.global_scope()), "全市场（global）")
-        self.assertEqual(halt.scope_display(halt.symbol_scope(SYMBOL)), f"品种 {SYMBOL}")
+        self.assertEqual(
+            halt.scope_display(halt.symbol_scope(SYMBOL)), f"品种 {SYMBOL}"
+        )
         self.assertEqual(halt.scope_display(halt.strategy_scope("s-1")), "策略 s-1")
 
 
@@ -300,7 +306,9 @@ class TestVerdict(_HaltTestBase):
 
         self.assertEqual(len(verdict.layers), 2)
         self.assertIn("FOMC 议息（事件熔断，作用域 全市场（global））", verdict.reason)
-        self.assertIn("高波动（保命档（高波动），作用域 全市场（global））", verdict.reason)
+        self.assertIn(
+            "高波动（保命档（高波动），作用域 全市场（global））", verdict.reason
+        )
 
     def test_block_reason_is_empty_when_nothing_blocks(self):
         self.assertEqual(halt.block_reason(SYMBOL, now=NOW), "")
@@ -350,7 +358,10 @@ class TestLayersTouching(_HaltTestBase):
 
         # 一条会话跑的是别的品种、别的策略 ⇒ 只剩全市场那层。
         self.assertEqual(
-            [layer.label for layer in halt.layers_touching((("BTC/USDT", "s-2"),), now=NOW)],
+            [
+                layer.label
+                for layer in halt.layers_touching((("BTC/USDT", "s-2"),), now=NOW)
+            ],
             ["全市场那层"],
         )
 

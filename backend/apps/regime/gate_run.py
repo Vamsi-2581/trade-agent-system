@@ -156,9 +156,7 @@ def _regime_exemptions(regime: str, *, now: datetime) -> dict[UUID, gate.Exempti
 # --------------------------------------------------------------------------- #
 
 
-def _warrant(
-    decision: DeactivationDecision, *, managed: frozenset, cells: dict
-) -> str:
+def _warrant(decision: DeactivationDecision, *, managed: frozenset, cells: dict) -> str:
     """这一格此刻还算不算「该停用」。三态，取值见 `gate.GONE` / `LAPSED` / `STILL_TARGET`。
 
     两个来源缺一不可，所以先判归属再判判据：
@@ -187,9 +185,7 @@ def _warrant(
     return gate.LAPSED
 
 
-def _refs(
-    *, managed: frozenset, cells: dict
-) -> tuple[gate.DecisionRef, ...]:
+def _refs(*, managed: frozenset, cells: dict) -> tuple[gate.DecisionRef, ...]:
     """全部决策行的只读快照。**已解除的也要**——那正是 `applied` / `released` 两个取值的
     用处：一条被机制撤回过、后来又因为阶段回来而重新成立的，必须能回到 `applied`
     （否则「撤回过的不能再声明」会让这一格永久哑掉）。
@@ -198,9 +194,8 @@ def _refs(
     `label` 与 `reason` 都要策略名——那是**策略名唯一进得了用户眼睛的地方**（Q10 的核查：
     通知正文只打触发源、作用域与 `reason`）。
     """
-    rows = (
-        DeactivationDecision.objects.select_related("strategy")
-        .order_by("strategy_id", "regime")
+    rows = DeactivationDecision.objects.select_related("strategy").order_by(
+        "strategy_id", "regime"
     )
     return tuple(
         gate.DecisionRef(
@@ -475,7 +470,9 @@ def sync(
     summary: dict[str, Any] = {
         "symbol": round_.symbol,
         "regime": round_.state.regime,
-        "generation_id": round_.generation.pk if round_.generation is not None else None,
+        "generation_id": round_.generation.pk
+        if round_.generation is not None
+        else None,
         "skipped": None,
         "note": round_.plan.note,
         "gate_open": round_.gate_open,
@@ -510,7 +507,8 @@ def sync(
     summary["targets"] = round_.targets
     summary["exempt"] = round_.exempt
     summary["close_reasons"] = {
-        str(strategy_id): code for strategy_id, code in round_.plan.close_reasons.items()
+        str(strategy_id): code
+        for strategy_id, code in round_.plan.close_reasons.items()
     }
 
     # **声明先写、记录后写**：声明是机制对市场的动作，status 是对「机制做过什么」的记录。

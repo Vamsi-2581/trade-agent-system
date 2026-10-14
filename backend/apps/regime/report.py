@@ -255,7 +255,9 @@ def _run_day(judgement_result: dict, shadow: dict, now: datetime) -> date:
         raw = source.get(key)
         if raw:
             return date.fromisoformat(raw)
-    logger.warning("[regime] 判定与 Shadow 摘要都没有 run_day，按本地时刻推断日报运行日")
+    logger.warning(
+        "[regime] 判定与 Shadow 摘要都没有 run_day，按本地时刻推断日报运行日"
+    )
     return _business_day(now)
 
 
@@ -440,9 +442,7 @@ def _quant_lines(record: RegimeJudgement | None) -> list[str]:
     if atr_pct is not None:
         text = f"  ATR% {_num(atr_pct)}"
         if rank is not None:
-            text += (
-                f"，{sample or config.JUDGEMENT.quantile_window_days} 日分位 {_pct(rank)}"
-            )
+            text += f"，{sample or config.JUDGEMENT.quantile_window_days} 日分位 {_pct(rank)}"
             if rank >= config.JUDGEMENT.high_vol_quantile:
                 # 阈值是**分位**的阈值（判据就是「ATR% 分位 > 80%」），拿来比的是分位这
                 # 个数，不是 ATR% 本身——两个量纲差着一个数量级，混起来会把「今天波动
@@ -732,7 +732,11 @@ def diff_regimes(prev_by_regime: dict, today_by_regime: dict) -> list[dict]:
         today_entries = today_by_regime.get(regime, [])
         today_ids = {e["strategy_id"] for e in today_entries}
         added = [e for e in today_entries if e["strategy_id"] not in prev_ids]
-        removed = [e for e in prev_by_regime.get(regime, []) if e["strategy_id"] not in today_ids]
+        removed = [
+            e
+            for e in prev_by_regime.get(regime, [])
+            if e["strategy_id"] not in today_ids
+        ]
         if added:
             items.append(_change_item("halt", regime, added))
         if removed:
@@ -806,9 +810,7 @@ def _layer_label(item: dict) -> str:
     return f"「{item['regime_display']}」{suffix}"
 
 
-def render_change(
-    change: dict | None, *, strategy_ids: set[str] | None = None
-) -> str:
+def render_change(change: dict | None, *, strategy_ids: set[str] | None = None) -> str:
     """把结构化第②段渲染成文本，`strategy_ids` 非空时顺带按人裁剪。
 
     **裁剪发生在渲染之前**：`strategy_ids=None` 表示「不裁」（存档那一份、以及日志）；
@@ -895,7 +897,9 @@ def _section_events(*, now: datetime) -> str:
     others = len(upcoming) - len(high)
     if others:
         # 不静默略过：录进来的事件在日报里查不到，人会以为系统把那条吃了。
-        lines.append(f"另有 {others} 条档位非「高」的事件不产生熔断，用 /event list 查看。")
+        lines.append(
+            f"另有 {others} 条档位非「高」的事件不产生熔断，用 /event list 查看。"
+        )
 
     lines.extend(_candidate_lines(now=now))
     return "\n".join(lines)
@@ -914,9 +918,9 @@ def _candidate_lines(*, now: datetime) -> list[str]:
     连「它曾经存在过」都不会有人知道。
     """
     pending = list(
-        CandidateEvent.objects.filter(
-            status=CandidateStatus.PENDING.value
-        ).order_by("-raised_at", "-id")
+        CandidateEvent.objects.filter(status=CandidateStatus.PENDING.value).order_by(
+            "-raised_at", "-id"
+        )
     )
     if pending:
         lines = [
@@ -1054,7 +1058,8 @@ def _section_health(
         )
     derivation = deactivation.get("skipped") or ""
     lines.append(
-        "本轮推导：" + (BLOCKED_DISPLAY.get(derivation, derivation) or "正常，已产出建议")
+        "本轮推导："
+        + (BLOCKED_DISPLAY.get(derivation, derivation) or "正常，已产出建议")
     )
     note = (deactivation.get("note") or "").strip()
     if note and note != BLOCKED_DISPLAY.get(derivation, ""):
@@ -1077,10 +1082,14 @@ def _section_health(
         # 而日志不算被看见。
         review = deactivation.get("needs_review")
         if review:
-            lines.append(f"  待人工复核：{review} 条（判为不适用但依据方向冲突，本轮不动手）")
+            lines.append(
+                f"  待人工复核：{review} 条（判为不适用但依据方向冲突，本轮不动手）"
+            )
         missing = deactivation.get("missing_cells")
         if missing:
-            lines.append(f"  当前代缺格：{missing} 条（策略 × 阶段在池化表里没有这一格）")
+            lines.append(
+                f"  当前代缺格：{missing} 条（策略 × 阶段在池化表里没有这一格）"
+            )
 
     lines.append(event_library_line(now=now))
     return "\n".join(lines)
@@ -1119,7 +1128,11 @@ def _switch_lines(*, now: datetime) -> list[str]:
     master = RegimeMechanismSwitch.latest(MechanismKind.MECHANISM)
     lines.append(
         f"机制当前档：{RegimeMechanismSwitch.current(MechanismKind.MECHANISM).display}"
-        + (f"（最近一次切换 {format_business(master.at)}）" if master else "（无切换流水）")
+        + (
+            f"（最近一次切换 {format_business(master.at)}）"
+            if master
+            else "（无切换流水）"
+        )
     )
     notice = mechanism_switch.expiry_notice(now=now)
     if notice is not None:
@@ -1130,9 +1143,15 @@ def _switch_lines(*, now: datetime) -> list[str]:
         row = RegimeMechanismSwitch.latest(kind)
         lines.append(
             f"  {kind.display}：{RegimeMechanismSwitch.current(kind).display}"
-            + (f"（最近一次生效 {format_business(row.at)}）" if row else "（无切换流水）")
+            + (
+                f"（最近一次生效 {format_business(row.at)}）"
+                if row
+                else "（无切换流水）"
+            )
         )
-    lines.append("  保命档（高波动）：不在这三个开关里——高波动一到就生效，不需要人工确认。")
+    lines.append(
+        "  保命档（高波动）：不在这三个开关里——高波动一到就生效，不需要人工确认。"
+    )
     return lines
 
 
@@ -1217,7 +1236,9 @@ def event_library_line(*, now: datetime) -> str:
     latest, age = event_library_staleness(now=now)
     if latest is None:
         return f"事件库：从未录入过任何事件（上限 {limit} 天无新事件即衰减告警）"
-    text = f"事件库：最近入库 {format_business(latest)}（距今 {age} 天，上限 {limit} 天）"
+    text = (
+        f"事件库：最近入库 {format_business(latest)}（距今 {age} 天，上限 {limit} 天）"
+    )
     if age > limit:
         text += "——⚠ 已超过上限，事件情报可能已经衰减"
     return text
@@ -1573,7 +1594,14 @@ def check_report_delivery(
 
     row = (
         DailyReport.objects.filter(symbol=judgement.SYMBOL, run_day=day)
-        .only("symbol", "run_day", "created_at", "delivered_at", "delivery_attempts", "delivery_error")
+        .only(
+            "symbol",
+            "run_day",
+            "created_at",
+            "delivered_at",
+            "delivery_attempts",
+            "delivery_error",
+        )
         .first()
     )
     if row is not None and row.delivered_at is not None:
@@ -1609,7 +1637,9 @@ def check_report_delivery(
     delivered = asyncio.run(_alert_each([str(u.pk) for u in users], text))
     if any(delivered):
         _alerted_on[day] = True
-    logger.warning("[regime] 日报投递看门狗升级告警（%s 人，送达 %s）", len(users), sum(delivered))
+    logger.warning(
+        "[regime] 日报投递看门狗升级告警（%s 人，送达 %s）", len(users), sum(delivered)
+    )
     return {
         "checked": True,
         "escalated": True,

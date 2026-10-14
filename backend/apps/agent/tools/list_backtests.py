@@ -39,6 +39,7 @@ def _query_backtests(user_id: str, filters: dict) -> tuple[list[dict], int]:
     except (ValueError, TypeError):
         # 如果不是 UUID，尝试按 username 查找
         from django.contrib.auth import get_user_model
+
         User = get_user_model()
         user_obj = User.objects.filter(username=user_id).first()
         if user_obj:
@@ -73,24 +74,32 @@ def _query_backtests(user_id: str, filters: dict) -> tuple[list[dict], int]:
     # 转换为字典列表（字段转换）
     results = []
     for obj in queryset:
-        results.append({
-            "id": str(obj.id),  # UUID → 字符串（完整）
-            "strategy_name": obj.strategy.name if obj.strategy else "",  # 外键 → 名称
-            "symbol": obj.symbol,
-            "timeframe": obj.timeframe,
-            "start_date": str(obj.start_date),  # Date → 字符串
-            "end_date": str(obj.end_date),
-            "initial_capital": float(obj.initial_capital),  # Decimal → float
-            "final_capital": float(obj.final_capital),
-            "total_return_pct": obj.total_return_pct,  # float 保持
-            "sharpe_ratio": obj.sharpe_ratio if obj.sharpe_ratio else None,
-            "max_drawdown_pct": obj.max_drawdown_pct if obj.max_drawdown_pct else None,
-            "win_rate": obj.win_rate if obj.win_rate else None,
-            "total_trades": obj.total_trades,
-            "review_status": obj.review_status,
-            "grid_search_id": str(obj.grid_search_id) if obj.grid_search_id else None,
-            "created_at": obj.created_at.isoformat(),  # datetime → ISO 8601
-        })
+        results.append(
+            {
+                "id": str(obj.id),  # UUID → 字符串（完整）
+                "strategy_name": obj.strategy.name
+                if obj.strategy
+                else "",  # 外键 → 名称
+                "symbol": obj.symbol,
+                "timeframe": obj.timeframe,
+                "start_date": str(obj.start_date),  # Date → 字符串
+                "end_date": str(obj.end_date),
+                "initial_capital": float(obj.initial_capital),  # Decimal → float
+                "final_capital": float(obj.final_capital),
+                "total_return_pct": obj.total_return_pct,  # float 保持
+                "sharpe_ratio": obj.sharpe_ratio if obj.sharpe_ratio else None,
+                "max_drawdown_pct": obj.max_drawdown_pct
+                if obj.max_drawdown_pct
+                else None,
+                "win_rate": obj.win_rate if obj.win_rate else None,
+                "total_trades": obj.total_trades,
+                "review_status": obj.review_status,
+                "grid_search_id": str(obj.grid_search_id)
+                if obj.grid_search_id
+                else None,
+                "created_at": obj.created_at.isoformat(),  # datetime → ISO 8601
+            }
+        )
 
     return results, total
 

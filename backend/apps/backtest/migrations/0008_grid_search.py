@@ -7,74 +7,167 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('backtest', '0007_add_metrics_jsonfield'),
-        ('trading', '0003_add_live_session_and_order_link'),
+        ("backtest", "0007_add_metrics_jsonfield"),
+        ("trading", "0003_add_live_session_and_order_link"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='backtestresult',
-            name='grid_search_id',
-            field=models.UUIDField(blank=True, db_index=True, help_text='所属网格搜索任务 ID', null=True),
+            model_name="backtestresult",
+            name="grid_search_id",
+            field=models.UUIDField(
+                blank=True, db_index=True, help_text="所属网格搜索任务 ID", null=True
+            ),
         ),
         migrations.AddField(
-            model_name='backtestresult',
-            name='is_grid_search',
-            field=models.BooleanField(default=False, help_text='是否为网格搜索的子回测'),
+            model_name="backtestresult",
+            name="is_grid_search",
+            field=models.BooleanField(
+                default=False, help_text="是否为网格搜索的子回测"
+            ),
         ),
         migrations.CreateModel(
-            name='GridSearchJob',
+            name="GridSearchJob",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('symbol', models.CharField(max_length=32)),
-                ('timeframe', models.CharField(max_length=8)),
-                ('start_date', models.DateField()),
-                ('end_date', models.DateField()),
-                ('initial_capital', models.DecimalField(decimal_places=2, max_digits=20)),
-                ('commission_rate', models.DecimalField(decimal_places=4, default=0.001, max_digits=6)),
-                ('search_config', models.JSONField(default=dict)),
-                ('status', models.CharField(choices=[('pending', '待执行'), ('running', '运行中'), ('completed', '已完成'), ('failed', '失败'), ('cancelled', '已取消')], default='pending', max_length=12)),
-                ('source', models.CharField(choices=[('agent', 'Agent 对话'), ('cron', '定时任务'), ('api', 'REST API')], default='api', max_length=8)),
-                ('total_combinations', models.IntegerField(default=0)),
-                ('completed_combinations', models.IntegerField(default=0)),
-                ('sort_by', models.CharField(default='sharpe_ratio', max_length=32)),
-                ('error_log', models.JSONField(blank=True, default=list)),
-                ('celery_task_id', models.CharField(blank=True, default='', max_length=255)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('best_result', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='best_grid_result', to='backtest.backtestresult')),
-                ('strategy', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='strategy_grid_jobs', to='trading.strategy')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='grid_search_jobs', to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("symbol", models.CharField(max_length=32)),
+                ("timeframe", models.CharField(max_length=8)),
+                ("start_date", models.DateField()),
+                ("end_date", models.DateField()),
+                (
+                    "initial_capital",
+                    models.DecimalField(decimal_places=2, max_digits=20),
+                ),
+                (
+                    "commission_rate",
+                    models.DecimalField(decimal_places=4, default=0.001, max_digits=6),
+                ),
+                ("search_config", models.JSONField(default=dict)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("pending", "待执行"),
+                            ("running", "运行中"),
+                            ("completed", "已完成"),
+                            ("failed", "失败"),
+                            ("cancelled", "已取消"),
+                        ],
+                        default="pending",
+                        max_length=12,
+                    ),
+                ),
+                (
+                    "source",
+                    models.CharField(
+                        choices=[
+                            ("agent", "Agent 对话"),
+                            ("cron", "定时任务"),
+                            ("api", "REST API"),
+                        ],
+                        default="api",
+                        max_length=8,
+                    ),
+                ),
+                ("total_combinations", models.IntegerField(default=0)),
+                ("completed_combinations", models.IntegerField(default=0)),
+                ("sort_by", models.CharField(default="sharpe_ratio", max_length=32)),
+                ("error_log", models.JSONField(blank=True, default=list)),
+                (
+                    "celery_task_id",
+                    models.CharField(blank=True, default="", max_length=255),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "best_result",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="best_grid_result",
+                        to="backtest.backtestresult",
+                    ),
+                ),
+                (
+                    "strategy",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="strategy_grid_jobs",
+                        to="trading.strategy",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="grid_search_jobs",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'db_table': 'grid_search_jobs',
-                'ordering': ['-created_at'],
+                "db_table": "grid_search_jobs",
+                "ordering": ["-created_at"],
             },
         ),
         migrations.CreateModel(
-            name='GridSearchSchedule',
+            name="GridSearchSchedule",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('name', models.CharField(max_length=64)),
-                ('symbol', models.CharField(max_length=32)),
-                ('timeframe', models.CharField(max_length=8)),
-                ('lookback_days', models.IntegerField(default=30)),
-                ('search_config', models.JSONField(default=dict)),
-                ('cron_schedule', models.CharField(max_length=32)),
-                ('is_active', models.BooleanField(default=True)),
-                ('last_run_at', models.DateTimeField(blank=True, null=True)),
-                ('next_run_at', models.DateTimeField(blank=True, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('strategy', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='strategy_grid_schedules', to='trading.strategy')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='grid_search_schedules', to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("name", models.CharField(max_length=64)),
+                ("symbol", models.CharField(max_length=32)),
+                ("timeframe", models.CharField(max_length=8)),
+                ("lookback_days", models.IntegerField(default=30)),
+                ("search_config", models.JSONField(default=dict)),
+                ("cron_schedule", models.CharField(max_length=32)),
+                ("is_active", models.BooleanField(default=True)),
+                ("last_run_at", models.DateTimeField(blank=True, null=True)),
+                ("next_run_at", models.DateTimeField(blank=True, null=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "strategy",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="strategy_grid_schedules",
+                        to="trading.strategy",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="grid_search_schedules",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'db_table': 'grid_search_schedules',
-                'ordering': ['-created_at'],
+                "db_table": "grid_search_schedules",
+                "ordering": ["-created_at"],
             },
         ),
     ]

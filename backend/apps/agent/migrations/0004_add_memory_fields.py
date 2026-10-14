@@ -15,7 +15,9 @@ def add_embedding_column(apps, schema_editor):
     if connection.vendor == "sqlite":
         schema_editor.execute("ALTER TABLE agent_memory ADD COLUMN embedding TEXT")
     else:
-        schema_editor.execute("ALTER TABLE agent_memory ADD COLUMN embedding vector(768)")
+        schema_editor.execute(
+            "ALTER TABLE agent_memory ADD COLUMN embedding vector(768)"
+        )
 
 
 def remove_embedding_column(apps, schema_editor):

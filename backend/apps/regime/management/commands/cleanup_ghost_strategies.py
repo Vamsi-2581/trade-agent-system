@@ -82,10 +82,9 @@ def reference_counts(strategy_ids) -> dict:
         ):
             continue
         column = f"{field.name}_id"
-        rows = (
-            relation.related_model.objects.filter(**{f"{field.name}__in": ids})
-            .values_list(column, flat=True)
-        )
+        rows = relation.related_model.objects.filter(
+            **{f"{field.name}__in": ids}
+        ).values_list(column, flat=True)
         for strategy_id in rows:
             if strategy_id in counts:
                 counts[strategy_id] += 1
@@ -166,9 +165,7 @@ class Command(BaseCommand):
         self._print_list("待退役（有历史引用，保留并置 is_active=False）", retiring)
 
         if not options["apply"]:
-            self.stdout.write(
-                "以上是 dry-run，一行未写。确认无误后加 --apply 执行。"
-            )
+            self.stdout.write("以上是 dry-run，一行未写。确认无误后加 --apply 执行。")
             return
 
         if registry_empty:

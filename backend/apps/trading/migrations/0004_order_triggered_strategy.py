@@ -21,7 +21,6 @@ def noop(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ("trading", "0003_add_live_session_and_order_link"),
     ]

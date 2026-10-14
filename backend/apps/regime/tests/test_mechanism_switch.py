@@ -42,7 +42,6 @@ from apps.regime import (
     judgement,
     mechanism_switch,
     news_verdict,
-    truth,
 )
 from apps.regime.models import (
     ActorKind,
@@ -373,7 +372,12 @@ class TestTheThreeSources(_Fixture):
         _shadow(TODAY - timedelta(days=1), suggested=1)
         data = self.sweep()
         self.assertEqual(
-            (data.trigger_days, data.deactivation_days, data.high_vol_days, data.event_days),
+            (
+                data.trigger_days,
+                data.deactivation_days,
+                data.high_vol_days,
+                data.event_days,
+            ),
             (2, 2, 0, 0),
         )
 
@@ -384,7 +388,12 @@ class TestTheThreeSources(_Fixture):
         _shadow(TODAY - timedelta(days=2), regime=BaseRegime.HIGH_VOL)
         data = self.sweep()
         self.assertEqual(
-            (data.trigger_days, data.deactivation_days, data.high_vol_days, data.event_days),
+            (
+                data.trigger_days,
+                data.deactivation_days,
+                data.high_vol_days,
+                data.event_days,
+            ),
             (1, 0, 1, 0),
         )
 
@@ -394,7 +403,12 @@ class TestTheThreeSources(_Fixture):
         _event("FOMC", _at(day))
         data = self.sweep()
         self.assertEqual(
-            (data.trigger_days, data.deactivation_days, data.high_vol_days, data.event_days),
+            (
+                data.trigger_days,
+                data.deactivation_days,
+                data.high_vol_days,
+                data.event_days,
+            ),
             (1, 0, 0, 1),
         )
 
@@ -407,7 +421,12 @@ class TestTheThreeSources(_Fixture):
         _event("FOMC", _at(day))
         data = self.sweep()
         self.assertEqual(
-            (data.trigger_days, data.deactivation_days, data.high_vol_days, data.event_days),
+            (
+                data.trigger_days,
+                data.deactivation_days,
+                data.high_vol_days,
+                data.event_days,
+            ),
             (1, 1, 1, 1),
         )
         self.assertEqual(data.trigger_days / data.achieved.ran_days, 1 / MIN_DAYS)
@@ -653,7 +672,9 @@ class TestTheAgreementIsWired(_Fixture):
         body = self.body()
         self.assertIn("系统性错向 3 天", body)
         self.assertIn("哪怕一次也算不达标", body)
-        self.assertIn("① 判定与人工标注的一致率", mechanism_switch.unmet_note(data) or "")
+        self.assertIn(
+            "① 判定与人工标注的一致率", mechanism_switch.unmet_note(data) or ""
+        )
 
     def test_an_escalated_day_is_not_a_misdirection(self):
         """**端到端**，资讯抬升那一档：同一批日线、同一段〈下行趋势〉真值，只是那三天
@@ -940,7 +961,9 @@ class TestTheExpiryNotice(_Fixture):
     def test_nothing_without_a_start(self):
         """一条判定都没有，或只有失败的判定 —— 都还没起算。（本仓今天就是这个形状。）"""
         self.assertIsNone(mechanism_switch.expiry_notice(now=NOW))
-        _judgement(TODAY - timedelta(days=CAP_DAYS + 3), status=news_verdict.STATUS_FAILED)
+        _judgement(
+            TODAY - timedelta(days=CAP_DAYS + 3), status=news_verdict.STATUS_FAILED
+        )
         self.assertIsNone(mechanism_switch.expiry_notice(now=NOW))
 
     def test_it_speaks_after_the_cap(self):

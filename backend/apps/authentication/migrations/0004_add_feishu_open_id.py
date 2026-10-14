@@ -4,15 +4,16 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('authentication', '0003_add_telegram_fields'),
+        ("authentication", "0003_add_telegram_fields"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='user',
-            name='feishu_open_id',
-            field=models.CharField(blank=True, max_length=128, null=True, verbose_name='Feishu Open ID'),
+            model_name="user",
+            name="feishu_open_id",
+            field=models.CharField(
+                blank=True, max_length=128, null=True, verbose_name="Feishu Open ID"
+            ),
         ),
     ]

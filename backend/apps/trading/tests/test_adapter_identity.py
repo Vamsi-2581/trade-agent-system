@@ -47,8 +47,15 @@ class _FakeAdapter:
         self.disconnected += 1
 
 
-def _account(account_id, *, exchange="binance", label="", testnet=False,
-             key=b"key", secret=b"secret"):
+def _account(
+    account_id,
+    *,
+    exchange="binance",
+    label="",
+    testnet=False,
+    key=b"key",
+    secret=b"secret",
+):
     return SimpleNamespace(
         id=account_id,
         exchange=exchange,
@@ -94,10 +101,12 @@ class _LoadAdaptersTest(unittest.IsolatedAsyncioTestCase):
     async def _load(self, *accounts):
         manager = MagicMock()
         manager.filter.return_value = list(accounts)
-        with patch("apps.exchange.models.ExchangeAccount.objects", manager), patch.dict(
-            "apps.trading.executor.ADAPTER_MAP", {"binance": _FakeAdapter}
-        ), patch.object(
-            OrderExecutor, "_get_fernet", MagicMock(return_value=_fake_fernet())
+        with (
+            patch("apps.exchange.models.ExchangeAccount.objects", manager),
+            patch.dict("apps.trading.executor.ADAPTER_MAP", {"binance": _FakeAdapter}),
+            patch.object(
+                OrderExecutor, "_get_fernet", MagicMock(return_value=_fake_fernet())
+            ),
         ):
             await self.executor._load_adapters()
 
@@ -107,8 +116,9 @@ class TestAccountKeyedAdapters(_LoadAdaptersTest):
         """两个同交易所账户 → 两个适配器，密钥各归各的（钱就卡在这条边界上）。"""
         await self._load(
             _account("acc-1", label="main", key=b"key-1", secret=b"secret-1"),
-            _account("acc-2", label="sub", key=b"key-2", secret=b"secret-2",
-                     testnet=True),
+            _account(
+                "acc-2", label="sub", key=b"key-2", secret=b"secret-2", testnet=True
+            ),
         )
 
         self.assertEqual(set(self.executor._account_adapters), {"acc-1", "acc-2"})
@@ -281,10 +291,8 @@ class TestFillSyncUsesTheOrdersOwnAccount(unittest.IsolatedAsyncioTestCase):
 
         manager = MagicMock()
         manager.filter.return_value.select_related.return_value = [
-            _fake_order(id="o-1", exchange_account_id="acc-1",
-                        exchange_order_id="111"),
-            _fake_order(id="o-2", exchange_account_id="acc-2",
-                        exchange_order_id="222"),
+            _fake_order(id="o-1", exchange_account_id="acc-1", exchange_order_id="111"),
+            _fake_order(id="o-2", exchange_account_id="acc-2", exchange_order_id="222"),
         ]
 
         with patch("apps.trading.models.Order.objects", manager):

@@ -70,7 +70,24 @@ def candles(closes, bands=1.0):
 #: 稳步上行：每日 +1，振幅恒定
 RAMP = [100 + i for i in range(16)]
 #: 先急跌后收敛：跌幅收窄、振幅不变 → 趋势仍在，但波动分位从高往低走
-DOWN_CALMING = [200, 195, 190, 185, 182, 180, 178, 176, 174, 172, 170, 168, 166, 164, 162, 160]
+DOWN_CALMING = [
+    200,
+    195,
+    190,
+    185,
+    182,
+    180,
+    178,
+    176,
+    174,
+    172,
+    170,
+    168,
+    166,
+    164,
+    162,
+    160,
+]
 #: 稳定急跌 -3/日 → 价格越跌 ATR% 越高，分位必然顶到 1.0
 STEADY_DOWN = [200 - 3 * i for i in range(16)]
 #: 几乎不动的漂移：斜率符号在，幅度不够
@@ -205,7 +222,9 @@ class TestClassificationEndToEnd(SimpleTestCase):
         labels = label_series(candles(DOWN_CALMING), PARAMS)
 
         self.assertIs(labels[EXPECTED_ONSET].regime, BaseRegime.DOWNTREND)
-        self.assertLessEqual(labels[EXPECTED_ONSET].atr_pct_rank, PARAMS.high_vol_quantile)
+        self.assertLessEqual(
+            labels[EXPECTED_ONSET].atr_pct_rank, PARAMS.high_vol_quantile
+        )
 
     def test_uptrend_is_the_mirror_image(self):
         labels = label_series(candles(RAMP), PARAMS)
@@ -229,7 +248,9 @@ class TestClassificationEndToEnd(SimpleTestCase):
 
         分位是含当日的，所以巨幅那一刻 ATR% 就是窗口里的最大值 → 分位 1.0。
         """
-        labels = label_series(candles(QUIET_THEN_SPIKE, bands=[1.0] * 15 + [30.0]), PARAMS)
+        labels = label_series(
+            candles(QUIET_THEN_SPIKE, bands=[1.0] * 15 + [30.0]), PARAMS
+        )
 
         self.assertIs(labels[-1].regime, BaseRegime.HIGH_VOL)
         self.assertEqual(labels[-1].atr_pct_rank, 1.0)
@@ -474,7 +495,9 @@ class TestParametersAreHonoured(SimpleTestCase):
         )
 
         strict = replace(PARAMS, trend_separation_min_atr=3.0)
-        self.assertIs(label_series(calm, strict)[EXPECTED_ONSET].regime, BaseRegime.RANGE)
+        self.assertIs(
+            label_series(calm, strict)[EXPECTED_ONSET].regime, BaseRegime.RANGE
+        )
 
     def test_high_vol_threshold_is_exclusive_at_the_rank_that_lands_on_it(self):
         """分位恰好落在阈值上那一天：不算高波动，趋势那一支照常生效。"""

@@ -107,7 +107,9 @@ class TestRecurringTaskNotification:
         )
 
         try:
-            with patch("apps.agent.task_tracker._send_notification_redis") as mock_notify:
+            with patch(
+                "apps.agent.task_tracker._send_notification_redis"
+            ) as mock_notify:
                 with _supervisor_patch("_execute_workflow", mock_result):
                     execute_recurring_agent_task(
                         agent_name="supervisor",
@@ -124,7 +126,9 @@ class TestRecurringTaskNotification:
             assert notify_user_id == CHANNEL_USER_ID
             assert "完成" in notify_text
             assert "BTC 现价 63000，趋势偏多" in notify_text
-            assert "workflow_id" not in notify_text, "不应把 data 的整份 dict repr 推给用户"
+            assert "workflow_id" not in notify_text, (
+                "不应把 data 的整份 dict repr 推给用户"
+            )
         finally:
             _drop_tracker_key(task_name)
 
@@ -138,7 +142,9 @@ class TestRecurringTaskNotification:
         )
 
         try:
-            with patch("apps.agent.task_tracker._send_notification_redis") as mock_notify:
+            with patch(
+                "apps.agent.task_tracker._send_notification_redis"
+            ) as mock_notify:
                 with _supervisor_patch("handle", mock_result):
                     result = execute_recurring_agent_task(
                         agent_name="analyst",
@@ -162,7 +168,9 @@ class TestRecurringTaskNotification:
         task_name = "rec_exc_single"
 
         try:
-            with patch("apps.agent.task_tracker._send_notification_redis") as mock_notify:
+            with patch(
+                "apps.agent.task_tracker._send_notification_redis"
+            ) as mock_notify:
                 with patch(
                     "apps.agent.supervisor.SupervisorAgent.get_instance",
                     side_effect=RuntimeError("worker 挂了"),
@@ -195,10 +203,14 @@ class TestRecurringTaskNotification:
             password="x",
         )
         task_name = "rec_no_user"
-        mock_result = AgentResult(task_id="rec-5", success=True, data={"content": "结论"})
+        mock_result = AgentResult(
+            task_id="rec-5", success=True, data={"content": "结论"}
+        )
 
         try:
-            with patch("apps.agent.task_tracker._send_notification_redis") as mock_notify:
+            with patch(
+                "apps.agent.task_tracker._send_notification_redis"
+            ) as mock_notify:
                 with _supervisor_patch("handle", mock_result):
                     execute_recurring_agent_task(
                         agent_name="analyst",
@@ -223,7 +235,11 @@ class TestResultSummaryForUser:
         result = AgentResult(
             task_id="t",
             success=True,
-            data={"workflow_id": "wf", "workflow_summary": "结论 A", "step_results": []},
+            data={
+                "workflow_id": "wf",
+                "workflow_summary": "结论 A",
+                "step_results": [],
+            },
         )
         assert _result_summary_for_user(result) == "结论 A"
 

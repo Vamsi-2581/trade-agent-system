@@ -93,9 +93,7 @@ class _PartialConnectSource(BinanceDataSource):
         return self._http_client
 
 
-def _run_connect(
-    source: _PartialConnectSource, subs: Optional[list] = None
-) -> bool:
+def _run_connect(source: _PartialConnectSource, subs: Optional[list] = None) -> bool:
     """在一次性事件循环上执行订阅注册 + connect_websocket，并清理 receiver 任务"""
 
     async def scenario():
@@ -199,7 +197,9 @@ class TestPartialConnect:
         assert _run_connect(source, subs=subs) is True
 
         subscribes = _subscribe_frames(spot_ws)
-        assert len(subscribes) == 1, f"期望 1 条批量帧，实际 {len(subscribes)} 条: {subscribes}"
+        assert len(subscribes) == 1, (
+            f"期望 1 条批量帧，实际 {len(subscribes)} 条: {subscribes}"
+        )
         assert subscribes[0]["params"] == [
             "btcusdt@ticker",
             "ethusdt@ticker",
@@ -326,10 +326,14 @@ class TestSubscribeRateLimit:
 
         async def scenario():
             await source.connect_websocket()  # 先连上（无订阅，不发帧）
-            await source.subscribe("BTC/USDT", DataType.TICKER, market_type=MarketType.SPOT)
+            await source.subscribe(
+                "BTC/USDT", DataType.TICKER, market_type=MarketType.SPOT
+            )
             first = len(_subscribe_frames(spot_ws))
             # 重复订阅同一 key（如仅回调变更）：不应新增帧
-            await source.subscribe("BTC/USDT", DataType.TICKER, market_type=MarketType.SPOT)
+            await source.subscribe(
+                "BTC/USDT", DataType.TICKER, market_type=MarketType.SPOT
+            )
             second = len(_subscribe_frames(spot_ws))
             for task in source._ws_tasks:
                 task.cancel()
@@ -352,10 +356,19 @@ class TestSubscribeRateLimit:
         spot_ws = _TimedFakeWS()
         source = _PartialConnectSource(spot_ws=spot_ws, futures_ws=None)
         try:
+
             async def scenario():
                 await source.connect_websocket()  # 先连上（无订阅，不发帧）
-                for sym in ("BTC/USDT", "ETH/USDT", "SOL/USDT", "AVAX/USDT", "DOGE/USDT"):
-                    await source.subscribe(sym, DataType.TICKER, market_type=MarketType.SPOT)
+                for sym in (
+                    "BTC/USDT",
+                    "ETH/USDT",
+                    "SOL/USDT",
+                    "AVAX/USDT",
+                    "DOGE/USDT",
+                ):
+                    await source.subscribe(
+                        sym, DataType.TICKER, market_type=MarketType.SPOT
+                    )
                 for task in source._ws_tasks:
                     task.cancel()
                 await asyncio.gather(*source._ws_tasks, return_exceptions=True)

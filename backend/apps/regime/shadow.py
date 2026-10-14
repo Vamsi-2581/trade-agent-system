@@ -234,5 +234,7 @@ def _note(judgement: dict, deactivation: dict, *, concluded: bool) -> str:
     tail = (deactivation.get("note") or "").strip()
     if not tail:
         count = len(deactivation.get("suggestions") or [])
-        tail = "推导正常，无停用建议" if count == 0 else f"推导正常，建议停用 {count} 条"
+        tail = (
+            "推导正常，无停用建议" if count == 0 else f"推导正常，建议停用 {count} 条"
+        )
     return f"{head}；{tail}"

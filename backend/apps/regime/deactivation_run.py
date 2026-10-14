@@ -251,9 +251,7 @@ def close_left_regime_exemptions(
         return ()
     now = now or timezone.now()
     stale = list(
-        DeactivationExemption.objects.filter(
-            closed_at__isnull=True, expires_at__gt=now
-        )
+        DeactivationExemption.objects.filter(closed_at__isnull=True, expires_at__gt=now)
         .exclude(regime=regime)
         .values_list("id", flat=True)
     )
@@ -400,7 +398,9 @@ def run_deactivation(
         logger.info("[regime] 停用决策：%s", summary["note"])
         return summary
 
-    summary["exemptions_closed"] = len(close_left_regime_exemptions(state.regime, now=now))
+    summary["exemptions_closed"] = len(
+        close_left_regime_exemptions(state.regime, now=now)
+    )
     for outcome in derivation.writable:
         row = cells.get((outcome.strategy_id, outcome.regime))
         if row is None:
@@ -565,7 +565,9 @@ def find_strategy(*, name: str = "", strategy_id: str = "") -> Strategy:
     if raw_id and wanted:
         raise ExemptionError("策略名与策略 id 只能给一个，收到两个。")
     if not raw_id and not wanted:
-        raise ExemptionError("要指明给哪条策略：策略名与策略 id 恰好给一个，一个都没给。")
+        raise ExemptionError(
+            "要指明给哪条策略：策略名与策略 id 恰好给一个，一个都没给。"
+        )
     if raw_id:
         strategy = Strategy.objects.filter(id=_parse_uuid(raw_id)).first()
         if strategy is None:

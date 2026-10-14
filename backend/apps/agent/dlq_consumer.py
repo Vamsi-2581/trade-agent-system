@@ -5,7 +5,6 @@ import json
 import logging
 import socket
 
-from . import bus
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +44,7 @@ class DeadLetterConsumer:
     async def _ensure_group(self) -> None:
         r = await self._get_redis()
         try:
-            await r.xgroup_create(
-                _DLQ_STREAM, _DLQ_GROUP, id="0", mkstream=True
-            )
+            await r.xgroup_create(_DLQ_STREAM, _DLQ_GROUP, id="0", mkstream=True)
         except Exception as e:
             if "BUSYGROUP" not in str(e):
                 raise
@@ -81,9 +78,7 @@ class DeadLetterConsumer:
             except RuntimeError:
                 break
             except Exception:
-                logger.error(
-                    "[DeadLetterConsumer] poll error", exc_info=True
-                )
+                logger.error("[DeadLetterConsumer] poll error", exc_info=True)
                 try:
                     await asyncio.sleep(5)
                 except (asyncio.CancelledError, RuntimeError):
@@ -110,13 +105,14 @@ class DeadLetterConsumer:
         if user_id:
             await _async_send_notification(
                 user_id,
-                f"任务 #{task_id} 处理失败（{dlq_reason}）\n"
-                f"请使用 /retry 命令重新提交",
+                f"任务 #{task_id} 处理失败（{dlq_reason}）\n请使用 /retry 命令重新提交",
             )
 
         logger.info(
             "[DeadLetterConsumer] DLQ message %s notified user=%s reason=%s",
-            msg_id, user_id, dlq_reason,
+            msg_id,
+            user_id,
+            dlq_reason,
         )
 
     async def _get_redis(self):
@@ -143,11 +139,13 @@ async def _async_send_notification(user_id: str, text: str) -> None:
         r = aioredis.from_url(url, decode_responses=True)
         await r.publish(
             "task:progress:notifications",
-            json.dumps({
-                "user_id": user_id,
-                "text": text,
-                "at": datetime.now(timezone.utc).isoformat(),
-            }),
+            json.dumps(
+                {
+                    "user_id": user_id,
+                    "text": text,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+            ),
         )
         await r.aclose()
     except Exception:

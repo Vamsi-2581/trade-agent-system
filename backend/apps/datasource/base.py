@@ -442,12 +442,17 @@ class BaseDataSource(ABC):
     def _trigger_callbacks(self, data_type: DataType, data: Dict) -> None:
         """全局广播触发（旧行为，向后兼容）。新代码请用 _trigger_precise_callbacks。"""
         callbacks = self._callbacks.get(data_type, [])
-        logger.debug(f"[DataSource] triggering {len(callbacks)} callbacks for {data_type}")
+        logger.debug(
+            f"[DataSource] triggering {len(callbacks)} callbacks for {data_type}"
+        )
         for callback in callbacks:
             try:
                 import asyncio
                 import inspect
-                if inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(getattr(callback, '__call__', None)):
+
+                if inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(
+                    getattr(callback, "__call__", None)
+                ):
                     asyncio.create_task(callback(data))
                 else:
                     callback(data)
@@ -476,7 +481,10 @@ class BaseDataSource(ABC):
             try:
                 import asyncio
                 import inspect
-                if inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(getattr(callback, '__call__', None)):
+
+                if inspect.iscoroutinefunction(callback) or inspect.iscoroutinefunction(
+                    getattr(callback, "__call__", None)
+                ):
                     asyncio.create_task(callback(data))
                 else:
                     callback(data)

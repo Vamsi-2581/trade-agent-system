@@ -167,7 +167,9 @@ class TestTradeAdaptation(SimpleTestCase):
 
         trades, _ = slicing.adapt_trades([row(entry=moment, exit=moment, pnl=1)])
 
-        self.assertEqual(trades[0].entry_time, datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(
+            trades[0].entry_time, datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
+        )
 
     def test_an_empty_batch_is_not_an_error(self):
         self.assertEqual(slicing.adapt_trades([]), ([], 0))
@@ -243,16 +245,23 @@ class TestStaleness(SimpleTestCase):
             "evidence_threshold": {"min_trades": 3, "min_months": 1},
             "computed_at": "2020-01-01T00:00:00+00:00",
             "config_snapshot": {},
-            "tags": {"symbol": SYMBOL, "fingerprint": slicing.tag_fingerprint(all_range_tags(), WINDOW)},
+            "tags": {
+                "symbol": SYMBOL,
+                "fingerprint": slicing.tag_fingerprint(all_range_tags(), WINDOW),
+            },
         }
         payload.update(overrides)
         return payload
 
     def test_no_slice_at_all_is_stale(self):
-        self.assertTrue(slicing.is_stale(result_stub(metrics={}), all_range_tags(), SMALL))
+        self.assertTrue(
+            slicing.is_stale(result_stub(metrics={}), all_range_tags(), SMALL)
+        )
 
     def test_a_missing_metrics_field_is_not_an_error(self):
-        self.assertTrue(slicing.is_stale(result_stub(metrics=None), all_range_tags(), SMALL))
+        self.assertTrue(
+            slicing.is_stale(result_stub(metrics=None), all_range_tags(), SMALL)
+        )
 
     def test_a_matching_slice_is_not_stale(self):
         stored = self._stored()
@@ -294,7 +303,9 @@ class TestStaleness(SimpleTestCase):
 
         self.assertTrue(
             slicing.is_stale(
-                result, all_range_tags(), config.EvidenceConfig(min_trades=3, min_months=3)
+                result,
+                all_range_tags(),
+                config.EvidenceConfig(min_trades=3, min_months=3),
             )
         )
 
@@ -368,7 +379,9 @@ class TestPayloadEnvelope(SimpleTestCase):
         """不叫 `params`：`config_snapshot.judgement` 里已经有一个 `params` 了。"""
         payload = self._payload()
 
-        self.assertEqual(payload["evidence_threshold"], {"min_trades": 3, "min_months": 1})
+        self.assertEqual(
+            payload["evidence_threshold"], {"min_trades": 3, "min_months": 1}
+        )
         self.assertNotIn("params", payload)
 
     def test_the_tags_block_says_where_the_labels_came_from(self):
@@ -413,9 +426,13 @@ class TestPayloadEnvelope(SimpleTestCase):
         self.assertEqual(payload["attribution"]["closed_trades"], 1)
 
     def test_the_threshold_travels_with_the_conclusion(self):
-        payload = self._payload(params=config.EvidenceConfig(min_trades=30, min_months=3))
+        payload = self._payload(
+            params=config.EvidenceConfig(min_trades=30, min_months=3)
+        )
 
-        self.assertEqual(payload["evidence_threshold"], {"min_trades": 30, "min_months": 3})
+        self.assertEqual(
+            payload["evidence_threshold"], {"min_trades": 30, "min_months": 3}
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -441,7 +458,9 @@ class TestDispatchNeverRaises(SimpleTestCase):
 
     def test_a_broker_failure_is_swallowed_and_logged(self):
         with patch.object(
-            tasks.compute_regime_slice_task, "delay", side_effect=RuntimeError("broker down")
+            tasks.compute_regime_slice_task,
+            "delay",
+            side_effect=RuntimeError("broker down"),
         ):
             with self.assertLogs("apps.regime.tasks", level="ERROR") as captured:
                 self.assertFalse(tasks.dispatch_slice(["a"]))
@@ -546,7 +565,9 @@ class TestMaterialisation(TestCase):
         result.refresh_from_db()
         self.assertEqual(result.metrics["sharpe"], 1.5)
         self.assertEqual(result.metrics["note"], "keep me")
-        self.assertEqual(result.metrics[slicing.SLICE_KEY], {"version": sl.SLICE_VERSION})
+        self.assertEqual(
+            result.metrics[slicing.SLICE_KEY], {"version": sl.SLICE_VERSION}
+        )
 
     def test_compute_slice_writes_the_payload_it_returns(self):
         result = self.make_result()
@@ -638,7 +659,9 @@ class TestSliceTask(_StubbedConnectionReset, TestCase):
         tasks.compute_regime_slice_task([str(result.id)])
         summary = tasks.compute_regime_slice_task([str(result.id)])
 
-        self.assertEqual(summary, {"sliced": 0, "skipped": 1, "missing": [], "failed": []})
+        self.assertEqual(
+            summary, {"sliced": 0, "skipped": 1, "missing": [], "failed": []}
+        )
 
     def test_only_stale_off_forces_a_rewrite(self):
         result = self.make_result()
@@ -746,7 +769,9 @@ class TestRecomputeCommand(_StubbedConnectionReset, TestCase):
         超过容器 2 GiB 上限，越限的现场是「进程卡住不动」而不是一条报错——所以要一条
         测试，而不是靠下一个人记得。要往这条扫描里加列，先把那条注释读一遍。
         """
-        from apps.regime.management.commands.recompute_regime_slices import HEAVY_COLUMNS
+        from apps.regime.management.commands.recompute_regime_slices import (
+            HEAVY_COLUMNS,
+        )
 
         self.make_result()
         seen: list[set] = []
@@ -862,7 +887,9 @@ class TestRecomputeCommand(_StubbedConnectionReset, TestCase):
         self.make_result()
         self.make_result()
 
-        with patch("apps.regime.slicing.compute_slice", side_effect=ValueError("坏数据")):
+        with patch(
+            "apps.regime.slicing.compute_slice", side_effect=ValueError("坏数据")
+        ):
             with self.assertRaises(CommandError):
                 self.run_command("--all")
 
@@ -878,7 +905,9 @@ class TestRecomputeCommand(_StubbedConnectionReset, TestCase):
         self.make_result()
         out = StringIO()
 
-        with patch("apps.regime.slicing.compute_slice", side_effect=ValueError("坏数据")):
+        with patch(
+            "apps.regime.slicing.compute_slice", side_effect=ValueError("坏数据")
+        ):
             with self.assertRaises(CommandError):
                 call_command("recompute_regime_slices", "--all", stdout=out)
 

@@ -109,7 +109,11 @@ class TestParseRunAt:
     def test_now_plus_offset_is_aware(self):
         got = self._parse("now+2h")
         assert got.tzinfo is not None
-        assert timedelta(hours=1, minutes=55) < got - business_now() < timedelta(hours=2, minutes=5)
+        assert (
+            timedelta(hours=1, minutes=55)
+            < got - business_now()
+            < timedelta(hours=2, minutes=5)
+        )
 
     def test_unparsable_raises(self):
         with pytest.raises(ValueError):
@@ -118,8 +122,9 @@ class TestParseRunAt:
 
 @pytest.mark.django_db(transaction=True)
 class TestRecurringTaskTimezone:
-
-    def _submit(self, task_name: str, cron: str = "0 10 * * *", steps: list | None = None):
+    def _submit(
+        self, task_name: str, cron: str = "0 10 * * *", steps: list | None = None
+    ):
         tool = SubmitRecurringTaskTool()
         return asyncio.run(
             tool.execute(
@@ -138,7 +143,9 @@ class TestRecurringTaskTimezone:
         """删掉测试建的周期任务；顺手删掉它留下的孤儿调度行。"""
         from django_celery_beat.models import CrontabSchedule, PeriodicTask
 
-        for task in PeriodicTask.objects.filter(name=task_name).select_related("crontab"):
+        for task in PeriodicTask.objects.filter(name=task_name).select_related(
+            "crontab"
+        ):
             if task.crontab_id:
                 CrontabSchedule.objects.filter(id=task.crontab_id).delete()
         PeriodicTask.objects.filter(name=task_name).delete()
@@ -219,7 +226,6 @@ class TestRecurringTaskTimezone:
 
 @pytest.mark.django_db(transaction=True)
 class TestScheduledOneTimeTimezone:
-
     def test_submit_message_shows_beijing_time(self):
         from apps.agent.models import ScheduledOneTimeTask
 
@@ -252,7 +258,6 @@ class TestScheduledOneTimeTimezone:
 
 @pytest.mark.django_db(transaction=True)
 class TestToolsSurfaceTimezone:
-
     def test_list_marks_timezone_on_crontab_and_one_time_task(self):
         from apps.agent.models import ScheduledOneTimeTask
         from django_celery_beat.models import CrontabSchedule, PeriodicTask

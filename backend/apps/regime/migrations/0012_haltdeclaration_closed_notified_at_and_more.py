@@ -17,24 +17,28 @@
 两列都是空，于是首轮会把还开着的窗口各补一条「已开启」（真事，只补一次），而已经解除的
 历史行不会补「已结束」（`pending_closed` 要求 `opened_notified_at` 非空）。
 """
+
 from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0011_alter_regimereducerecord_status'),
+        ("regime", "0011_alter_regimereducerecord_status"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='haltdeclaration',
-            name='closed_notified_at',
-            field=models.DateTimeField(blank=True, null=True, verbose_name='结束通知时刻（UTC，空=未发）'),
+            model_name="haltdeclaration",
+            name="closed_notified_at",
+            field=models.DateTimeField(
+                blank=True, null=True, verbose_name="结束通知时刻（UTC，空=未发）"
+            ),
         ),
         migrations.AddField(
-            model_name='haltdeclaration',
-            name='opened_notified_at',
-            field=models.DateTimeField(blank=True, null=True, verbose_name='开窗通知时刻（UTC，空=未发）'),
+            model_name="haltdeclaration",
+            name="opened_notified_at",
+            field=models.DateTimeField(
+                blank=True, null=True, verbose_name="开窗通知时刻（UTC，空=未发）"
+            ),
         ),
     ]

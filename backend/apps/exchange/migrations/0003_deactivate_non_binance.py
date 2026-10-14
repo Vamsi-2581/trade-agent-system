@@ -6,7 +6,9 @@ from django.db import migrations
 def deactivate_non_binance(apps, schema_editor):
     """Mark all ExchangeAccount records whose exchange is not 'binance' as is_active=False."""
     ExchangeAccount = apps.get_model("exchange", "ExchangeAccount")
-    updated = ExchangeAccount.objects.exclude(exchange="binance").update(is_active=False)
+    updated = ExchangeAccount.objects.exclude(exchange="binance").update(
+        is_active=False
+    )
     if updated:
         print(f"  Deactivated {updated} non-Binance ExchangeAccount record(s).")
 

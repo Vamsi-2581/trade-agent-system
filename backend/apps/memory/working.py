@@ -96,9 +96,13 @@ class RedisWorkingMemory:
         results: list[MemoryEntry] = []
         seen: set[str] = set()
 
-        results = await self._recall_private(query_lower, query_words, top_k, results, seen)
+        results = await self._recall_private(
+            query_lower, query_words, top_k, results, seen
+        )
         if len(results) < top_k:
-            results = await self._recall_shared(query_lower, query_words, top_k, results, seen)
+            results = await self._recall_shared(
+                query_lower, query_words, top_k, results, seen
+            )
         return results
 
     async def _recall_private(

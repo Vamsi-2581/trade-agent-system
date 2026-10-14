@@ -102,6 +102,7 @@ class AgentTaskConsumer:
             finally:
                 from asgiref.sync import sync_to_async
                 from django.db import connections
+
                 await sync_to_async(connections.close_all)()
 
     async def _dispatch(self, fields: dict) -> str:
@@ -170,7 +171,8 @@ class AgentTaskConsumer:
             except Exception:
                 logger.warning(
                     "[AgentTaskConsumer] fan_out_reply failed for task_id=%s",
-                    task_id, exc_info=True,
+                    task_id,
+                    exc_info=True,
                 )
             return result_text
         except asyncio.TimeoutError:

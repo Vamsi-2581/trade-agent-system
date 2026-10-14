@@ -263,7 +263,10 @@ class TestReferenceReflection(_Fixture):
         算进来；红的是**这份用例的覆盖面**。
         """
         reflected = {
-            (relation.related_model._meta.app_label, relation.related_model._meta.model_name)
+            (
+                relation.related_model._meta.app_label,
+                relation.related_model._meta.model_name,
+            )
             for relation in Strategy._meta.related_objects
         }
         self.assertEqual(reflected, set(FACTORIES))
@@ -418,7 +421,9 @@ class TestApply(_Fixture):
         self.reference(("backtest", "backtestresult"), self.ghost_doomed)
         before_results = BacktestResult.objects.count()
 
-        with patch.object(cleanup, "reference_counts", side_effect=lambda ids: {i: 0 for i in ids}):
+        with patch.object(
+            cleanup, "reference_counts", side_effect=lambda ids: {i: 0 for i in ids}
+        ):
             _, err = self.cleanup("--apply")
 
         self.assertLess(

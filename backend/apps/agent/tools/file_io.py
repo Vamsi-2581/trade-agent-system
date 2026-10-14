@@ -125,6 +125,7 @@ class ListDirectoryTool(BaseTool):
         "示例: 'strategies/' 查看已有策略文件；"
         "'workspace/quant/skills/create-strategy/references/' 查看技能参考文件。"
     )
+
     @property
     def parameters_schema(self) -> dict:
         return {

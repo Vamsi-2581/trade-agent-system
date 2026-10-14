@@ -7,9 +7,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +27,7 @@ class LLMCompressor:
             return ""
 
         conversation_text = "\n".join(
-            f"{item.get('role', 'user')}: {item.get('text', '')}"
-            for item in old_turns
+            f"{item.get('role', 'user')}: {item.get('text', '')}" for item in old_turns
         )
 
         from apps.agent.llm_client import LLMClient
@@ -70,6 +67,5 @@ class IdentityCompressor:
 
     async def compress(self, old_turns: list[dict]) -> str:
         return "\n".join(
-            f"{item.get('role', 'user')}: {item.get('text', '')}"
-            for item in old_turns
+            f"{item.get('role', 'user')}: {item.get('text', '')}" for item in old_turns
         )

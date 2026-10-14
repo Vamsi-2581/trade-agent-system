@@ -105,7 +105,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from django.utils import timezone
 
@@ -120,6 +120,9 @@ from apps.regime.models import (
     MajorEvent,
 )
 from apps.regime.slice import REASON_DISPLAY, REASON_HIGH_VOL_BLANKET
+
+if TYPE_CHECKING:
+    from apps.regime import gate
 
 logger = logging.getLogger(__name__)
 
@@ -202,9 +205,7 @@ def plan_rows(*, now: datetime | None = None) -> list[PlannedRow]:
     )
 
 
-def _plan(
-    candidates: list[MajorEvent], at: datetime, *, state
-) -> list[PlannedRow]:
+def _plan(candidates: list[MajorEvent], at: datetime, *, state) -> list[PlannedRow]:
     """``candidates`` 是**所有档位为「高」的事件**（含已取消的，取消的要用来写解除原因），
     本函数自己挑出该拦的那批。
 
@@ -231,7 +232,9 @@ def high_impact_events() -> list[MajorEvent]:
     表现是「声明写出来了、减仓不动」，两边看起来都正常。
     """
     return list(
-        MajorEvent.objects.filter(impact=EventImpact.HIGH.value).order_by("halt_at", "id")
+        MajorEvent.objects.filter(impact=EventImpact.HIGH.value).order_by(
+            "halt_at", "id"
+        )
     )
 
 
@@ -308,7 +311,9 @@ def _segments(group: list[MajorEvent]) -> list[list[MajorEvent]]:
     return segments
 
 
-def _pick_segment(segments: list[list[MajorEvent]], at: datetime) -> list[MajorEvent] | None:
+def _pick_segment(
+    segments: list[list[MajorEvent]], at: datetime
+) -> list[MajorEvent] | None:
     """此刻该写进表里的那一段：**正在拦的那段，没有就取下一段**。
 
     提前取下一段是这套写法的全部要点（见模块 docstring）：一行只能有一个窗口，而窗口若
@@ -345,7 +350,9 @@ def _event_reason(segment: list[MajorEvent]) -> str:
         )
     lines = [header]
     for event in segment:
-        lines.append(f"  · {event.name}｜事件时刻 {events.format_moment(event.event_time)}")
+        lines.append(
+            f"  · {event.name}｜事件时刻 {events.format_moment(event.event_time)}"
+        )
         lines.append(
             f"    熔断窗口 {events.format_moment(event.halt_at)}"
             f" → {events.format_moment(event.resume_at)}"
@@ -388,8 +395,7 @@ def _blanket_reason() -> str:
     `query_halt` 与这条声明里必须同措辞（第①段就定了这条纪律）。
     """
     return (
-        f"{REASON_DISPLAY[REASON_HIGH_VOL_BLANKET]}"
-        "——保命档不做适用性判断，与证据无关"
+        f"{REASON_DISPLAY[REASON_HIGH_VOL_BLANKET]}——保命档不做适用性判断，与证据无关"
     )
 
 
@@ -559,7 +565,9 @@ def _reconcile(
                     row.scope,
                 )
                 continue
-            reason = _close_reason(row, at, candidates, gate_close_reasons=close_reasons)
+            reason = _close_reason(
+                row, at, candidates, gate_close_reasons=close_reasons
+            )
             if reason is None:
                 # **本模块对这一行做不出判断**（策略档本轮没有期望集、或者这一行既不在
                 # 期望集里又不在解除名单里——后者是写入方的 bug）。与「查不到状态就当成

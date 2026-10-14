@@ -51,9 +51,7 @@ class _SessionDetailBase(APITestCase):
             username="detail_tester",
             password="testpass123",
         )
-        self.strategy = Strategy.objects.create(
-            name="s1", code_path="strategies/s1.py"
-        )
+        self.strategy = Strategy.objects.create(name="s1", code_path="strategies/s1.py")
         self.account = ExchangeAccount.objects.create(
             exchange="binance",
             label="detail",
@@ -212,14 +210,17 @@ class TestTheHaltLayerBlock(_SessionDetailBase):
 
         layers = self._detail().json()["halt_layers"]
 
-        self.assertEqual(layers, [
-            {
-                "text": halt.layer_of(row).text,
-                "reason": row.reason,
-                "opened_at": row.opened_at.isoformat(),
-                "expires_at": None,
-            }
-        ])
+        self.assertEqual(
+            layers,
+            [
+                {
+                    "text": halt.layer_of(row).text,
+                    "reason": row.reason,
+                    "opened_at": row.opened_at.isoformat(),
+                    "expires_at": None,
+                }
+            ],
+        )
 
     def test_a_layer_for_another_symbol_is_not_mentioned(self):
         """只跑 BTC 的会话不该收到 DOGE 解锁窗口的通告——连名字都不该出现（第 172 条）。"""

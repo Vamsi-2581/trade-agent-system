@@ -478,9 +478,7 @@ def _criteria_lines(data: Confirmation) -> list[str]:
             f"      适用性停用 {data.deactivation_days} 天 / 高波动档 {data.high_vol_days} 天"
             f" / 事件窗口 {data.event_days} 天（去重后合计 {data.trigger_days} 天）"
         )
-    lines.append(
-        "  · ③ 每次判定出的熔断有完整可读解释：**人工核对**——这一页算不出来。"
-    )
+    lines.append("  · ③ 每次判定出的熔断有完整可读解释：**人工核对**——这一页算不出来。")
     return lines
 
 
@@ -589,7 +587,9 @@ def _render_summary(data: Confirmation) -> str:
         truth.describe(data.agreement)[0],
     ]
     if data.windows_short:
-        parts.append(f"**兜底到期：事件窗口数不足 {data.achieved.windows}/{data.min_event_windows}**")
+        parts.append(
+            f"**兜底到期：事件窗口数不足 {data.achieved.windows}/{data.min_event_windows}**"
+        )
     return "；".join(parts)
 
 
@@ -652,19 +652,13 @@ def unmet_note(data: Confirmation) -> str | None:
     一遍——照旧从**同一份快照**渲染，不重新取数（重新取数会让两个说法在日界附近分家）。
     """
     if not data.achieved.started_on:
-        return (
-            "⚠️ Shadow 尚未开始：这一档什么都还没被校验过（一条含资讯结论的判定都没有）。"
-        )
+        return "⚠️ Shadow 尚未开始：这一档什么都还没被校验过（一条含资讯结论的判定都没有）。"
 
     gaps: list[str] = []
     if not data.expired and not data.days_met:
-        gaps.append(
-            f"自然日 {data.achieved.ran_days}/{data.min_natural_days}"
-        )
+        gaps.append(f"自然日 {data.achieved.ran_days}/{data.min_natural_days}")
     if not data.expired and not data.windows_met:
-        gaps.append(
-            f"高影响事件窗口 {data.achieved.windows}/{data.min_event_windows}"
-        )
+        gaps.append(f"高影响事件窗口 {data.achieved.windows}/{data.min_event_windows}")
     if data.windows_short:
         gaps.append(
             f"兜底到期，事件窗口数不足 {data.achieved.windows}/{data.min_event_windows}"
@@ -679,7 +673,11 @@ def unmet_note(data: Confirmation) -> str | None:
         # 假的：录了真值照样可能算不出来（区间互相冲突），而算得出来时它更不该出现。
         gaps.append(truth.describe(data.agreement)[0])
     gaps.append("解释完整没核对（这一页算不出来）")
-    return "⚠️ 还没达标的项：" + "；".join(gaps) + "。这不是禁止，是让你知道这次切换带着什么。"
+    return (
+        "⚠️ 还没达标的项："
+        + "；".join(gaps)
+        + "。这不是禁止，是让你知道这次切换带着什么。"
+    )
 
 
 def expiry_notice(*, now: datetime | None = None) -> str | None:

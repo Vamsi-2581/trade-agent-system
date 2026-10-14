@@ -35,10 +35,18 @@ def _get_channel():
         from django.conf import settings
         from apps.channel.lark import LarkChannel
 
-        app_id = os.environ.get("LARK_APP_ID", "") or getattr(settings, "LARK_APP_ID", "")
-        app_secret = os.environ.get("LARK_APP_SECRET", "") or getattr(settings, "LARK_APP_SECRET", "")
-        verification_token = os.environ.get("LARK_VERIFICATION_TOKEN", "") or getattr(settings, "LARK_VERIFICATION_TOKEN", "")
-        encrypt_key = os.environ.get("LARK_ENCRYPT_KEY", "") or getattr(settings, "LARK_ENCRYPT_KEY", "")
+        app_id = os.environ.get("LARK_APP_ID", "") or getattr(
+            settings, "LARK_APP_ID", ""
+        )
+        app_secret = os.environ.get("LARK_APP_SECRET", "") or getattr(
+            settings, "LARK_APP_SECRET", ""
+        )
+        verification_token = os.environ.get("LARK_VERIFICATION_TOKEN", "") or getattr(
+            settings, "LARK_VERIFICATION_TOKEN", ""
+        )
+        encrypt_key = os.environ.get("LARK_ENCRYPT_KEY", "") or getattr(
+            settings, "LARK_ENCRYPT_KEY", ""
+        )
 
         if not app_id or not app_secret:
             raise RuntimeError("LARK_APP_ID / LARK_APP_SECRET not configured")
@@ -171,12 +179,18 @@ def handle_message(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
         if user_open_id:
             channel._save_feishu_user(user_open_id, chat_id)
             from django.db import connections
+
             connections.close_all()
         # 本线程独立于 Django 请求线程，允许在 event loop 上下文中使用同步 ORM
         os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
         loop = asyncio.new_event_loop()
         try:
-            from apps.agent.bus import publish, build_agent_task, wait_reply, AGENT_TASKS
+            from apps.agent.bus import (
+                publish,
+                build_agent_task,
+                wait_reply,
+                AGENT_TASKS,
+            )
 
             msg = build_agent_task(
                 user_id=user_open_id or "unknown",
@@ -207,6 +221,7 @@ def handle_message(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
         finally:
             loop.close()
             from django import db as django_db
+
             django_db.connections.close_all()
 
     t = threading.Thread(target=_run_async, daemon=True, name="lark-msg-handler")
@@ -270,6 +285,7 @@ def main():
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings.dev")
 
     import django
+
     django.setup()
 
     from django.conf import settings

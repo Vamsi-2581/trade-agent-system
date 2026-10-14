@@ -174,19 +174,27 @@ async def nack_and_retry(
             try:
                 r = await _get_redis(stream)
                 try:
-                    await r.hset(redis_key, mapping={
-                        "status": "dlq",
-                        "retry_count": str(retry_count),
-                        "original_task": json.dumps(payload),
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                    })
+                    await r.hset(
+                        redis_key,
+                        mapping={
+                            "status": "dlq",
+                            "retry_count": str(retry_count),
+                            "original_task": json.dumps(payload),
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
                     await r.expire(redis_key, 86400)
                 except Exception:
-                    logger.exception("[bus] failed to save original_task for %s, continuing to DLQ", task_id)
+                    logger.exception(
+                        "[bus] failed to save original_task for %s, continuing to DLQ",
+                        task_id,
+                    )
                 finally:
                     await r.aclose()
             except Exception:
-                logger.exception("[bus] failed to get Redis for %s, continuing to DLQ", task_id)
+                logger.exception(
+                    "[bus] failed to get Redis for %s, continuing to DLQ", task_id
+                )
 
         dlq = f"{stream}:dlq"
         dlq_payload = dict(payload)

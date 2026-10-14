@@ -47,8 +47,10 @@ async def resolve_user_id(raw_id: str) -> str | None:
             user = await User.objects.aget(telegram_id=raw_id)
         return user.id
     except (
-        User.DoesNotExist, User.MultipleObjectsReturned,
-        AttributeError, ValueError,
+        User.DoesNotExist,
+        User.MultipleObjectsReturned,
+        AttributeError,
+        ValueError,
     ):
         return None
 

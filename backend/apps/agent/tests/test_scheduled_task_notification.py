@@ -16,15 +16,13 @@ Bug 背景：
 """
 
 import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch, AsyncMock
-import asyncio
 
 from django.contrib.auth import get_user_model
 
 from apps.agent.models import ScheduledOneTimeTask
 from apps.agent.tasks import execute_scheduled_agent_task
-from apps.agent.task_tracker import _send_notification_redis
 
 
 @pytest.mark.django_db(transaction=True)
@@ -43,20 +41,20 @@ class TestScheduledTaskNotification:
         # 创建测试用户
         User = get_user_model()
         test_user = User.objects.create_user(
-            email='tracker_record@test.local',
-            username='test_notification_user',
-            password='pw12345',
+            email="tracker_record@test.local",
+            username="test_notification_user",
+            password="pw12345",
         )
         user_id = str(test_user.id)
 
         # 创建定时任务记录
         scheduled_task = ScheduledOneTimeTask.objects.create(
-            task_name='test_tracker_integration',
-            agent_name='analyst',
-            message='测试 TaskTracker 集成',
+            task_name="test_tracker_integration",
+            agent_name="analyst",
+            message="测试 TaskTracker 集成",
             user_id=user_id,
             run_at=datetime.now(timezone.utc),
-            status='pending',
+            status="pending",
         )
         scheduled_task_id = str(scheduled_task.id)
 
@@ -64,26 +62,28 @@ class TestScheduledTaskNotification:
         from apps.agent.base import AgentResult
 
         mock_result = AgentResult(
-            task_id='test-task-id',
+            task_id="test-task-id",
             success=True,
-            data={'content': '测试完成'},
+            data={"content": "测试完成"},
         )
 
-        with patch('apps.agent.supervisor.SupervisorAgent.get_instance') as mock_supervisor_cls:
+        with patch(
+            "apps.agent.supervisor.SupervisorAgent.get_instance"
+        ) as mock_supervisor_cls:
             mock_supervisor = MagicMock()
             mock_supervisor._route_to_agent = AsyncMock(return_value=mock_result)
             mock_supervisor_cls.return_value = mock_supervisor
 
             # 执行任务
             result = execute_scheduled_agent_task(
-                agent_name='analyst',
-                message='测试 TaskTracker 集成',
+                agent_name="analyst",
+                message="测试 TaskTracker 集成",
                 user_id=user_id,
                 scheduled_task_id=scheduled_task_id,
             )
 
         # 验证结果
-        assert result['status'] == 'SUCCESS'
+        assert result["status"] == "SUCCESS"
 
         # 检查 Redis task:progress 记录
         import redis
@@ -119,45 +119,49 @@ class TestScheduledTaskNotification:
         """
         User = get_user_model()
         test_user = User.objects.create_user(
-            email='notification_send@test.local',
-            username='test_notification_send',
-            password='pw12345',
+            email="notification_send@test.local",
+            username="test_notification_send",
+            password="pw12345",
         )
         user_id = str(test_user.id)
 
         scheduled_task = ScheduledOneTimeTask.objects.create(
-            task_name='test_notification_send',
-            agent_name='analyst',
-            message='测试通知推送',
+            task_name="test_notification_send",
+            agent_name="analyst",
+            message="测试通知推送",
             user_id=user_id,
             run_at=datetime.now(timezone.utc),
-            status='pending',
+            status="pending",
         )
 
         from apps.agent.base import AgentResult
 
         mock_result = AgentResult(
-            task_id='test-task-id',
+            task_id="test-task-id",
             success=True,
-            data={'content': '测试完成，收益率 15%'},
+            data={"content": "测试完成，收益率 15%"},
         )
 
         # Mock _send_notification_redis 检查是否被调用
-        with patch('apps.agent.task_tracker._send_notification_redis') as mock_notify:
-            with patch('apps.agent.supervisor.SupervisorAgent.get_instance') as mock_supervisor_cls:
+        with patch("apps.agent.task_tracker._send_notification_redis") as mock_notify:
+            with patch(
+                "apps.agent.supervisor.SupervisorAgent.get_instance"
+            ) as mock_supervisor_cls:
                 mock_supervisor = MagicMock()
                 mock_supervisor._route_to_agent = AsyncMock(return_value=mock_result)
                 mock_supervisor_cls.return_value = mock_supervisor
 
-                result = execute_scheduled_agent_task(
-                    agent_name='analyst',
-                    message='测试通知推送',
+                _result = execute_scheduled_agent_task(
+                    agent_name="analyst",
+                    message="测试通知推送",
                     user_id=user_id,
                     scheduled_task_id=str(scheduled_task.id),
                 )
 
             # 验证通知被推送
-            assert mock_notify.called, "TaskTracker should send notification on completion"
+            assert mock_notify.called, (
+                "TaskTracker should send notification on completion"
+            )
 
             # 检查通知内容包含 "完成" 或 "成功"
             call_args = mock_notify.call_args
@@ -178,38 +182,40 @@ class TestScheduledTaskNotification:
         """
         User = get_user_model()
         test_user = User.objects.create_user(
-            email='notification_fail@test.local',
-            username='test_notification_fail',
-            password='pw12345',
+            email="notification_fail@test.local",
+            username="test_notification_fail",
+            password="pw12345",
         )
         user_id = str(test_user.id)
 
         scheduled_task = ScheduledOneTimeTask.objects.create(
-            task_name='test_notification_fail',
-            agent_name='analyst',
-            message='测试失败通知',
+            task_name="test_notification_fail",
+            agent_name="analyst",
+            message="测试失败通知",
             user_id=user_id,
             run_at=datetime.now(timezone.utc),
-            status='pending',
+            status="pending",
         )
 
         from apps.agent.base import AgentResult
 
         mock_result = AgentResult(
-            task_id='test-task-id',
+            task_id="test-task-id",
             success=False,
-            error='测试错误：模拟失败场景',
+            error="测试错误：模拟失败场景",
         )
 
-        with patch('apps.agent.task_tracker._send_notification_redis') as mock_notify:
-            with patch('apps.agent.supervisor.SupervisorAgent.get_instance') as mock_supervisor_cls:
+        with patch("apps.agent.task_tracker._send_notification_redis") as mock_notify:
+            with patch(
+                "apps.agent.supervisor.SupervisorAgent.get_instance"
+            ) as mock_supervisor_cls:
                 mock_supervisor = MagicMock()
                 mock_supervisor._route_to_agent = AsyncMock(return_value=mock_result)
                 mock_supervisor_cls.return_value = mock_supervisor
 
-                result = execute_scheduled_agent_task(
-                    agent_name='analyst',
-                    message='测试失败通知',
+                _result = execute_scheduled_agent_task(
+                    agent_name="analyst",
+                    message="测试失败通知",
                     user_id=user_id,
                     scheduled_task_id=str(scheduled_task.id),
                 )

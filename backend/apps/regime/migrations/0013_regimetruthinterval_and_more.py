@@ -4,36 +4,106 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0012_haltdeclaration_closed_notified_at_and_more'),
+        ("regime", "0012_haltdeclaration_closed_notified_at_and_more"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='RegimeTruthInterval',
+            name="RegimeTruthInterval",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('start_date', models.DateField(db_index=True, verbose_name='区间起点（含）')),
-                ('end_date', models.DateField(verbose_name='区间终点（含）')),
-                ('regime', models.CharField(choices=[('high_vol', '高波动'), ('downtrend', '下行趋势'), ('uptrend', '上行趋势'), ('range', '箱体震荡')], max_length=16, verbose_name='人工认定的档位')),
-                ('note', models.CharField(blank=True, default='', max_length=200, verbose_name='备注（例如「某轮牛市」）')),
-                ('actor_kind', models.CharField(choices=[('cli', '命令行'), ('task', '定时任务'), ('chat', '聊天渠道')], max_length=16, verbose_name='录入方类别')),
-                ('actor_name', models.CharField(max_length=128, verbose_name='录入方')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='录入时间')),
-                ('retracted_at', models.DateTimeField(blank=True, null=True, verbose_name='撤回时间（UTC）')),
-                ('retracted_by_kind', models.CharField(blank=True, choices=[('cli', '命令行'), ('task', '定时任务'), ('chat', '聊天渠道')], default='', max_length=16, verbose_name='撤回方类别')),
-                ('retracted_by_name', models.CharField(blank=True, default='', max_length=128, verbose_name='撤回方')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "start_date",
+                    models.DateField(db_index=True, verbose_name="区间起点（含）"),
+                ),
+                ("end_date", models.DateField(verbose_name="区间终点（含）")),
+                (
+                    "regime",
+                    models.CharField(
+                        choices=[
+                            ("high_vol", "高波动"),
+                            ("downtrend", "下行趋势"),
+                            ("uptrend", "上行趋势"),
+                            ("range", "箱体震荡"),
+                        ],
+                        max_length=16,
+                        verbose_name="人工认定的档位",
+                    ),
+                ),
+                (
+                    "note",
+                    models.CharField(
+                        blank=True,
+                        default="",
+                        max_length=200,
+                        verbose_name="备注（例如「某轮牛市」）",
+                    ),
+                ),
+                (
+                    "actor_kind",
+                    models.CharField(
+                        choices=[
+                            ("cli", "命令行"),
+                            ("task", "定时任务"),
+                            ("chat", "聊天渠道"),
+                        ],
+                        max_length=16,
+                        verbose_name="录入方类别",
+                    ),
+                ),
+                ("actor_name", models.CharField(max_length=128, verbose_name="录入方")),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="录入时间"),
+                ),
+                (
+                    "retracted_at",
+                    models.DateTimeField(
+                        blank=True, null=True, verbose_name="撤回时间（UTC）"
+                    ),
+                ),
+                (
+                    "retracted_by_kind",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("cli", "命令行"),
+                            ("task", "定时任务"),
+                            ("chat", "聊天渠道"),
+                        ],
+                        default="",
+                        max_length=16,
+                        verbose_name="撤回方类别",
+                    ),
+                ),
+                (
+                    "retracted_by_name",
+                    models.CharField(
+                        blank=True, default="", max_length=128, verbose_name="撤回方"
+                    ),
+                ),
             ],
             options={
-                'verbose_name': '人工真值区间',
-                'verbose_name_plural': '人工真值区间',
-                'db_table': 'regime_truth_intervals',
-                'ordering': ['start_date', 'id'],
+                "verbose_name": "人工真值区间",
+                "verbose_name_plural": "人工真值区间",
+                "db_table": "regime_truth_intervals",
+                "ordering": ["start_date", "id"],
             },
         ),
         migrations.AddConstraint(
-            model_name='regimetruthinterval',
-            constraint=models.CheckConstraint(check=models.Q(('end_date__gte', models.F('start_date'))), name='ck_truth_interval_order'),
+            model_name="regimetruthinterval",
+            constraint=models.CheckConstraint(
+                check=models.Q(("end_date__gte", models.F("start_date"))),
+                name="ck_truth_interval_order",
+            ),
         ),
     ]

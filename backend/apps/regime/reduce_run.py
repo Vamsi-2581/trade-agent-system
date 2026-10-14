@@ -420,7 +420,11 @@ def plan_shards(
         cap=shard_count,
     )
     if size <= 1:
-        return ShardPlan(planned_qty=half, shards=(half,), note=_single_note(half, min_notional, reference))
+        return ShardPlan(
+            planned_qty=half,
+            shards=(half,),
+            note=_single_note(half, min_notional, reference),
+        )
 
     shards = _split(half, size, step_size)
     if not shards:
@@ -742,7 +746,9 @@ def record_pause(
             )
         return True
     except IntegrityError:
-        logger.info("[Reduce] 账户 %s 品种 %s 已有生效中的自动减仓暂停", account.pk, symbol)
+        logger.info(
+            "[Reduce] 账户 %s 品种 %s 已有生效中的自动减仓暂停", account.pk, symbol
+        )
         return False
 
 
@@ -846,9 +852,14 @@ def render_account_report(
             pct = _pct(outcome.qty_after, outcome.baseline_qty)
             tail = f"本日第 {outcome.ordinal} 次熔断，累计已减至基准的 {pct}%"
             if pct is None:
-                tail = f"本日第 {outcome.ordinal} 次熔断，基准或余量取不到，累计比例未判定"
+                tail = (
+                    f"本日第 {outcome.ordinal} 次熔断，基准或余量取不到，累计比例未判定"
+                )
             lines.append(f"    {tail}")
-            if outcome.slippage_basis is SlippageBasis.MID and outcome.slippage_pct is not None:
+            if (
+                outcome.slippage_basis is SlippageBasis.MID
+                and outcome.slippage_pct is not None
+            ):
                 lines.append(
                     f"    滑点：{outcome.slippage_pct}（以动作发起时刻中间价为基准）"
                 )
@@ -961,7 +972,12 @@ async def _load_rules(
     try:
         rules = await adapter.symbol_rules(symbol)
     except Exception as exc:  # noqa: BLE001 — 问不到就是问不到，不猜
-        return None, None, Decimal("0"), f"交易所精度规则取不到（{type(exc).__name__}: {exc}）"
+        return (
+            None,
+            None,
+            Decimal("0"),
+            f"交易所精度规则取不到（{type(exc).__name__}: {exc}）",
+        )
     if rules is None:
         return None, None, Decimal("0"), "适配器不声明该品种的精度规则"
     try:
@@ -992,9 +1008,13 @@ async def _run_account(plan: AccountPlan, *, day: date, at: datetime) -> Account
         try:
             positions = await reduce.account_positions(adapter)
         except Exception as exc:  # noqa: BLE001
-            reason = f"账户持仓取不到（{type(exc).__name__}: {exc}），本次未撤单也未减仓"
+            reason = (
+                f"账户持仓取不到（{type(exc).__name__}: {exc}），本次未撤单也未减仓"
+            )
             logger.error("[Reduce] %s：%s", plan.label, reason)
-            await _alert(plan.recipients, f"⚠️ 事件熔断自动减仓未开始｜{plan.label}\n{reason}")
+            await _alert(
+                plan.recipients, f"⚠️ 事件熔断自动减仓未开始｜{plan.label}\n{reason}"
+            )
             return outcome
 
         # **收窄到真持仓只能在 async 侧做**：事件给的是作用域（可能是全市场），而
@@ -1092,7 +1112,9 @@ async def _run_symbol(
     if symbol in paused:
         # 暂停的是**下新单**（`RegimeReducePause` docstring）。上一轮的滑点超限还没被人工
         # 处理，这里既不认领也不减，但**撤单照旧**（上面已经做过）。
-        logger.info("[Reduce] %s %s 已有生效中的自动减仓暂停，跳过减仓", plan.label, symbol)
+        logger.info(
+            "[Reduce] %s %s 已有生效中的自动减仓暂停，跳过减仓", plan.label, symbol
+        )
         await _alert(
             plan.recipients,
             f"⚠️ 事件熔断自动减仓已暂停｜{plan.label}\n"
@@ -1134,8 +1156,7 @@ async def _run_symbol(
         day=day,
         qty_before=qty_before,
         reason=(
-            f"高影响事件熔断：{target.event_name}"
-            f"（{halt.scope_display(target.scope)}）"
+            f"高影响事件熔断：{target.event_name}（{halt.scope_display(target.scope)}）"
         ),
     )
     if not created:
@@ -1175,7 +1196,9 @@ async def _run_symbol(
             )
         except Exception:  # noqa: BLE001 — 连收尾都失败：记录留在 CLAIMED，下一轮会被
             # `stale_claims` 抓住并转人工。**这就是那条分支存在的意义。**
-            logger.exception("[Reduce] %s %s 收尾写入也失败，记录停在认领态", plan.label, symbol)
+            logger.exception(
+                "[Reduce] %s %s 收尾写入也失败，记录停在认领态", plan.label, symbol
+            )
         await _alert(
             plan.recipients,
             render_reduce_failure(
@@ -1285,7 +1308,10 @@ async def _execute_symbol(
             )
         except Exception:  # noqa: BLE001
             logger.warning(
-                "[Reduce] %s %s 减仓成交落库失败：%s", plan.label, symbol, result.exchange_order_id,
+                "[Reduce] %s %s 减仓成交落库失败：%s",
+                plan.label,
+                symbol,
+                result.exchange_order_id,
                 exc_info=True,
             )
         if result.status == reduce.SHARD_STATUS_UNFINISHED:

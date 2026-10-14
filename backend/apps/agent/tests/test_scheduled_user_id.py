@@ -34,9 +34,7 @@ class TestResolveSchedulerUserId(unittest.TestCase):
         mock_user_model = MagicMock()
         mock_user_model.objects.get.return_value = mock_user
 
-        with patch(
-            "django.contrib.auth.get_user_model", return_value=mock_user_model
-        ):
+        with patch("django.contrib.auth.get_user_model", return_value=mock_user_model):
             result = _resolve_scheduler_user_id("")
             self.assertEqual(result, "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
             mock_user_model.objects.get.assert_called_once_with(
@@ -48,9 +46,7 @@ class TestResolveSchedulerUserId(unittest.TestCase):
         mock_user_model = MagicMock()
         mock_user_model.objects.get.side_effect = Exception("user not found")
 
-        with patch(
-            "django.contrib.auth.get_user_model", return_value=mock_user_model
-        ):
+        with patch("django.contrib.auth.get_user_model", return_value=mock_user_model):
             result = _resolve_scheduler_user_id("")
             self.assertEqual(result, "")
 

@@ -17,14 +17,19 @@ class TestDeadLetterConsumer:
         mock_r = AsyncMock()
         mock_r.xack = AsyncMock(return_value=1)
 
-        with patch.object(consumer, "_get_redis", return_value=mock_r), \
-             patch("apps.agent.dlq_consumer._async_send_notification") as mock_notify:
-            await consumer._handle_dlq_message("msg-001", {
-                "task_id": json.dumps("task-dlq-1"),
-                "user_id": json.dumps("user-dlq"),
-                "dlq_reason": json.dumps("exceeded 3 retries"),
-                "retry_count": json.dumps("3"),
-            })
+        with (
+            patch.object(consumer, "_get_redis", return_value=mock_r),
+            patch("apps.agent.dlq_consumer._async_send_notification") as mock_notify,
+        ):
+            await consumer._handle_dlq_message(
+                "msg-001",
+                {
+                    "task_id": json.dumps("task-dlq-1"),
+                    "user_id": json.dumps("user-dlq"),
+                    "dlq_reason": json.dumps("exceeded 3 retries"),
+                    "retry_count": json.dumps("3"),
+                },
+            )
 
         mock_r.xack.assert_called_once_with("agent:tasks:dlq", "agents-dlq", "msg-001")
         mock_notify.assert_called_once()
@@ -39,6 +44,7 @@ class TestDeadLetterConsumer:
         mock_r = AsyncMock()
         # one iteration then stop
         call_count = [0]
+
         async def xreadgroup_once(**kwargs):
             call_count[0] += 1
             if call_count[0] == 1:
@@ -48,8 +54,10 @@ class TestDeadLetterConsumer:
 
         mock_r.xreadgroup = xreadgroup_once
 
-        with patch.object(consumer, "_get_redis", return_value=mock_r), \
-             patch("apps.agent.dlq_consumer._async_send_notification") as mock_notify:
+        with (
+            patch.object(consumer, "_get_redis", return_value=mock_r),
+            patch("apps.agent.dlq_consumer._async_send_notification") as mock_notify,
+        ):
             await consumer._poll_loop()
 
         mock_notify.assert_not_called()

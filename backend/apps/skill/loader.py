@@ -32,7 +32,6 @@ class SkillMetadata:
 
 
 class AgentSkillsLoader:
-
     def __init__(self, agent_name: str = "", search_root: Path | None = None):
         self.agent_name = agent_name
 
@@ -45,6 +44,7 @@ class AgentSkillsLoader:
             self.agent_skills_dir = (
                 WORKSPACE_ROOT / agent_name / "skills" if agent_name else None
             )
+
     #  Directory helpers                                                   #
 
     def _iter_skill_dirs(self) -> list[tuple[Path, str]]:
@@ -68,6 +68,7 @@ class AgentSkillsLoader:
                     seen[skill_dir.name] = (skill_dir, "agent")
 
         return list(seen.values())
+
     #  Public API                                                          #
 
     def list_skills(self) -> list[dict[str, Any]]:
@@ -147,7 +148,9 @@ class AgentSkillsLoader:
         for name in names:
             content = self.load_skill(name)
             if content:
-                parts.append(self._format_skill_block(name, content, self.skill_dir(name)))
+                parts.append(
+                    self._format_skill_block(name, content, self.skill_dir(name))
+                )
         return "\n\n---\n\n".join(parts)
 
     def build_summary(self, exclude_always: bool = True) -> str:
@@ -207,6 +210,7 @@ class AgentSkillsLoader:
                 if meta.extra.get("always"):
                     result.append(s["name"])
         return result
+
     #  Internal helpers                                                    #
 
     @staticmethod
@@ -217,7 +221,9 @@ class AgentSkillsLoader:
         except ValueError:
             return str(skill_dir)
 
-    def _format_skill_block(self, name: str, content: str, base_dir: Path | None = None) -> str:
+    def _format_skill_block(
+        self, name: str, content: str, base_dir: Path | None = None
+    ) -> str:
         """Strip frontmatter and wrap in a named section; attach skill dir for reference paths."""
         body = self._strip_frontmatter(content)
         header = f"### Skill: {name}"

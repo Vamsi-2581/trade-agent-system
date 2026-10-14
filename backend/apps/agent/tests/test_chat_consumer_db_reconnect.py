@@ -15,6 +15,7 @@ WS 端到端测试在 test_chat_consumer_connect.py（项目原有），
 但当前 dev pgbouncer 不支持 test_trade_agent 库，需在有 CREATE DB 权限的
 环境运行；本文件聚焦于「握手前必须重连 DB」这条核心契约的快速回归。
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -109,6 +110,7 @@ async def test_chat_connect_uses_db_async_for_token_lookup():
             captured["args"] = args
             captured["kwargs"] = kwargs
             return fake_await((None, None))  # user=None 表示拒绝
+
         return _inner
 
     with patch("apps.core.db_utils.db_async", side_effect=fake_db_async):

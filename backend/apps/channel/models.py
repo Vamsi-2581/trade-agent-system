@@ -10,7 +10,9 @@ class FeishuUserToken(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="feishu_tokens"
     )
-    open_id = models.CharField(max_length=128, unique=True, verbose_name="Feishu Open ID")
+    open_id = models.CharField(
+        max_length=128, unique=True, verbose_name="Feishu Open ID"
+    )
     access_token_enc = models.BinaryField()
     refresh_token_enc = models.BinaryField()
     expires_at = models.DateTimeField(verbose_name="Access Token 过期时间")
@@ -51,9 +53,13 @@ class FeishuAuthSession(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="feishu_auth_sessions"
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="feishu_auth_sessions",
     )
-    state = models.CharField(max_length=256, unique=True, verbose_name="CSRF State Token")
+    state = models.CharField(
+        max_length=256, unique=True, verbose_name="CSRF State Token"
+    )
     flow_type = models.CharField(
         max_length=4,
         choices=[("qr", "QR Code"), ("url", "URL Redirect")],
@@ -70,7 +76,9 @@ class FeishuAuthSession(models.Model):
         default="pending",
     )
     qr_url = models.TextField(blank=True, verbose_name="飞书授权链接")
-    qr_expires_at = models.DateTimeField(null=True, blank=True, verbose_name="二维码过期时间")
+    qr_expires_at = models.DateTimeField(
+        null=True, blank=True, verbose_name="二维码过期时间"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

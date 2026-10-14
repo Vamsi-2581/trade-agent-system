@@ -14,15 +14,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from .serializers import (
     KlineRequestSerializer,
-    KlineResponseSerializer,
     TickerRequestSerializer,
-    TickerResponseSerializer,
     TradeRequestSerializer,
-    TradeResponseSerializer,
     SubscriptionRequestSerializer,
-    SubscriptionResponseSerializer,
-    DataSourceStatusSerializer,
-    QualityReportSerializer,
     DataSourceConfigSerializer,
 )
 from ..registry import DataSourceRegistry
@@ -39,6 +33,7 @@ class DataSourceViewSet(viewsets.ViewSet):
 
     提供数据源状态查询、连接管理等功能
     """
+
     @action(detail=False, methods=["get"])
     def list_sources(self, request):
         sources = DataSourceRegistry.list_registered()
@@ -202,6 +197,7 @@ class MarketDataViewSet(viewsets.ViewSet):
 
     提供历史数据和实时数据查询接口
     """
+
     @action(detail=False, methods=["get", "post"])
     def klines(self, request):
         """
@@ -340,6 +336,7 @@ class SubscriptionViewSet(viewsets.ViewSet):
 
     提供数据订阅管理功能
     """
+
     def create(self, request):
         """创建数据订阅"""
         serializer = SubscriptionRequestSerializer(data=request.data)
@@ -403,6 +400,7 @@ class QualityMonitorViewSet(viewsets.ViewSet):
 
     提供数据质量报告查询功能
     """
+
     def list(self, request):
         """获取所有数据质量报告"""
         monitor = get_quality_monitor()

@@ -282,7 +282,11 @@ class TestTheInputClockIsBeijing(TestCase):
 
         所以这里**显式拒绝**带偏移的写法，而不是「有偏移就按偏移解释」。
         """
-        for text in ("2026-09-25T20:30+08:00", "2026-09-25T12:30Z", "2026-09-25t12:30z"):
+        for text in (
+            "2026-09-25T20:30+08:00",
+            "2026-09-25T12:30Z",
+            "2026-09-25t12:30z",
+        ):
             with self.subTest(text=text):
                 with self.assertRaises(EventInputError) as ctx:
                     events.parse_business_time(text)
@@ -464,9 +468,7 @@ class TestCreateEvent(_WithSymbols):
         with self.assertRaises(EventInputError) as ctx:
             self.create(actor_name="  ")
         self.assertIn("必须记下触发方", str(ctx.exception))
-        self.assertFalse(
-            MajorEvent.objects.exists(), "流水写不出来时那一行不该留下"
-        )
+        self.assertFalse(MajorEvent.objects.exists(), "流水写不出来时那一行不该留下")
 
     def test_an_unknown_symbol_rolls_the_whole_thing_back(self):
         with self.assertRaises(EventInputError):
@@ -590,9 +592,7 @@ class TestReschedule(_WithSymbols):
         change = MajorEventChange.objects.get(
             event=event, kind=EventChangeKind.RESCHEDULED.value
         )
-        self.assertEqual(
-            set(change.before), {"event_time", "halt_at", "resume_at"}
-        )
+        self.assertEqual(set(change.before), {"event_time", "halt_at", "resume_at"})
         self.assertEqual(
             change.before["halt_at"], (EVENT_UTC - timedelta(minutes=120)).isoformat()
         )
@@ -707,9 +707,7 @@ class TestCancelIsTerminal(_WithSymbols):
     def test_the_reason_is_mandatory(self):
         event = self.create()
         with self.assertRaises(EventInputError) as ctx:
-            events.cancel_event(
-                event, reason="  ", actor_kind=HUMAN, actor_name="xl"
-            )
+            events.cancel_event(event, reason="  ", actor_kind=HUMAN, actor_name="xl")
         self.assertIn("必须给出理由", str(ctx.exception))
         event.refresh_from_db()
         self.assertEqual(event.status, EventStatus.SCHEDULED.value)
@@ -778,7 +776,8 @@ class TestRaisingACandidate(_WithSymbols):
             name="x", origin=CandidateOrigin.AGENT.value, raised_by="u-1", now=now
         )
         self.assertEqual(
-            candidate.expires_at, now + timedelta(days=config.EVENTS.candidate_expiry_days)
+            candidate.expires_at,
+            now + timedelta(days=config.EVENTS.candidate_expiry_days),
         )
 
     def test_the_guessed_time_may_be_missing(self):
@@ -1152,7 +1151,9 @@ class TestTheCleanupIsAScheduledTask(_StubbedConnectionReset, _WithSymbols):
 
         from apps.regime import tasks
 
-        with patch.object(events, "expire_candidates", side_effect=RuntimeError("boom")):
+        with patch.object(
+            events, "expire_candidates", side_effect=RuntimeError("boom")
+        ):
             with self.assertRaises(RuntimeError):
                 tasks.expire_candidates.run()
 
@@ -1185,9 +1186,7 @@ class TestTheEchoDistinguishesTheTwoTables(_WithSymbols):
     def test_an_event_that_already_happened_says_so(self):
         """「录了一条已经过去的事件」是人工维护最可能的空转形状——不说的表现是
         「录进去了但什么都没发生」，它与「今天没有事件」长得一样。"""
-        text = events.describe_event(
-            self.create(), now=EVENT_UTC + timedelta(days=1)
-        )
+        text = events.describe_event(self.create(), now=EVENT_UTC + timedelta(days=1))
         self.assertIn("该窗口已整体过去", text)
 
     def test_an_event_inside_its_window_says_so(self):

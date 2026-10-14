@@ -187,7 +187,9 @@ class NewsOutcome:
 
 def _item_block(index: int, item: NewsItem) -> str:
     """一条条目在提示词里的样子。编号从 1 起，与 `cited` 的取值域同一套。"""
-    published = item.published_at.isoformat() if item.published_at else "（未给发布时刻）"
+    published = (
+        item.published_at.isoformat() if item.published_at else "（未给发布时刻）"
+    )
     body = item.body.strip() if item.body else ""
     if not body:
         body = "（未取到正文）"
@@ -458,7 +460,9 @@ def run_news_judgement(
                 "status": STATUS_FAILED,
                 "stage": "collect",
                 "error_kind": "NoCandidates",
-                "error": f"没有候选条目，且以下源抓取失败：{detail}"[:ERROR_MAX_CHARS + 200],
+                "error": f"没有候选条目，且以下源抓取失败：{detail}"[
+                    : ERROR_MAX_CHARS + 200
+                ],
             },
         )
 

@@ -70,7 +70,9 @@ class NotifyUserTool(BaseTool):
                 last_error = e
                 logger.warning(
                     "[NotifyUserTool] attempt %d/2 failed: %s",
-                    attempt, e, exc_info=True,
+                    attempt,
+                    e,
+                    exc_info=True,
                 )
                 if attempt == 2:
                     break
@@ -80,9 +82,7 @@ class NotifyUserTool(BaseTool):
 
                     connections.close_all()
                 except Exception:  # noqa: BLE001
-                    logger.debug(
-                        "[NotifyUserTool] close_all failed", exc_info=True
-                    )
+                    logger.debug("[NotifyUserTool] close_all failed", exc_info=True)
 
         if last_error is not None:
             return ToolResult(success=False, error=f"发送通知失败: {last_error}")

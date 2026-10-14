@@ -140,13 +140,17 @@ def series(
         if i < calm_from:
             close, half = 100.0 + (i % 7) * 0.3, wide
         elif end_from is not None and i >= end_from:
-            close = 100.0 + (end_from - calm_from) * step + (i - end_from) * (
-                step if end_step is None else end_step
+            close = (
+                100.0
+                + (end_from - calm_from) * step
+                + (i - end_from) * (step if end_step is None else end_step)
             )
             half = band if end_band is None else end_band
         else:
             close, half = 100.0 + (i - calm_from) * step, band
-        rows.append({"close": close, "high": close * (1 + half), "low": close * (1 - half)})
+        rows.append(
+            {"close": close, "high": close * (1 + half), "low": close * (1 - half)}
+        )
     return rows
 
 
@@ -377,7 +381,9 @@ class TestTheQueryComparesTheMomentNotTheDate(TestCase):
 class TestQueriesAreScopedToTheSymbol(TestCase):
     def test_one_symbols_records_do_not_answer_for_another(self):
         make_judgement(RUN_DAY, BaseRegime.RANGE, symbol="ETH/USDT")
-        self.assertIsNone(current_judgement(symbol=SYMBOL, now=business_midnight(RUN_DAY)))
+        self.assertIsNone(
+            current_judgement(symbol=SYMBOL, now=business_midnight(RUN_DAY))
+        )
         self.assertIsNotNone(
             current_judgement(symbol="ETH/USDT", now=business_midnight(RUN_DAY))
         )
@@ -446,7 +452,9 @@ class TestInForceDaysIsTheSameSentenceForAWholeSpan(TestCase):
         # 头一天（09-20）还没有任何结论生效：**不进映射**，而不是给一个默认档位。
         self.assertNotIn(RUN_DAY - timedelta(days=2), days)
         self.assertEqual(days[RUN_DAY], (BaseRegime.RANGE, BaseRegime.RANGE))
-        self.assertEqual(days[RUN_DAY + timedelta(days=1)], (BaseRegime.UPTREND, BaseRegime.UPTREND))
+        self.assertEqual(
+            days[RUN_DAY + timedelta(days=1)], (BaseRegime.UPTREND, BaseRegime.UPTREND)
+        )
         # 09-24 起生效的那条一直用到下一次判定为止——09-25 还在它手里。
         for offset in (2, 3):
             self.assertEqual(
@@ -473,7 +481,10 @@ class TestInForceDaysIsTheSameSentenceForAWholeSpan(TestCase):
                 else:
                     self.assertEqual(
                         days[day],
-                        (BaseRegime(record.base_regime), BaseRegime(record.effective_regime)),
+                        (
+                            BaseRegime(record.base_regime),
+                            BaseRegime(record.effective_regime),
+                        ),
                     )
             day += timedelta(days=1)
 
@@ -531,7 +542,9 @@ class TestEscalationOnlyEverGoesConservative(TestCase):
     def test_news_always_raises_to_high_vol(self):
         for base in BaseRegime:
             with self.subTest(base=base):
-                self.assertIs(apply_escalation(base, Escalation.NEWS.value), BaseRegime.HIGH_VOL)
+                self.assertIs(
+                    apply_escalation(base, Escalation.NEWS.value), BaseRegime.HIGH_VOL
+                )
 
     def test_news_never_lands_on_a_more_aggressive_tier(self):
         """结构性不变量：合成结果在优先级里的位次不得低于基础阶段。
@@ -556,7 +569,10 @@ class TestEscalationOnlyEverGoesConservative(TestCase):
         资讯那根轴的输出不可重放：今天资讯说了什么，只有这条记录知道。因为它「恰好
         没改变结果」而丢掉，等于丢掉了「今天资讯判断过高波动」这条事实。
         """
-        self.assertIs(apply_escalation(BaseRegime.HIGH_VOL, Escalation.NEWS.value), BaseRegime.HIGH_VOL)
+        self.assertIs(
+            apply_escalation(BaseRegime.HIGH_VOL, Escalation.NEWS.value),
+            BaseRegime.HIGH_VOL,
+        )
         record = make_judgement(
             RUN_DAY,
             BaseRegime.HIGH_VOL,
@@ -611,7 +627,9 @@ class TestMinDwellRule(TestCase):
         )
         self.assertIs(base, BaseRegime.UPTREND, "被拦下时沿用当前生效阶段")
         self.assertEqual(reason, _REASON_MIN_DWELL)
-        self.assertEqual(numbers["carried_from_effective_at"], current.effective_at.isoformat())
+        self.assertEqual(
+            numbers["carried_from_effective_at"], current.effective_at.isoformat()
+        )
         self.assertLess(numbers["in_force_days"], self.MIN)
 
     def test_a_switch_after_the_dwell_elapses_is_adopted(self):
@@ -625,7 +643,9 @@ class TestMinDwellRule(TestCase):
 
     def test_the_dwell_boundary_is_inclusive(self):
         """恰好站满 `min_dwell_days` 就允许切换——`>=`，不是 `>`。"""
-        current = make_judgement(RUN_DAY - timedelta(days=self.MIN - 1), BaseRegime.UPTREND)
+        current = make_judgement(
+            RUN_DAY - timedelta(days=self.MIN - 1), BaseRegime.UPTREND
+        )
         base, reason, _ = apply_min_dwell(
             BaseRegime.DOWNTREND, self.candidate_effective_at, current, self.MIN
         )
@@ -741,7 +761,9 @@ class TestRunDailyJudgementSkipsWhatItCannotJudge(TestCase):
         self.assertEqual(result["skipped"], "undecidable")
         self.assertEqual(result["attribute_date"], SIGNED_DAY.isoformat())
         self.assertEqual(RegimeJudgement.objects.count(), 0)
-        self.assertEqual(NEWS.calls, [], "判不出量化的日子连资讯都不用抓——反正没有记录可写")
+        self.assertEqual(
+            NEWS.calls, [], "判不出量化的日子连资讯都不用抓——反正没有记录可写"
+        )
 
     def test_a_skip_does_not_disturb_the_record_in_force(self):
         """判不出来时保持上一有效状态——由查询语义天然承担，不需要写一条「沿用」记录。"""
@@ -838,7 +860,9 @@ class TestRunDailyJudgementRecordsOneConclusionPerDay(TestCase):
 
         self.assertEqual(result["decision"], "carried")
         self.assertEqual(result["reason"], _REASON_MIN_DWELL)
-        record = RegimeJudgement.objects.get(effective_at=business_midnight(RUN_DAY + timedelta(days=1)))
+        record = RegimeJudgement.objects.get(
+            effective_at=business_midnight(RUN_DAY + timedelta(days=1))
+        )
         self.assertEqual(record.base_regime, BaseRegime.UPTREND.value)
         self.assertEqual(
             record.evidence["quant"]["regime"],
@@ -888,7 +912,9 @@ class TestRunDailyJudgementRecordsOneConclusionPerDay(TestCase):
         self.assertEqual(RegimeJudgement.objects.get().news_ref, news)
         self.assertEqual(NEWS.calls, [])
 
-    def test_the_channel_running_without_an_escalation_still_records_its_reference(self):
+    def test_the_channel_running_without_an_escalation_still_records_its_reference(
+        self,
+    ):
         """通道跑了、结论是不抬升：抬升标志为空，但那一轮的结论快照要留下。
 
         `news_ref` 是日报第①段唯一的资讯依据（「今日资讯判定缺失」这句话就是靠它
@@ -915,14 +941,18 @@ class TestTheSecondTickReportsWhatWasStored(TestCase):
         persist(series(), last_day=SIGNED_DAY)
 
     def test_it_repeats_the_stored_conclusion_field_by_field(self):
-        NEWS.resolves_to(Escalation.NEWS.value, {"status": "ok", "verdict": {"escalate": True}})
+        NEWS.resolves_to(
+            Escalation.NEWS.value, {"status": "ok", "verdict": {"escalate": True}}
+        )
         first = run_daily_judgement(now=NOW)
 
         NEWS.escalation = ""  # 通道不会再跑；若照它汇报，「抬升」就凭空消失了
         NEWS.ref = None
         again = run_daily_judgement(now=NOW + timedelta(minutes=5))
 
-        self.assertTrue(first["recorded"], "第一次心跳写下记录，第二次才有「已存在」可读")
+        self.assertTrue(
+            first["recorded"], "第一次心跳写下记录，第二次才有「已存在」可读"
+        )
         self.assertFalse(again["recorded"])
 
         first_at = datetime.fromisoformat(first.pop("effective_at"))

@@ -60,7 +60,9 @@ class FrameManager:
         self._order_consumer_task: asyncio.Task | None = None
         # 多策略并发：live_session_id → StrategyRunner
         self._strategy_runners: dict[str, object] = {}
-        self._need_restart = False  # 进程重启后底层组件需重建（OrderExecutor 无法跨进程复用）
+        self._need_restart = (
+            False  # 进程重启后底层组件需重建（OrderExecutor 无法跨进程复用）
+        )
         # 限制 K 线回调触发的信号检查并发数：
         # 该检查内部会走 ccxt 同步网络调用（fetch_ohlcv），
         # 在 thread_sensitive=False 线程池上并发执行时，若不限流，
@@ -115,16 +117,19 @@ class FrameManager:
         try:
             r = self._get_redis()
             key = f"frame:live_session:{live_session_id}"
-            r.hset(key, mapping={
-                "strategy_name": strategy_name,
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "parameters": json.dumps(parameters or {}),
-                "exchange_account_id": exchange_account_id,
-                "user_id": user_id,
-                "initial_balance": initial_balance,
-                "status": "running",
-            })
+            r.hset(
+                key,
+                mapping={
+                    "strategy_name": strategy_name,
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "parameters": json.dumps(parameters or {}),
+                    "exchange_account_id": exchange_account_id,
+                    "user_id": user_id,
+                    "initial_balance": initial_balance,
+                    "status": "running",
+                },
+            )
             r.expire(key, 86400)  # 24小时TTL
             logger.debug("[FrameManager] persisted live session %s", live_session_id)
         except Exception as e:
@@ -278,12 +283,8 @@ class FrameManager:
                         "strategy_name": session_data.get("strategy_name"),
                         "symbol": session_data.get("symbol"),
                         "timeframe": session_data.get("timeframe"),
-                        "parameters": json.loads(
-                            session_data.get("parameters", "{}")
-                        ),
-                        "exchange_account_id": session_data.get(
-                            "exchange_account_id"
-                        ),
+                        "parameters": json.loads(session_data.get("parameters", "{}")),
+                        "exchange_account_id": session_data.get("exchange_account_id"),
                         "user_id": session_data.get("user_id") or None,
                         "live_session_id": live_session_id,
                         "initial_balance": Decimal(
@@ -369,7 +370,10 @@ class FrameManager:
         # 否则 OrderConsumer 不消费 stream → 信号分发后订单永远不会执行。
         # （进程重启后框架可能因撕裂状态未恢复，此时先补启动。）
         if pending:
-            if self._trading_state != FrameState.RUNNING or self._order_executor is None:
+            if (
+                self._trading_state != FrameState.RUNNING
+                or self._order_executor is None
+            ):
                 logger.warning(
                     "[FrameManager] %d running session(s) to restore but trading "
                     "frame not running — starting trading frame first",
@@ -393,7 +397,8 @@ class FrameManager:
             except Exception as e:
                 logger.error(
                     "[FrameManager] failed to restore live session %s: %s",
-                    live_session_id, e,
+                    live_session_id,
+                    e,
                 )
                 # 策略无法解析（不存在/语法错误）是永久性故障：
                 # 标记 DB status=error，避免每次重启都重试喷错。
@@ -413,16 +418,22 @@ class FrameManager:
                         logger.warning(
                             "[FrameManager] live session %s marked status=error "
                             "(unresolvable strategy %s)",
-                            live_session_id, kw.get("strategy_name"),
+                            live_session_id,
+                            kw.get("strategy_name"),
                         )
                     except Exception as ex:
                         logger.warning(
                             "[FrameManager] failed to mark session %s error: %s",
-                            live_session_id, ex,
+                            live_session_id,
+                            ex,
                         )
                 try:
                     r = self._get_redis()
-                    r.hset(f"frame:live_session:{live_session_id}", "status", "restore_failed")
+                    r.hset(
+                        f"frame:live_session:{live_session_id}",
+                        "status",
+                        "restore_failed",
+                    )
                 except Exception:
                     pass
 
@@ -463,7 +474,9 @@ class FrameManager:
 
     # --- Trading Frame ---
 
-    async def start_trading_frame(self, mode: str = "live", force: bool = False) -> None:
+    async def start_trading_frame(
+        self, mode: str = "live", force: bool = False
+    ) -> None:
         """mode: 'live' | 'paper'
         force=True: 跳过状态检查，强制重建底层组件（进程重启恢复场景使用）。
         """
@@ -634,7 +647,9 @@ class FrameManager:
             close_old_connections()
             return (
                 LiveSession.objects.filter(id=live_session_id)
-                .select_related("strategy", "exchange_account", "user", "backtest_result")
+                .select_related(
+                    "strategy", "exchange_account", "user", "backtest_result"
+                )
                 .first()
             )
 
@@ -666,7 +681,7 @@ class FrameManager:
             try:
                 # 清理持久化状态
                 rm_key = key
-                if hasattr(runner, '_live_runner') and runner._live_runner:
+                if hasattr(runner, "_live_runner") and runner._live_runner:
                     rm_key = runner._live_runner.live_session_id or key
 
                 await runner.stop_live()
@@ -810,7 +825,9 @@ class FrameManager:
         self._persist_frame_state()
         logger.info("[FrameManager] data feed stopped")
 
-    async def _get_active_signal_monitors(self, user_ids: set[str] | None = None) -> list:
+    async def _get_active_signal_monitors(
+        self, user_ids: set[str] | None = None
+    ) -> list:
         """获取活跃的信号监控列表。
         user_ids: 限定用户集合；None 表示不过滤（向后兼容），空集合表示返回空。
         """
@@ -835,7 +852,8 @@ class FrameManager:
         except Exception as e:
             logger.warning(
                 "[FrameManager] failed to get active signal monitors: %s: %s",
-                type(e).__name__, e,
+                type(e).__name__,
+                e,
             )
             return []
 
@@ -871,7 +889,9 @@ class FrameManager:
 
         registered = DataSourceRegistry.list_registered()
         if not registered:
-            logger.warning("[FrameManager] no data sources registered, cannot subscribe kline")
+            logger.warning(
+                "[FrameManager] no data sources registered, cannot subscribe kline"
+            )
             return
 
         for source_name in registered:
@@ -893,10 +913,11 @@ class FrameManager:
                 data_type=DataType.KLINE,
                 interval=interval,
                 market_type=MarketType.SPOT,
-                callback=lambda data, sym=symbol, iv=interval_str, ip=indicator_params or {}:
+                callback=lambda data, sym=symbol, iv=interval_str, ip=indicator_params or {}: (
                     asyncio.get_event_loop().create_task(
                         self._on_kline_data(data, sym, iv, ip)
-                    ),
+                    )
+                ),
             )
             logger.info(
                 "[FrameManager] subscribed %s kline %s @%s for signal monitor",
@@ -1017,7 +1038,8 @@ class FrameManager:
             except Exception as e:
                 logger.warning(
                     "[FrameManager] signal monitor kline subscribe failed for %s: %s",
-                    monitor.symbol, e
+                    monitor.symbol,
+                    e,
                 )
 
     async def _stop_signal_monitor(self) -> None:

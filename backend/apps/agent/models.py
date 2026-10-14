@@ -124,7 +124,9 @@ class WorkflowHistory(models.Model):
         db_table = "workflow_history"
         ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=["user", "-created_at"], name="wf_hist_user_created_idx"),
+            models.Index(
+                fields=["user", "-created_at"], name="wf_hist_user_created_idx"
+            ),
         ]
 
     def __str__(self):
@@ -174,4 +176,6 @@ class ScheduledOneTimeTask(models.Model):
         ]
 
     def __str__(self):
-        return f"ScheduledOneTimeTask({str(self.id)[:8]}) {self.task_name} [{self.status}]"
+        return (
+            f"ScheduledOneTimeTask({str(self.id)[:8]}) {self.task_name} [{self.status}]"
+        )

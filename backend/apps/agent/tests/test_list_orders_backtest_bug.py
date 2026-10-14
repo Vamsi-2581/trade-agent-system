@@ -3,7 +3,7 @@
 预期：parameters_schema 应声明 backtest_id 参数。
 实际（bug）：schema 中没有 backtest_id，LLM 无法调用此功能。
 """
-import pytest
+
 from apps.agent.tools.list_orders import ListOrdersTool, _query_orders
 
 
@@ -19,6 +19,7 @@ def test_list_orders_parameters_schema_has_backtest_id():
 def test_list_orders_execute_accepts_backtest_id():
     """execute() 应接受 backtest_id 参数，不应被 **kwargs 吞掉。"""
     import inspect
+
     tool = ListOrdersTool()
     sig = inspect.signature(tool.execute)
     params = sig.parameters
@@ -36,6 +37,7 @@ def test_list_orders_execute_accepts_backtest_id():
 def test_query_orders_source_has_backtest_filter():
     """验证 _query_orders 源码包含 backtest_id 过滤逻辑。"""
     import inspect
+
     source = inspect.getsource(_query_orders)
     assert "live_session__backtest_result_id" in source, (
         "_query_orders 缺少 live_session__backtest_result_id 过滤"

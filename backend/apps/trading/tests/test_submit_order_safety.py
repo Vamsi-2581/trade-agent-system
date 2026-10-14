@@ -387,7 +387,8 @@ class TestCloseOrderExemptionGoesThroughGuard(unittest.TestCase):
         )
 
         self.assertEqual(
-            len(riskguard.requests), 1,
+            len(riskguard.requests),
+            1,
             "平仓单必须仍走 pre_trade_check：入口预跳过会再造一个答案",
         )
         self.assertTrue(

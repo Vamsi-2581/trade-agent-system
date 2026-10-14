@@ -1,6 +1,7 @@
 """
 测试 GetTaskResultTool 的短 UUID 查询功能。
 """
+
 import pytest
 from uuid import uuid4
 from apps.agent.tools.backtest import GetTaskResultTool
@@ -22,7 +23,7 @@ async def test_short_uuid_lookup_unique_match():
         message="test message",
         run_at="2026-06-24T12:00:00Z",
         status="completed",
-        result="test result"
+        result="test result",
     )
 
     tool = GetTaskResultTool()
@@ -43,7 +44,6 @@ async def test_short_uuid_lookup_unique_match():
 async def test_short_uuid_lookup_multiple_matches():
     """测试短 UUID 前缀匹配多个任务的歧义场景"""
     # 创建两个具有相同前缀的任务
-    prefix = "75638cb0"
     task1_id = uuid4()
     task2_id = uuid4()
 
@@ -55,7 +55,7 @@ async def test_short_uuid_lookup_multiple_matches():
         agent_name="test_agent",
         message="test1",
         run_at="2026-06-24T12:00:00Z",
-        status="completed"
+        status="completed",
     )
 
     task2 = await ScheduledOneTimeTask.objects.acreate(
@@ -64,7 +64,7 @@ async def test_short_uuid_lookup_multiple_matches():
         agent_name="test_agent",
         message="test2",
         run_at="2026-06-24T12:00:00Z",
-        status="completed"
+        status="completed",
     )
 
     # 获取实际前缀
@@ -112,7 +112,7 @@ async def test_full_uuid_lookup():
         message="test message",
         run_at="2026-06-24T12:00:00Z",
         status="completed",
-        result="test result"
+        result="test result",
     )
 
     tool = GetTaskResultTool()
@@ -159,7 +159,7 @@ async def test_resolve_short_uuid_helper():
         agent_name="test",
         message="test",
         run_at="2026-06-24T12:00:00Z",
-        status="completed"
+        status="completed",
     )
 
     short_id = str(task_id)[:8]

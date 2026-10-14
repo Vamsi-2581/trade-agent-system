@@ -285,7 +285,9 @@ def ms_to_datetime(value: Any) -> datetime | None:
         return None
 
 
-def _json_data(source: config.NewsSource, payload: str, expect: type, envelope: str) -> Any:
+def _json_data(
+    source: config.NewsSource, payload: str, expect: type, envelope: str
+) -> Any:
     """`payload` → `data` 字段，并校验它的类型。形状不对抛 `NewsFetchError`。"""
     try:
         parsed = json.loads(payload)
@@ -756,7 +758,10 @@ def _build_rows(
                 # 正文抓不到不是丢弃这条的理由：标题与链接本身就有信息量，而
                 # 「抓不到正文」与「没有这条资讯」是两件事。
                 logger.warning(
-                    "[regime/news] %s 的正文抓取失败（%s）：%s", source.name, item.url, exc
+                    "[regime/news] %s 的正文抓取失败（%s）：%s",
+                    source.name,
+                    item.url,
+                    exc,
                 )
                 bodies_failed += 1
                 body = ""

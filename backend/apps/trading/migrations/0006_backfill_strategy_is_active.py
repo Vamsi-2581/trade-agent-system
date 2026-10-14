@@ -47,7 +47,6 @@ def backfill(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ("trading", "0005_alter_order_status"),
     ]

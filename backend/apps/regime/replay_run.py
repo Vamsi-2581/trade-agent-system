@@ -232,7 +232,9 @@ def run_replay(
                 decision_id=review.decision_id,
                 rebuild=generation,
                 verdict=review.verdict,
-                evidence=_review_evidence(review, by_id[review.decision_id], generation),
+                evidence=_review_evidence(
+                    review, by_id[review.decision_id], generation
+                ),
                 reviewed_at=now,
             )
             for review in planned

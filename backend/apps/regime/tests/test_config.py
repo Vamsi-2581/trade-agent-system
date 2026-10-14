@@ -346,7 +346,9 @@ class TestNewsWhitelist(SimpleTestCase):
         `kinds_covered` 存在的意义正是把空出来那一类**显示出来**。这里钉的是默认
         白名单这一份数据本身别退化成空。
         """
-        self.assertEqual(set(config.NEWS.kinds_covered), {"exchange", "crypto_media", "macro"})
+        self.assertEqual(
+            set(config.NEWS.kinds_covered), {"exchange", "crypto_media", "macro"}
+        )
 
     def test_exchange_sources_use_named_parsers(self):
         """第一类不是 RSS：交易所公告走结构化 JSON 接口，各自的信封不一样。
@@ -354,7 +356,9 @@ class TestNewsWhitelist(SimpleTestCase):
         这条同时钉住「不是靠 URL 猜站点」：parser 是配置表上的字面量，采集器只需要
         按名字取函数，不必对 url 做任何字符串判断。
         """
-        exchange = [s for s in config.NEWS.sources if s.kind is config.NewsSourceKind.EXCHANGE]
+        exchange = [
+            s for s in config.NEWS.sources if s.kind is config.NewsSourceKind.EXCHANGE
+        ]
         self.assertEqual({s.name for s in exchange}, {"binance", "okx"})
         for source in exchange:
             with self.subTest(source=source.name):
@@ -389,7 +393,9 @@ class TestNewsWhitelist(SimpleTestCase):
         without_exchange = replace(
             config.NEWS,
             sources=tuple(
-                s for s in config.NEWS.sources if s.kind is not config.NewsSourceKind.EXCHANGE
+                s
+                for s in config.NEWS.sources
+                if s.kind is not config.NewsSourceKind.EXCHANGE
             ),
         )
         self.assertEqual(set(without_exchange.kinds_covered), {"crypto_media", "macro"})
@@ -507,16 +513,22 @@ class TestSelfValidation(SimpleTestCase):
         所以在 import 时拦下，不留给运行时逐源失败去发现。"""
         with self.assertRaises(ValueError) as ctx:
             config.NewsSource(
-                name="x", url="https://example.com", kind=config.NewsSourceKind.EXCHANGE,
+                name="x",
+                url="https://example.com",
+                kind=config.NewsSourceKind.EXCHANGE,
                 parser="binance_annoucements",
             )
         self.assertIn("parser", str(ctx.exception))
 
     def test_source_name_and_url_are_validated(self):
         with self.assertRaises(ValueError):
-            config.NewsSource(name="  ", url="https://example.com", kind=config.NewsSourceKind.MACRO)
+            config.NewsSource(
+                name="  ", url="https://example.com", kind=config.NewsSourceKind.MACRO
+            )
         with self.assertRaises(ValueError):
-            config.NewsSource(name="x", url="ftp://example.com", kind=config.NewsSourceKind.MACRO)
+            config.NewsSource(
+                name="x", url="ftp://example.com", kind=config.NewsSourceKind.MACRO
+            )
 
     def test_events_window_bounds_cannot_be_inverted(self):
         """上下限反过来 ⇒ 每个覆盖值都被拒，而症状是「覆盖功能坏了」而不是「参数配错了」。"""

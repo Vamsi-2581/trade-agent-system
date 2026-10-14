@@ -202,7 +202,10 @@ _USAGE = (
     "  /regime gate off   关掉行情阶段 gate（回到 Shadow）\n"
     "  /regime mech       机制整体的准入体检页（只读）\n"
     "  /regime mech exit  出 Shadow（先回显体检页，再落一条切换流水）\n"
-    "  /regime mech back  退回 Shadow（只记录，不执行）\n" + _EXEMPT_USAGE + "\n" + _LABEL_USAGE
+    "  /regime mech back  退回 Shadow（只记录，不执行）\n"
+    + _EXEMPT_USAGE
+    + "\n"
+    + _LABEL_USAGE
 )
 
 #: 子命令别名。只认整词，不做前缀匹配——「/regime onx」不是「on」的笔误而是另一个词。
@@ -545,10 +548,7 @@ def _exempt_grant(args: list[str], actor: str, now: datetime) -> str:
 def _exempt_revoke(args: list[str], actor: str, now: datetime) -> str:
     """`revoke <id> [id…]`：按 id 收回。整批拒绝语义（缺一个就一行不写）在共享层。"""
     if not args:
-        return (
-            "要指明收回哪几条，例如：/regime exempt revoke 3 4"
-            f"\n\n{_exempt_usage()}"
-        )
+        return f"要指明收回哪几条，例如：/regime exempt revoke 3 4\n\n{_exempt_usage()}"
     try:
         outcome = deactivation_run.revoke(args, now=now)
     except deactivation_run.ExemptionError as exc:

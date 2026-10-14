@@ -23,9 +23,7 @@ async def test_leverage_string_passthrough():
         "exchange_account_id": "acc-1",
         "leverage": "3",
     }
-    with patch(
-        "apps.trading.order_consumer.OrderExecutor.get_instance"
-    ) as mock_get:
+    with patch("apps.trading.order_consumer.OrderExecutor.get_instance") as mock_get:
         mock_exec = AsyncMock()
         mock_exec.submit_order = AsyncMock(return_value={"status": "ok"})
         mock_get.return_value = mock_exec
@@ -44,9 +42,7 @@ async def test_leverage_default_one_when_absent():
         "quantity": "0.01",
         "exchange_account_id": "acc-1",
     }
-    with patch(
-        "apps.trading.order_consumer.OrderExecutor.get_instance"
-    ) as mock_get:
+    with patch("apps.trading.order_consumer.OrderExecutor.get_instance") as mock_get:
         mock_exec = AsyncMock()
         mock_exec.submit_order = AsyncMock(return_value={"status": "ok"})
         mock_get.return_value = mock_exec
@@ -66,9 +62,7 @@ async def test_leverage_empty_string_defaults_one():
         "exchange_account_id": "acc-1",
         "leverage": "",
     }
-    with patch(
-        "apps.trading.order_consumer.OrderExecutor.get_instance"
-    ) as mock_get:
+    with patch("apps.trading.order_consumer.OrderExecutor.get_instance") as mock_get:
         mock_exec = AsyncMock()
         mock_exec.submit_order = AsyncMock(return_value={"status": "ok"})
         mock_get.return_value = mock_exec

@@ -49,7 +49,6 @@ ADR 0001 把停止的语义从「谁在拦」改成了「谁投的触发源」�
 #    （CONTEXT.md:130）又不允许一次终结多行。
 # --------------------------------------------------------------------------- #
 
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -248,9 +247,7 @@ def blocking_declarations(*, now: datetime | None = None) -> list[HaltDeclaratio
     """
     cache: dict[MechanismKind, bool] = {}
     return [
-        row
-        for row in live_declarations(now=now)
-        if switch_open(trigger_of(row), cache)
+        row for row in live_declarations(now=now) if switch_open(trigger_of(row), cache)
     ]
 
 
@@ -329,7 +326,9 @@ def layers_touching(
     return tuple(
         layer_of(row)
         for row in blocking_declarations(now=at)
-        if any(_matches(row.scope, symbol, strategy_id) for symbol, strategy_id in wanted)
+        if any(
+            _matches(row.scope, symbol, strategy_id) for symbol, strategy_id in wanted
+        )
     )
 
 

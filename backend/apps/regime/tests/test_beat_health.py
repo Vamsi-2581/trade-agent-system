@@ -151,9 +151,7 @@ class TestNothingIsConvictedWithoutAFixedInterval(SimpleTestCase):
 
     def test_a_crontab_entry_is_never_late(self):
         self.assertEqual(
-            _kinds(
-                [_entry("alpha", period_seconds=None, ago=86400 * 30)], ("alpha",)
-            ),
+            _kinds([_entry("alpha", period_seconds=None, ago=86400 * 30)], ("alpha",)),
             [],
         )
 
@@ -432,7 +430,9 @@ class TestWhoGetsWokenUp(SimpleTestCase):
     def test_a_stuck_entry_is_worth_a_message_while_the_rest_is_healthy(self):
         """`late` 的旁证：最近的一条在正常跑，所以这次说得成「是**它**坏了」。"""
         rows = [_entry("alpha", ago=10), _entry("beta", ago=3600)]
-        self.assertEqual(self._alerted(rows, ("alpha", "beta")), [("beta", BeatProblem.LATE)])
+        self.assertEqual(
+            self._alerted(rows, ("alpha", "beta")), [("beta", BeatProblem.LATE)]
+        )
 
     def test_nothing_is_said_while_the_whole_table_looks_stale(self):
         """全表都超期 = beat 整体没在跑（或刚重启还没落库）：那不是说「哪一条坏了」。

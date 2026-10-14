@@ -154,7 +154,9 @@ class TestModeAccountInvariant:
 
     def test_resume_rejects_mismatch_and_keeps_db_status(self):
         """恢复也是一次启动：不能从 resume 口绕开同一不变式"""
-        session = _session(_user("mismatch-resume"), "paper", testnet=False, status="paused")
+        session = _session(
+            _user("mismatch-resume"), "paper", testnet=False, status="paused"
+        )
 
         resp = _post(session.user, session, "resume")
 
@@ -163,7 +165,9 @@ class TestModeAccountInvariant:
         assert session.status == "paused"
 
     def test_resume_allows_consistent_session(self):
-        session = _session(_user("consistent-resume"), "paper", testnet=True, status="paused")
+        session = _session(
+            _user("consistent-resume"), "paper", testnet=True, status="paused"
+        )
 
         resp = _post(session.user, session, "resume")
 

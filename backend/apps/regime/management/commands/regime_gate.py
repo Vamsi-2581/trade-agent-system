@@ -78,7 +78,9 @@ class Command(BaseCommand):
         self.stdout.write("")
 
         if not options["on"] and not options["off"]:
-            self.stdout.write("（没有动作参数：以上是当前状态。--on 打开 / --off 关掉）")
+            self.stdout.write(
+                "（没有动作参数：以上是当前状态。--on 打开 / --off 关掉）"
+            )
             return
 
         # `reason` 与上面那一页出自**同一次求值**（`Briefing.summary`），不在这里另拼一句：

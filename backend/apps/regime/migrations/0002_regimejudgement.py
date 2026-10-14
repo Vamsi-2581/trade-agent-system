@@ -4,36 +4,110 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('regime', '0001_initial'),
+        ("regime", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='RegimeJudgement',
+            name="RegimeJudgement",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('symbol', models.CharField(max_length=32, verbose_name='标的')),
-                ('attribute_date', models.DateField(db_index=True, verbose_name='签署日（作出该结论所依据的最后一条已收盘日线）')),
-                ('effective_at', models.DateTimeField(db_index=True, verbose_name='生效时刻（UTC）')),
-                ('base_regime', models.CharField(choices=[('high_vol', '高波动'), ('downtrend', '下行趋势'), ('uptrend', '上行趋势'), ('range', '箱体震荡')], max_length=16, verbose_name='基础阶段（纯量化口径）')),
-                ('escalation', models.CharField(blank=True, choices=[('', '无'), ('news', '资讯抬升')], default='', max_length=16, verbose_name='抬升标志')),
-                ('effective_regime', models.CharField(choices=[('high_vol', '高波动'), ('downtrend', '下行趋势'), ('uptrend', '上行趋势'), ('range', '箱体震荡')], max_length=16, verbose_name='生效阶段（基础阶段被抬升后的值）')),
-                ('evidence', models.JSONField(default=dict, verbose_name='依据数字（量化原始输出 + 从输出到基础阶段之间发生的事）')),
-                ('config_snapshot', models.JSONField(default=dict, verbose_name='写入时的完整参数快照（config.full_snapshot）')),
-                ('news_ref', models.JSONField(blank=True, null=True, verbose_name='引用的资讯条目与资讯结论（单元 5 落地）')),
-                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='创建时间')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("symbol", models.CharField(max_length=32, verbose_name="标的")),
+                (
+                    "attribute_date",
+                    models.DateField(
+                        db_index=True,
+                        verbose_name="签署日（作出该结论所依据的最后一条已收盘日线）",
+                    ),
+                ),
+                (
+                    "effective_at",
+                    models.DateTimeField(db_index=True, verbose_name="生效时刻（UTC）"),
+                ),
+                (
+                    "base_regime",
+                    models.CharField(
+                        choices=[
+                            ("high_vol", "高波动"),
+                            ("downtrend", "下行趋势"),
+                            ("uptrend", "上行趋势"),
+                            ("range", "箱体震荡"),
+                        ],
+                        max_length=16,
+                        verbose_name="基础阶段（纯量化口径）",
+                    ),
+                ),
+                (
+                    "escalation",
+                    models.CharField(
+                        blank=True,
+                        choices=[("", "无"), ("news", "资讯抬升")],
+                        default="",
+                        max_length=16,
+                        verbose_name="抬升标志",
+                    ),
+                ),
+                (
+                    "effective_regime",
+                    models.CharField(
+                        choices=[
+                            ("high_vol", "高波动"),
+                            ("downtrend", "下行趋势"),
+                            ("uptrend", "上行趋势"),
+                            ("range", "箱体震荡"),
+                        ],
+                        max_length=16,
+                        verbose_name="生效阶段（基础阶段被抬升后的值）",
+                    ),
+                ),
+                (
+                    "evidence",
+                    models.JSONField(
+                        default=dict,
+                        verbose_name="依据数字（量化原始输出 + 从输出到基础阶段之间发生的事）",
+                    ),
+                ),
+                (
+                    "config_snapshot",
+                    models.JSONField(
+                        default=dict,
+                        verbose_name="写入时的完整参数快照（config.full_snapshot）",
+                    ),
+                ),
+                (
+                    "news_ref",
+                    models.JSONField(
+                        blank=True,
+                        null=True,
+                        verbose_name="引用的资讯条目与资讯结论（单元 5 落地）",
+                    ),
+                ),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True, verbose_name="创建时间"),
+                ),
             ],
             options={
-                'verbose_name': '行情阶段判定记录',
-                'verbose_name_plural': '行情阶段判定记录',
-                'db_table': 'regime_judgements',
-                'ordering': ['symbol', '-effective_at'],
+                "verbose_name": "行情阶段判定记录",
+                "verbose_name_plural": "行情阶段判定记录",
+                "db_table": "regime_judgements",
+                "ordering": ["symbol", "-effective_at"],
             },
         ),
         migrations.AddConstraint(
-            model_name='regimejudgement',
-            constraint=models.UniqueConstraint(fields=('symbol', 'effective_at'), name='uniq_regime_judgement_symbol_effective_at'),
+            model_name="regimejudgement",
+            constraint=models.UniqueConstraint(
+                fields=("symbol", "effective_at"),
+                name="uniq_regime_judgement_symbol_effective_at",
+            ),
         ),
     ]

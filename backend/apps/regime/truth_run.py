@@ -66,7 +66,9 @@ def parse_day(raw: str) -> date:
     try:
         return date.fromisoformat(text)
     except ValueError as exc:
-        raise truth.TruthInputError(f"认不出的日期：{text or '（空）'}——{_DAY_HINT}") from exc
+        raise truth.TruthInputError(
+            f"认不出的日期：{text or '（空）'}——{_DAY_HINT}"
+        ) from exc
 
 
 def parse_regime(raw: str) -> BaseRegime:
@@ -298,7 +300,9 @@ def parse_row_id(raw: str) -> int:
     """`#3` / `3` 都认（清单里带 `#`，人照着抄的时候不该被它绊住）。"""
     text = (raw or "").strip().lstrip("#")
     if not text.isdigit():
-        raise truth.TruthInputError(f"认不出的区间 id：{raw or '（空）'}（应该是一个整数）")
+        raise truth.TruthInputError(
+            f"认不出的区间 id：{raw or '（空）'}（应该是一个整数）"
+        )
     return int(text)
 
 
@@ -319,7 +323,8 @@ def add_summary(outcome: AddOutcome) -> tuple[str, ...]:
     ]
     if outcome.new_conflicts:
         partners = "、".join(
-            f"#{o.id or '?'}（{regime_display(o.regime.value)}）" for o in outcome.conflicts_with
+            f"#{o.id or '?'}（{regime_display(o.regime.value)}）"
+            for o in outcome.conflicts_with
         )
         lines.append(
             f"⚠️ 与已有区间 {partners} 的档位不同，本次新造出 "
@@ -412,9 +417,7 @@ def roster_lines() -> tuple[str, ...]:
     else:
         lines.append("人工标注区间：一段活的都没有（全部已撤回）")
     if retracted:
-        lines.append(
-            f"  已撤回 {retracted} 段（行仍在库里、原文未动，只是不算数）"
-        )
+        lines.append(f"  已撤回 {retracted} 段（行仍在库里、原文未动，只是不算数）")
 
     lines.append("")
     lines.extend(truth.describe(agreement()))

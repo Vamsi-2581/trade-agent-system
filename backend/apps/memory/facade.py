@@ -69,7 +69,10 @@ class MemoryFacade:
             )
         if persist_to in ("longterm", "both"):
             await self._longterm.store(
-                content, metadata=metadata, memory_type=memory_type, importance=importance
+                content,
+                metadata=metadata,
+                memory_type=memory_type,
+                importance=importance,
             )
 
     # ====== 对话历史透传 ======

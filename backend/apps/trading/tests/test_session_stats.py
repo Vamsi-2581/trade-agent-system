@@ -54,9 +54,7 @@ def test_zero_pnl_counts_as_a_loss_not_a_win():
 
     把它算进胜率只会让胜率比实际好看，而这个数没有任何一个用途需要它偏高。
     """
-    stats = compute_session_stats(
-        [Decimal("12"), Decimal("0"), Decimal("-6")]
-    )
+    stats = compute_session_stats([Decimal("12"), Decimal("0"), Decimal("-6")])
 
     assert stats["closed_orders"] == 3
     assert stats["winning_orders"] == 1
@@ -181,9 +179,10 @@ class TestTheTwoReadingsAgree:
             LiveSession.objects.filter(pk=session.pk)
         ).get()
 
-        assert money(annotated.realized_pnl) == session_stats_for(session)[
-            "realized_pnl_total"
-        ]
+        assert (
+            money(annotated.realized_pnl)
+            == session_stats_for(session)["realized_pnl_total"]
+        )
 
     @pytest.mark.django_db
     def test_a_session_without_orders_reads_zero_not_null_on_both_sides(self):
@@ -203,9 +202,7 @@ class TestTheTwoReadingsAgree:
         mine = _session_with_orders([Decimal("10")])
         other = _session_with_orders([Decimal("999")])
 
-        annotated = annotate_realized_pnl(
-            LiveSession.objects.filter(pk=mine.pk)
-        ).get()
+        annotated = annotate_realized_pnl(LiveSession.objects.filter(pk=mine.pk)).get()
 
         assert money(annotated.realized_pnl) == "10.00000000"
         assert session_stats_for(mine)["realized_pnl_total"] == "10.00000000"

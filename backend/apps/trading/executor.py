@@ -114,9 +114,7 @@ def compute_realized_pnl(
                     avg_cost = Decimal("0")
             else:
                 # 空头加仓：加权平均
-                avg_cost = (
-                    (avg_cost * (-pos) + p * q) / (-pos + q) if pos < 0 else p
-                )
+                avg_cost = (avg_cost * (-pos) + p * q) / (-pos + q) if pos < 0 else p
                 pos -= q
 
     if pos <= 0:
@@ -264,7 +262,9 @@ class OrderExecutor:
             if adapter is None:
                 continue
             exchange = self._account_exchanges.get(account_id)
-            out.append((f"{exchange}#{account_id}" if exchange else account_id, adapter))
+            out.append(
+                (f"{exchange}#{account_id}" if exchange else account_id, adapter)
+            )
         return out
 
     def account_adapters(self) -> dict[str, BaseExchangeAdapter]:
@@ -320,7 +320,9 @@ class OrderExecutor:
             ValueError: 交易所适配器不存在
             PermissionError: RiskGuard 拒绝下单
         """
-        logger.info(f"[SF-07][OrderExecutor] submit: {exchange} {symbol} {side} {order_type} qty={quantity} close={is_close_position}")
+        logger.info(
+            f"[SF-07][OrderExecutor] submit: {exchange} {symbol} {side} {order_type} qty={quantity} close={is_close_position}"
+        )
         uid = user_id  # 保留引用供 finally 使用
         if not self._running:
             raise RuntimeError("OrderExecutor is not running")
@@ -341,7 +343,9 @@ class OrderExecutor:
             price=price,
             # 风控要按**同一个**账户解析：这里传下去的账户 id 就是本单即将使用的那个
             # 适配器，风控拿它算仓位/余额才和下面的下单是同一笔钱。
-            exchange_account_id=str(exchange_account_id) if exchange_account_id else None,
+            exchange_account_id=str(exchange_account_id)
+            if exchange_account_id
+            else None,
             # 同上，会话 id 是**判定输入**而不是追溯字段：策略档的停止声明要靠它换出
             # 策略 id，而落库（`_persist_order`）在风控之后，来不及。
             live_session_id=live_session_id,
@@ -357,16 +361,27 @@ class OrderExecutor:
         if self._riskguard:
             # 诊断：检查方法类型
             import inspect
-            method = self._riskguard.pre_trade_check
-            logger.info(f"[SF-07a][OrderExecutor] pre_trade_check method: {method}, iscoroutinefunction={inspect.iscoroutinefunction(method)}")
 
-            logger.info(f"[SF-07a][OrderExecutor] riskguard instance: {type(self._riskguard).__name__} id={id(self._riskguard)}")
+            method = self._riskguard.pre_trade_check
+            logger.info(
+                f"[SF-07a][OrderExecutor] pre_trade_check method: {method}, iscoroutinefunction={inspect.iscoroutinefunction(method)}"
+            )
+
+            logger.info(
+                f"[SF-07a][OrderExecutor] riskguard instance: {type(self._riskguard).__name__} id={id(self._riskguard)}"
+            )
             logger.info("[SF-07a][OrderExecutor] calling pre_trade_check...")
             try:
-                approved, reason = await self._riskguard.pre_trade_check(request, user_id)
-                logger.info(f"[SF-07a][OrderExecutor] pre_trade_check returned: approved={approved}")
+                approved, reason = await self._riskguard.pre_trade_check(
+                    request, user_id
+                )
+                logger.info(
+                    f"[SF-07a][OrderExecutor] pre_trade_check returned: approved={approved}"
+                )
             except Exception as e:
-                logger.error(f"[SF-07a][OrderExecutor] pre_trade_check exception: {type(e).__name__}: {e}")
+                logger.error(
+                    f"[SF-07a][OrderExecutor] pre_trade_check exception: {type(e).__name__}: {e}"
+                )
                 raise
             if not approved:
                 logger.warning(f"[SF-04][OrderExecutor] RiskGuard拒绝下单: {reason}")
@@ -387,7 +402,7 @@ class OrderExecutor:
                     status="pending",
                     live_session_id=live_session_id,
                 ),
-                timeout=30.0
+                timeout=30.0,
             )
         except asyncio.TimeoutError:
             logger.error("[SF-07b][OrderExecutor] _persist_order timeout (30s)")
@@ -410,7 +425,9 @@ class OrderExecutor:
                     timeout=45.0,
                 )
             except asyncio.TimeoutError:
-                logger.error("[SF-07d][OrderExecutor] adapter.place_order timeout (45s)")
+                logger.error(
+                    "[SF-07d][OrderExecutor] adapter.place_order timeout (45s)"
+                )
                 raise TimeoutError("Exchange API timeout")
 
             # 应用下单响应中的即时成交信息（市价单通常同步成交）
@@ -427,9 +444,7 @@ class OrderExecutor:
                 update_kwargs["filled_quantity"] = filled_qty
                 if response.avg_price is not None:
                     try:
-                        update_kwargs["avg_fill_price"] = Decimal(
-                            response.avg_price
-                        )
+                        update_kwargs["avg_fill_price"] = Decimal(response.avg_price)
                     except Exception:
                         pass
             # 平仓卖单即时成交（市价单通常同步成交）时计算已实现盈亏，
@@ -450,9 +465,7 @@ class OrderExecutor:
                         avg_fill_price=update_kwargs["avg_fill_price"],
                     )
                 except Exception as e:
-                    logger.warning(
-                        f"[OrderExecutor] realized_pnl compute failed: {e}"
-                    )
+                    logger.warning(f"[OrderExecutor] realized_pnl compute failed: {e}")
                     pnl = None
                 if pnl is not None:
                     update_kwargs["realized_pnl"] = pnl
@@ -477,7 +490,9 @@ class OrderExecutor:
         except Exception as e:
             # 失败原因必须带类型名：httpx 超时异常的 message 为空，只写 str(e) 会落一条空消息
             # （2026-09-21 事故：库里的 failed 单 error_message='' ，无法诊断）
-            error_text = f"{type(e).__name__}: {e}".strip().rstrip(":") or type(e).__name__
+            error_text = (
+                f"{type(e).__name__}: {e}".strip().rstrip(":") or type(e).__name__
+            )
             # 「下单结果未知」不是失败：交易所侧可能正有一张活着的单，记 failed 会让
             # 账面与实际分叉，而且用户看到「失败」会再下一张 → 双倍敞口。落成非终态的
             # unknown，交给悬挂扫描/成交同步继续找它；熔断计数照旧（仍然算一次失败），
@@ -733,13 +748,9 @@ class OrderExecutor:
         try:
             history = await _history()
         except Exception as e:
-            logger.warning(
-                f"[OrderExecutor] failed to load order history for pnl: {e}"
-            )
+            logger.warning(f"[OrderExecutor] failed to load order history for pnl: {e}")
             return None
-        return compute_realized_pnl(
-            history, side, filled_quantity, avg_fill_price
-        )
+        return compute_realized_pnl(history, side, filled_quantity, avg_fill_price)
 
     async def _apply_close_pnl(
         self,
@@ -783,6 +794,7 @@ class OrderExecutor:
         from apps.trading.models import LiveSession
 
         try:
+
             @db_async
             def _bump():
                 LiveSession.objects.filter(id=live_session_id).update(
@@ -816,9 +828,7 @@ class OrderExecutor:
         if self._fill_sync_task and not self._fill_sync_task.done():
             return
         try:
-            self._fill_sync_task = asyncio.create_task(
-                self._fill_sync_loop(interval)
-            )
+            self._fill_sync_task = asyncio.create_task(self._fill_sync_loop(interval))
             logger.info(f"Fill sync started (interval={interval}s)")
         except RuntimeError as e:
             logger.warning(f"Fill sync not started (no running loop): {e}")
@@ -905,9 +915,7 @@ class OrderExecutor:
         if task and not task.done():
             return
         try:
-            self._dangling_sweep_task = asyncio.create_task(
-                self._run_dangling_sweep()
-            )
+            self._dangling_sweep_task = asyncio.create_task(self._run_dangling_sweep())
         except RuntimeError as e:
             logger.warning(f"[FillSync] 悬挂行扫描未启动（无运行中的 loop）：{e}")
 
@@ -929,8 +937,7 @@ class OrderExecutor:
         if fill.filled_quantity != order.filled_quantity:
             updates["filled_quantity"] = fill.filled_quantity
         if fill.avg_fill_price is not None and (
-            order.avg_fill_price is None
-            or fill.avg_fill_price != order.avg_fill_price
+            order.avg_fill_price is None or fill.avg_fill_price != order.avg_fill_price
         ):
             updates["avg_fill_price"] = fill.avg_fill_price
         if fill.error_message and fill.error_message != order.error_message:
@@ -952,9 +959,7 @@ class OrderExecutor:
                     symbol=order.symbol,
                     order_id=str(order.id),
                     live_session_id=(
-                        str(order.live_session_id)
-                        if order.live_session_id
-                        else None
+                        str(order.live_session_id) if order.live_session_id else None
                     ),
                     side=order.side,
                     filled_quantity=fill.filled_quantity,

@@ -23,9 +23,11 @@ def _get_user(uid: str):
     User = get_user_model()
     try:
         import uuid
+
         return User.objects.get(id=uuid.UUID(str(uid)))
     except (ValueError, User.DoesNotExist):
         return User.objects.filter(username=uid).first()
+
 
 # 条件描述映射
 _CONDITION_MAP = {

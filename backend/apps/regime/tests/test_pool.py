@@ -117,7 +117,9 @@ def sample(
     strategy_id: int = 1,
     symbol: str = "BTC/USDT",
 ) -> pool.SliceSample:
-    loaded = load_sample(data, result_id=result_id, strategy_id=strategy_id, symbol=symbol)
+    loaded = load_sample(
+        data, result_id=result_id, strategy_id=strategy_id, symbol=symbol
+    )
     assert loaded.sample is not None, f"样本应当可用，实际被排除：{loaded.excluded}"
     return loaded.sample
 
@@ -126,7 +128,9 @@ def matches_for(*pairs: tuple[int, str]) -> dict[int, pool.ArchetypeMatch]:
     return {sid: resolve_archetype(text) for sid, text in pairs}
 
 
-def cell_of(result: pool.PoolResult, strategy_id: int, regime: BaseRegime) -> pool.PooledCell:
+def cell_of(
+    result: pool.PoolResult, strategy_id: int, regime: BaseRegime
+) -> pool.PooledCell:
     return result.cells[(strategy_id, regime.value)]
 
 
@@ -154,7 +158,10 @@ def downtrend_profit_then_range_loss(
     trades = [same_day(0, 1000.0), same_day(1, 1000.0), same_day(2, 1000.0)]
     trades += [same_day(n, -500.0) for n in (7, 8, 9)]
     return sample(
-        payload(trades, tags, span), result_id=result_id, symbol=symbol, strategy_id=strategy_id
+        payload(trades, tags, span),
+        result_id=result_id,
+        symbol=symbol,
+        strategy_id=strategy_id,
     )
 
 
@@ -169,9 +176,15 @@ class TestWeightedMerge(SimpleTestCase):
     def test_pooled_trades_are_the_sum_of_the_parts(self):
         span = span_with(DOWNTREND)
         tags = tags_span(span, {i: DOWNTREND for i in range(6)})
-        a = sample(payload([same_day(7, 250.0), same_day(8, 250.0), same_day(9, 250.0)], tags, span))
+        a = sample(
+            payload(
+                [same_day(7, 250.0), same_day(8, 250.0), same_day(9, 250.0)], tags, span
+            )
+        )
         b = sample(
-            payload([same_day(7, 250.0), same_day(8, 250.0), same_day(9, 250.0)], tags, span),
+            payload(
+                [same_day(7, 250.0), same_day(8, 250.0), same_day(9, 250.0)], tags, span
+            ),
             result_id="r2",
             symbol="ETH/USDT",
         )
@@ -199,7 +212,9 @@ class TestWeightedMerge(SimpleTestCase):
         span = span_with(DOWNTREND)
         tags = tags_span(span, {i: DOWNTREND for i in range(6)})
         days = [7, 8, 9]
-        a = sample(payload([same_day(n, 250.0) for n in days], tags, span, capital=10000.0))
+        a = sample(
+            payload([same_day(n, 250.0) for n in days], tags, span, capital=10000.0)
+        )
         b = sample(
             payload([same_day(n, 250.0) for n in days], tags, span, capital=100000.0),
             result_id="r2",
@@ -387,7 +402,9 @@ class TestStateVocabulary(SimpleTestCase):
         并存（下行趋势适用、箱体不适用），所以这两种状态确实来自比对，而不是来自
         某个默认值。"""
         result = build_pool(
-            [downtrend_profit_then_range_loss()], matches_for((1, "海龟突破")), params=SMALL
+            [downtrend_profit_then_range_loss()],
+            matches_for((1, "海龟突破")),
+            params=SMALL,
         )
         cell = cell_of(result, 1, RANGE)
 
@@ -464,7 +481,9 @@ class TestConflictNeedsReview(SimpleTestCase):
         不成立。用的是**有方向**的那份样本（箱体落 `unfit`），否则这条用例可能只是
         因为「没方向就无从冲突」而通过——那是另一条规则，测不到这一条。"""
         result = build_pool(
-            [downtrend_profit_then_range_loss()], matches_for((1, "海龟突破")), params=SMALL
+            [downtrend_profit_then_range_loss()],
+            matches_for((1, "海龟突破")),
+            params=SMALL,
         )
         cell = cell_of(result, 1, RANGE)
 
@@ -509,12 +528,16 @@ class TestArchetypeNormalisation(SimpleTestCase):
 
     def test_bare_ma_does_not_match_inside_other_words(self):
         """映射表里的片段不能被无关词包含：`market` 里没有「均线」。"""
-        self.assertEqual(normalize_archetype("market making"), (ARCHETYPE_UNCLASSIFIED, ""))
+        self.assertEqual(
+            normalize_archetype("market making"), (ARCHETYPE_UNCLASSIFIED, "")
+        )
 
     def test_unclassified_carries_an_explicit_value_plus_no_matched_word(self):
         for text in ("随便写点什么", "", None):
             with self.subTest(text=text):
-                self.assertEqual(normalize_archetype(text), (ARCHETYPE_UNCLASSIFIED, ""))
+                self.assertEqual(
+                    normalize_archetype(text), (ARCHETYPE_UNCLASSIFIED, "")
+                )
 
     def test_the_override_table_wins_and_is_traceable(self):
         match = resolve_archetype("RSI 超卖区金叉买入", override="网格")
@@ -548,14 +571,20 @@ class TestArchetypeFallback(SimpleTestCase):
         )
         # s2：同原型，3 笔 → 两家合起来 4 笔。
         s2 = sample(
-            payload([same_day(7, 200.0), same_day(8, 200.0), same_day(9, 200.0)], tags, span),
+            payload(
+                [same_day(7, 200.0), same_day(8, 200.0), same_day(9, 200.0)], tags, span
+            ),
             result_id="r2",
             strategy_id=2,
             symbol="ETH/USDT",
         )
         # s3：**另一个原型**，样本很厚——它不该被算进 s1 的兜底样本。
         s3 = sample(
-            payload([same_day(10, 900.0), same_day(11, 900.0), same_day(10, 900.0)], tags, span),
+            payload(
+                [same_day(10, 900.0), same_day(11, 900.0), same_day(10, 900.0)],
+                tags,
+                span,
+            ),
             result_id="r3",
             strategy_id=3,
             symbol="SOL/USDT",
@@ -623,7 +652,9 @@ class TestArchetypeFallback(SimpleTestCase):
         self.assertEqual(result.unclassified_strategy_ids, (7,))
         self.assertEqual(cell.source, POOL_SOURCE_ARCHETYPE)
         self.assertEqual(cell.evidence["archetype"]["name"], ARCHETYPE_UNCLASSIFIED)
-        self.assertEqual(cell.evidence["archetype"]["source"], ARCHETYPE_SOURCE_UNCLASSIFIED)
+        self.assertEqual(
+            cell.evidence["archetype"]["source"], ARCHETYPE_SOURCE_UNCLASSIFIED
+        )
         # 原型也样本不足 → 照写「中性 + 证据不足」，不引入第三层（Q4）。
         self.assertEqual(cell.state, sl.STATE_NEUTRAL)
         self.assertEqual(cell.reason, sl.REASON_INSUFFICIENT)
@@ -652,7 +683,9 @@ class TestLoadSampleExclusions(SimpleTestCase):
     def test_a_missing_payload_is_its_own_reason(self):
         for empty in (None, {}, {"cells": {}}):
             with self.subTest(payload=empty):
-                loaded = load_sample(empty, result_id="r1", strategy_id=1, symbol="BTC/USDT")
+                loaded = load_sample(
+                    empty, result_id="r1", strategy_id=1, symbol="BTC/USDT"
+                )
                 self.assertIsNone(loaded.sample)
                 self.assertEqual(loaded.excluded, EXCLUDED_NO_PAYLOAD)
 
@@ -693,14 +726,18 @@ class TestLoadSampleExclusions(SimpleTestCase):
         nulled = payload([same_day(7, 300.0)], tags, span)
         nulled["cells"][HIGH_VOL.value]["merge_inputs"] = None
         self.assertEqual(
-            load_sample(nulled, result_id="r1", strategy_id=1, symbol="BTC/USDT").excluded,
+            load_sample(
+                nulled, result_id="r1", strategy_id=1, symbol="BTC/USDT"
+            ).excluded,
             EXCLUDED_UNUSABLE_CAPITAL,
         )
 
         truncated = payload([same_day(7, 300.0)], tags, span)
         del truncated["cells"][HIGH_VOL.value]["merge_inputs"]["trades"]
         self.assertEqual(
-            load_sample(truncated, result_id="r1", strategy_id=1, symbol="BTC/USDT").excluded,
+            load_sample(
+                truncated, result_id="r1", strategy_id=1, symbol="BTC/USDT"
+            ).excluded,
             EXCLUDED_NO_MERGE_INPUTS,
         )
 
@@ -766,7 +803,9 @@ class TestVocabularyMatchesTheModel(SimpleTestCase):
         比的是**模型的 `choices` 列出来的取值**，不是 `PoolSource` 成员本身：前者才是
         「这一列允许落什么」，后者只是它的来源。
         """
-        field_values = {value for value, _ in RegimePoolCell._meta.get_field("source").choices}
+        field_values = {
+            value for value, _ in RegimePoolCell._meta.get_field("source").choices
+        }
         self.assertEqual(field_values, {member.value for member in PoolSource})
         self.assertEqual(field_values, {POOL_SOURCE_STRATEGY, POOL_SOURCE_ARCHETYPE})
 
@@ -786,7 +825,9 @@ class TestVocabularyMatchesTheModel(SimpleTestCase):
             with self.subTest(cell=key):
                 self.assertIn(cell.state, sl.STATE_DISPLAY)
                 self.assertTrue(cell.reason == "" or cell.reason in sl.REASON_DISPLAY)
-                self.assertIn(cell.source, (POOL_SOURCE_STRATEGY, POOL_SOURCE_ARCHETYPE))
+                self.assertIn(
+                    cell.source, (POOL_SOURCE_STRATEGY, POOL_SOURCE_ARCHETYPE)
+                )
 
 
 class TestCoverage(SimpleTestCase):

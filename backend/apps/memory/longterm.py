@@ -50,7 +50,9 @@ class PgvectorLongTerm:
                 content=content,
                 metadata=merged,
             )
-            logger.debug("LongTermMemory.store | id=%s | user=%s", obj.id, self._user_id)
+            logger.debug(
+                "LongTermMemory.store | id=%s | user=%s", obj.id, self._user_id
+            )
         except Exception as e:
             logger.warning("LongTermMemory.store failed: %s", e)
 
@@ -71,7 +73,9 @@ class PgvectorLongTerm:
                 MemoryEntry(
                     source="longterm",
                     content=obj.content,
-                    ts=calendar.timegm(obj.created_at.timetuple()) if obj.created_at else 0,
+                    ts=calendar.timegm(obj.created_at.timetuple())
+                    if obj.created_at
+                    else 0,
                     metadata={
                         **(obj.metadata or {}),
                         "agent_name": getattr(obj, "agent_name", ""),
@@ -118,8 +122,7 @@ class InMemoryLongTerm:
     async def search(self, query: str, top_k: int = 5) -> list[MemoryEntry]:
         query_lower = query.lower()
         matches = [
-            e for e in reversed(self._entries)
-            if query_lower in e["content"].lower()
+            e for e in reversed(self._entries) if query_lower in e["content"].lower()
         ][:top_k]
         return [
             MemoryEntry(

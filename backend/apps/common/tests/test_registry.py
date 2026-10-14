@@ -5,9 +5,9 @@
   2. 实例之间天然隔离（测试无需清理全局态）
   3. 现有类级 API 的 reset() 与实例 reset() 行为一致
 """
+
 from __future__ import annotations
 
-import pytest
 
 from apps.common.registry import Registry
 
@@ -100,7 +100,9 @@ class TestClassLevelRegistryReset:
         from apps.agent.registry import AgentRegistry
 
         # 注册一些状态
-        AgentRegistry.register_dynamic("legacy_test_agent", type("A", (), {"name": "legacy_test_agent"}))
+        AgentRegistry.register_dynamic(
+            "legacy_test_agent", type("A", (), {"name": "legacy_test_agent"})
+        )
         assert "legacy_test_agent" in AgentRegistry._classes
 
         # reset() 应清空 _classes、_registry、_discovered

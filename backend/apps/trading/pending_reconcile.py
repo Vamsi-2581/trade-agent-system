@@ -159,7 +159,9 @@ async def reconcile_dangling_order(order, adapter) -> DanglingOutcome:
     except Exception as e:  # noqa: BLE001
         # 未预期异常同样属于「不知道」，绝不能掉进 failed 分支
         detail = f"按幂等键反查交易所订单失败：{type(e).__name__}: {e}"
-        logger.warning("[PendingReconcile] order %s: %s", order.id, detail, exc_info=True)
+        logger.warning(
+            "[PendingReconcile] order %s: %s", order.id, detail, exc_info=True
+        )
     else:
         if raw is None:
             detail = "已按幂等键反查，交易所确认不存在此单"
@@ -179,7 +181,9 @@ async def reconcile_dangling_order(order, adapter) -> DanglingOutcome:
             await _mark(order, exchange_order_id=exchange_order_id)
             detail = f"交易所存在此单（exchange_order_id={exchange_order_id}），已补回本地并交成交同步"
             logger.info("[PendingReconcile] order %s: %s", order.id, detail)
-            return DanglingOutcome("resolved", detail, exchange_order_id=exchange_order_id)
+            return DanglingOutcome(
+                "resolved", detail, exchange_order_id=exchange_order_id
+            )
 
     # 到这里一定是「不知道」：标 unknown，且只在**状态发生迁移**时告警一次，
     # 否则每轮扫描都会给用户重发同一条消息。

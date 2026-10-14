@@ -35,10 +35,7 @@ async def start_order_consumer():
             for msg_id, fields in messages:
                 try:
                     # 60秒超时保护
-                    await asyncio.wait_for(
-                        _process_order(fields),
-                        timeout=60.0
-                    )
+                    await asyncio.wait_for(_process_order(fields), timeout=60.0)
                 except asyncio.TimeoutError:
                     logger.error(
                         f"[OrderConsumer] timeout processing order {fields.get('task_id')}, "

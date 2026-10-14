@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ChannelTarget:
     """Resolved channel info for sending a notification to a user."""
+
     channel_type: str  # "telegram" | "lark"
     chat_id: str  # Telegram chat_id or Feishu chat_id
     user_open_id: str = ""  # Feishu open_id (empty for Telegram)
@@ -47,6 +48,7 @@ def get_user_active_channel(user_id: str) -> Optional[ChannelTarget]:
         # Try by Django User UUID
         try:
             import uuid
+
             uuid.UUID(user_id)  # Validate it's a UUID
             user = User.objects.filter(id=user_id).first()
         except (ValueError, AttributeError):

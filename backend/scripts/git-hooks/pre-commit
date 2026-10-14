@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# 提交前 lint / format 护栏——与 CI 的 l1-semantic job 对齐（ruff check + format）。
+# 仓库 core.hooksPath 已显式指向 .git/hooks，故直接写本文件即生效。
+#
+# 只对「本次暂存的 .py 文件」跑（不扫全仓），快且不碰未暂存改动。
+# 应急跳过：git commit --no-verify
+#
+# 设计取舍：
+# - ruff 用 homebrew 绝对路径（/opt/homebrew/bin/ruff），不依赖 backend venv。
+# - 不跑 pyright / 测试（在 CI：pyright 尚未跑绿、full-tests 耗时），本地只拦风格。
+# - check 用 --fix（自动修语义问题），format 用 --check（只报告不自动改，
+#   避免 hook 静默改动暂存区）。
+
+set -euo pipefail
+
+RUFF=/opt/homebrew/bin/ruff
+[[ -x "$RUFF" ]] || { echo "[pre-commit] ruff not found at $RUFF" >&2; exit 1; }
+
+# 本次暂存的 Python 文件（限定 backend 后端根）
+PYFILES=$(git diff --cached --name-only --diff-filter=ACM \
+  | grep -E '^backend/(apps|scripts|core)/.*\.py$|^backend/celery_app\.py$' || true)
+
+# 无 Python 改动 → 直接过
+if [[ -z "$PYFILES" ]]; then
+  exit 0
+fi
+
+# 1) ruff check（自动修 + 报告残留）
+echo "[pre-commit] ruff check --fix: $(echo "$PYFILES" | wc -l | tr -d ' ') files"
+if ! echo "$PYFILES" | xargs "$RUFF" check --fix; then
+  echo "[pre-commit] ✗ ruff check 残留错误（上列）。修复或 --no-verify 跳过。" >&2
+  exit 1
+fi
+
+# 2) ruff format --check（只报告，不自动改）
+UNFORMATTED=$(echo "$PYFILES" | xargs "$RUFF" format --check 2>&1 | grep 'Would reformat' || true)
+if [[ -n "$UNFORMATTED" ]]; then
+  echo "[pre-commit] ✗ 以下文件未 ruff format（请本地跑 ruff format 后重新暂存）：" >&2
+  echo "$UNFORMATTED" >&2
+  exit 1
+fi
+
+echo "[pre-commit] ✓ lint + format 通过"
+exit 0

@@ -232,7 +232,6 @@ def create_supervisor_with_mocks(mock_session_mgr=None):
 
 
 class TestE2EWorkflow(unittest.TestCase):
-
     def setUp(self):
         reset_all_singletons()
         MockMemoryManager._shared_l1.clear()
@@ -257,9 +256,7 @@ class TestE2EWorkflow(unittest.TestCase):
             result = asyncio.run(
                 sup.handle(
                     AgentMessage(
-                        payload={
-                            "text": "在网上找一个基于btc5分钟线的超短线交易策略"
-                        },
+                        payload={"text": "在网上找一个基于btc5分钟线的超短线交易策略"},
                         user_id="u1",
                     )
                 )
@@ -274,9 +271,7 @@ class TestE2EWorkflow(unittest.TestCase):
         router.register_fallback_rules(
             [(r"(研究|调研|找.*策略|搜索.*策略)", "researcher")]
         )
-        result = router.match_fallback(
-            "在网上找一个基于btc5分钟线的超短线交易策略"
-        )
+        result = router.match_fallback("在网上找一个基于btc5分钟线的超短线交易策略")
         self.assertEqual(result, "researcher")
 
     # ---- Step 2: Implement Strategy ---- #
@@ -400,9 +395,7 @@ class TestE2EWorkflow(unittest.TestCase):
             result1 = asyncio.run(
                 sup.handle(
                     AgentMessage(
-                        payload={
-                            "text": "在网上找一个基于btc5分钟线的超短线交易策略"
-                        },
+                        payload={"text": "在网上找一个基于btc5分钟线的超短线交易策略"},
                         user_id="u1",
                     )
                 )
@@ -432,12 +425,14 @@ class TestE2EWorkflow(unittest.TestCase):
         prev_resp = call_args.payload.get("previous_agent_response", "")
         prev_agent = call_args.payload.get("previous_agent_name", "")
         self.assertEqual(
-            prev_agent, "researcher",
-            f"Expected previous_agent_name='researcher', got '{prev_agent}'"
+            prev_agent,
+            "researcher",
+            f"Expected previous_agent_name='researcher', got '{prev_agent}'",
         )
         self.assertIn(
-            "RSI", prev_resp,
-            f"Research report not in cross-agent context: {prev_resp[:200]}"
+            "RSI",
+            prev_resp,
+            f"Research report not in cross-agent context: {prev_resp[:200]}",
         )
 
         # Step 3: Backtest — quant routes again (same agent, no cross-agent injection
