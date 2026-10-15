@@ -480,6 +480,52 @@ def test_payload_carries_the_metrics_key_name_used_by_the_runner():
 # --------------------------------------------------------------------------- #
 
 
+def test_duplicate_fold_indices_are_insufficient_even_when_the_count_matches():
+    """折身份必须**互不相同**：只数个数会漏掉「同一折被重复计入」。
+
+    把某一折重复凑够个数时，等权均值已经被那一折重复加权——它不再代表「每折各一段
+    互不相同的未来」，却会产出一个看起来很确定的 `decay_pct`。这条用例专门钉它：
+    个数对、身份错。
+    """
+    plan = plan_folds(GEOMETRY_START, GEOMETRY_END)
+    rows = [_fold_row(i, 1.4) for i in range(5)]
+    rows[4] = _fold_row(3, 1.4)  # 折 4 其实是折 3 的副本 → 身份重复、缺折 4
+
+    payload = aggregate_walk_forward(
+        candidate_id="c", is_sharpe=2.0, plan=plan, fold_rows=rows
+    )
+
+    assert payload["data_sufficient"] is False
+    assert payload["decay_pct"] is None
+    assert payload["insufficient_reason"] == "fold_identity_mismatch"
+
+
+def test_out_of_range_fold_index_is_insufficient():
+    """折序号越界（声称 5 折却给出 99 号折）同样判不了。"""
+    plan = plan_folds(GEOMETRY_START, GEOMETRY_END)
+    rows = [_fold_row(i, 1.4) for i in range(4)] + [_fold_row(99, 1.4)]
+
+    payload = aggregate_walk_forward(
+        candidate_id="c", is_sharpe=2.0, plan=plan, fold_rows=rows
+    )
+
+    assert payload["data_sufficient"] is False
+    assert payload["insufficient_reason"] == "fold_identity_mismatch"
+
+
+def test_permuted_but_complete_fold_indices_still_aggregate():
+    """身份齐全、只是顺序不同 → 照常聚合（顺序不是证据的一部分）。"""
+    plan = plan_folds(GEOMETRY_START, GEOMETRY_END)
+    rows = [_fold_row(i, 1.4) for i in (2, 0, 4, 1, 3)]
+
+    payload = aggregate_walk_forward(
+        candidate_id="c", is_sharpe=2.0, plan=plan, fold_rows=rows
+    )
+
+    assert payload["data_sufficient"] is True
+    assert payload["decay_pct"] == 30.0
+
+
 def test_fold_count_mismatch_is_insufficient():
     """少跑了折 → 不给结论。
 

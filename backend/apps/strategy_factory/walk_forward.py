@@ -358,6 +358,14 @@ def aggregate_walk_forward(
         # 谁都不知道的分母/样本集上算出来的。
         return _insufficient("fold_count_mismatch")
 
+    # 折身份必须**齐全且互不相同**：只数个数是不够的。同一折被重复计入（或某一折
+    # 丢了、另一折多算一次）时，个数照样等于 `plan.folds`，但等权均值已经不再代表
+    # 「每折各一段互不相同的未来」——它会被那一折重复加权。这种证据集缺陷必须在
+    # 这里拦住，否则会产出一个看起来很确定的 `decay_pct`。
+    indices = [entry.get("fold_index") for entry in folds_payload]
+    if len(set(indices)) != len(indices) or set(indices) != set(range(plan.folds)):
+        return _insufficient("fold_identity_mismatch")
+
     fold_sharpes: list[float] = []
     for row in folds_payload:
         sharpe = row.get("sharpe_ratio")
