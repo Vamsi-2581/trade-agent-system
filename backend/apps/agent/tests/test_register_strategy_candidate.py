@@ -23,6 +23,7 @@ from apps.agent.tools.base import BaseTool, ToolRegistry
 from apps.agent.tools.register_strategy_candidate import (
     RegistrationProblem,
     RegisterStrategyCandidateTool,
+    check_registry_key,
     inspect_strategy_file,
     resolve_strategy_path,
 )
@@ -588,6 +589,147 @@ async def test_duplicate_registry_key_is_rejected(tool, strategies_dir):
 
     candidate = await StrategyCandidate.objects.aget(id=result.data["candidate_id"])
     assert candidate.status == "registration_failed"
+
+
+def test_registry_key_check_fails_closed_when_the_key_holds_an_unrelated_class(
+    strategies_dir,
+):
+    """**静默成功钉子（独立复核发现）：空 declaring 必须判失败，不能跳过。**
+
+    键已注册、但键后面的实现类没声明这个候选名字时（登记的是 A、流水线将来解析到的是
+    B），若把空集当成「可以跳过检查」，就是一次 `status=registered`、`evidence` 空的
+    静默成功。直接打 `check_registry_key`：这是守卫本体的性质，不必绕道完整的工具链路。
+
+    形状按实测搭：`discover()` 把**字母序最后一个**策略类占住文件名键，所以文件名键
+    后面挂的是 ZetaBug（name="other_one"），而本次登记的实现类声明的是 "target"。
+    """
+    from apps.strategy_engine.registry import StrategyRegistry
+
+    class _KeyHolder:
+        name = "other_one"
+
+    _KeyHolder.__module__ = "twin_file"
+    _KeyHolder.__qualname__ = "ZetaBug"
+
+    class _Claimed:
+        name = "target"
+
+    _Claimed.__module__ = "alpha_file"
+    _Claimed.__qualname__ = "AlphaBug"
+
+    # 键 "target" 存在，但它后面的类没有声明 "target"（登记 A、解析到 B 的形状）。
+    StrategyRegistry._strategies["target"] = _KeyHolder
+    try:
+        failure = check_registry_key("target", StrategyRegistry, strategy_cls=_Claimed)
+    finally:
+        StrategyRegistry._strategies.pop("target", None)
+
+    assert failure is not None
+    assert failure.code is RegistrationProblem.REGISTRY_KEY_NOT_UNIQUE
+    assert "ZetaBug" in failure.reason
+
+
+def test_inherited_name_from_a_subclass_does_not_false_alarm(strategies_dir):
+    """**假警报钉子（独立复核发现）。
+
+    网格变体走「子类化父策略」这条路时，子类不重写 `name` → 继承父类的名字。此时注册表
+    里有**两个类**声明同一个名字、但注册键仍然唯一指向其中一个。判据按「键后面那个类
+    就是本次登记的实现类」判定，而不是按「声明这个名字的类的个数」判定——后者会把这条
+    合法登记误判成不唯一。"""
+    from apps.strategy_engine.base import BaseStrategy
+    from apps.strategy_engine.registry import StrategyRegistry
+
+    class ParentStrategy(BaseStrategy):
+        name = "parent"
+        description = (
+            "策略类型：趋势跟踪\n核心指标：EMA\n适用场景：趋势行情\n入场逻辑：上穿买入"
+        )
+
+    class FastVariant(ParentStrategy):  # 不重写 name → 继承 "parent"
+        pass
+
+    ParentStrategy.__module__ = "parent_file"
+    FastVariant.__module__ = "parent_fast_file"
+    StrategyRegistry._strategies["parent"] = ParentStrategy
+    StrategyRegistry._strategies["parent_fast"] = FastVariant
+    try:
+        failure = check_registry_key(
+            "parent", StrategyRegistry, strategy_cls=ParentStrategy
+        )
+    finally:
+        StrategyRegistry._strategies.pop("parent", None)
+        StrategyRegistry._strategies.pop("parent_fast", None)
+
+    assert failure is None, failure and failure.reason
+
+
+def test_a_rival_class_from_an_unrelated_file_is_rejected(strategies_dir):
+    """**抢键钉子（独立复核 Q1）。
+
+    两个**互不相关**的文件声明同一个 `name`（没有继承关系）→ 后导入的会静默覆盖先导入
+    的注册表项。此刻键可能恰好还指向本次登记的类，但下一次 `discover()` 的导入顺序一变，
+    键就会指到别的实现——这种「现在对、将来错」必须拦下。与上面的继承场景相对：那里
+    两个类是父子关系（键由文件名决定，互不抢），这里是平行竞争。"""
+    from apps.strategy_engine.base import BaseStrategy
+    from apps.strategy_engine.registry import StrategyRegistry
+
+    class FirstImpl(BaseStrategy):
+        name = "rival_name"
+        description = (
+            "策略类型：趋势跟踪\n核心指标：EMA\n适用场景：趋势行情\n入场逻辑：上穿买入"
+        )
+
+    class SecondImpl(BaseStrategy):
+        name = "rival_name"
+        description = (
+            "策略类型：动量\n核心指标：RSI\n适用场景：单边行情\n入场逻辑：突破买入"
+        )
+
+    FirstImpl.__module__ = "rival_one_file"
+    SecondImpl.__module__ = "rival_two_file"
+    # 键必须等于策略名（判据是 get_class(name)）；两个类各自挂自己的文件名键。
+    StrategyRegistry._strategies["rival_name"] = FirstImpl
+    StrategyRegistry._strategies["rival_two"] = SecondImpl
+    try:
+        failure = check_registry_key(
+            "rival_name", StrategyRegistry, strategy_cls=FirstImpl
+        )
+    finally:
+        StrategyRegistry._strategies.pop("rival_name", None)
+        StrategyRegistry._strategies.pop("rival_two", None)
+
+    assert failure is not None
+    assert failure.code is RegistrationProblem.REGISTRY_KEY_NOT_UNIQUE
+    assert "SecondImpl" in failure.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_file_outside_the_strategies_dir_is_rejected(tool, strategies_dir):
+    """**身份回归钉子（独立复核发现）。**
+
+    注册表只扫 `strategies/`，所以被校验的文件与将来会被解析到的文件必须是**同一份**。
+    文件落在别处时（哪怕 stem 撞巧同名）`code_path` 还会把落点记错——必须先拒收，且
+    不建行（登记尝试都没发生）。
+    """
+    from apps.strategy_factory.models import StrategyCandidate
+
+    stray = strategies_dir.parent / "elsewhere.py"
+    stray.write_text(
+        STRATEGY_SOURCE.format(name="stray_name", cls="StrayName"), encoding="utf-8"
+    )
+    result = await register(tool, stray, strategy_name="stray_name")
+
+    assert result.success is False
+    assert (
+        result.data["reason_code"] == RegistrationProblem.FILE_NOT_IN_STRATEGY_DIR.value
+    )
+    # 这次调用**是**一次登记尝试（参数齐全，只是文件放错了地方），所以照 D1/US26
+    # 留一条 registration_failed 行并带原因——而不是静默什么都没有。
+    candidate = await StrategyCandidate.objects.aget(id=result.data["candidate_id"])
+    assert candidate.status == "registration_failed"
+    assert candidate.strategy_id is None
+    assert candidate.evidence["registration"]["code"] == "file_not_in_strategy_dir"
 
 
 @pytest.mark.asyncio

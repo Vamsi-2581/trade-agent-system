@@ -62,6 +62,7 @@ class RegistrationProblem(str, Enum):
     """
 
     FILE_NOT_FOUND = "file_not_found"
+    FILE_NOT_IN_STRATEGY_DIR = "file_not_in_strategy_dir"
     SYNTAX_ERROR = "syntax_error"
     MODULE_LOAD_ERROR = "module_load_error"
     NO_STRATEGY_CLASS = "no_strategy_class"
@@ -75,6 +76,7 @@ class RegistrationProblem(str, Enum):
 #: 原因码 → 展示名（进通知文案与工具返回）。
 _PROBLEM_DISPLAY = {
     RegistrationProblem.FILE_NOT_FOUND: "策略文件不存在",
+    RegistrationProblem.FILE_NOT_IN_STRATEGY_DIR: "策略文件不在 strategies/ 目录",
     RegistrationProblem.SYNTAX_ERROR: "语法错",
     RegistrationProblem.MODULE_LOAD_ERROR: "模块加载失败",
     RegistrationProblem.NO_STRATEGY_CLASS: "文件里没有策略类",
@@ -129,6 +131,18 @@ def inspect_strategy_file(
     """
     from apps.strategy_engine.base import BaseStrategy
     from apps.strategy_engine.registry import StrategyRegistry
+
+    # 文件必须落在注册表扫描的那个目录里（D17）。这是**身份**问题，不是路径偏好：
+    # 登记工具校验的是「这份文件」，而流水线将来按注册键解析到的是**注册表里那份**
+    # ——后者只从 strategies/ 目录构建。落在别处时，哪怕 stem 撞巧同名，被校验的代码
+    # 与会被执行的代码也可能不是同一份，`code_path` 还会把落点记错。
+    if path.parent.name != STRATEGIES_DIRNAME:
+        return None, RegistrationFailure(
+            RegistrationProblem.FILE_NOT_IN_STRATEGY_DIR,
+            f"策略文件不在 {STRATEGIES_DIRNAME}/ 目录里：{path}",
+            f"把文件写到 ~/.tradelogx/{STRATEGIES_DIRNAME}/{strategy_name}.py 后"
+            "重新登记——注册表只扫那个目录，登记校验的必须是同一份文件。",
+        )
 
     if not path.exists():
         return None, RegistrationFailure(
@@ -270,13 +284,14 @@ def qualified_identity(cls: type) -> str:
 def classes_declaring(name: str, registry: Any) -> dict[str, list[str]]:
     """`{实现类身份: [注册键, ...]}`：注册表里所有**自己声明了 `name`** 的类。
 
-    这是「注册键唯一」的判据（D17）。为什么要按**类身份**去重而不是按**键**计数：
-    `discover()` 的既有缺陷是同一个类会拿到两个键（文件名 + 装饰器名），按键计数会把一个
-    正常的策略判成「不唯一」——那是个假警报，比漏报更糟，因为它会拦住正确的登记。
+    这是「注册键唯一」判据的**素材**，不是判据本身（见 `check_registry_key`）。为什么要按
+    **类身份**去重而不是按**键**计数：`discover()` 的既有缺陷是同一个类会拿到两个键
+    （文件名 + 装饰器名），按键计数会把一个正常的策略判成「不唯一」——那是个假警报，
+    比漏报更糟，因为它会拦住正确的登记。
 
-    反过来，两个文件都声明了同一个 `name` 时，后导入的那个会**静默覆盖**先导入的注册表项，
-    但两个类都还在（各自还挂着自己的文件名键）——按类身份去重就能看见「两个不同的实现类都
-    叫这个名字」，这正是要拦下的那种不唯一。
+    注意它**数不出撞车**：网格变体走「子类化父策略」这条路时，子类不重写 `name` → 两个类
+    都声明同一个名字，但注册键仍然唯一指向其中一个，那是**合法**登记。撞车与否的判据在
+    `check_registry_key`：**键后面挂的那个类**是不是本次登记的实现类。
     """
     declaring: dict[str, list[str]] = {}
     for key in registry.list_registered():
@@ -292,12 +307,27 @@ def classes_declaring(name: str, registry: Any) -> dict[str, list[str]]:
 def check_registry_key(
     name: str, registry: Any, *, strategy_cls: type
 ) -> RegistrationFailure | None:
-    """校验注册键 `name` 唯一且指向 `strategy_cls`（D17）。通过返回 `None`。
+    """校验注册键 `name` 唯一且**就是** `strategy_cls`（D17）。通过返回 `None`。
+
+    判据只有一条，其余都是它的推理：**`registry.get_class(name)` 必须就是本次登记的
+    实现类**（比语义身份，不比对象身份）。这句话同时拦下三种坏形状——
+
+    1. 键指向另一个类（撞车 / 别的文件占了这个名字）→ 本次登记的代码永远不会被解析到；
+    2. 键后面的类没有声明这个名字（`classes_declaring` 为空）→ 同上，且是对一次静默
+       覆盖的事后形状；
+    3. 多个类都声明这个名字 → 说明有静默覆盖正在发生（哪怕键恰好指向本次登记的类，
+       下一次 import 顺序变了就会指到别的类）。
+
+    而网格变体的**子类继承**不在此列：子类不重写 `name` 时注册表里有两个类声明同一个
+    名字，但键仍然唯一指向其中一个——键能解析到本次登记的类、且没有别的类在跟它抢这个
+    键，就是合法登记。所以「声明这个名字的类的个数」不能当判据，那会把这条合法路径误判
+    成不唯一。
 
     调用前注册表必须已经是**当下磁盘**的状态（调用方负责先 `discover()`），否则刚写出来
     的策略会报「解析不到」——那是一次假失败。
     """
-    if name not in registry.list_registered():
+    registered = registry.list_registered()
+    if name not in registered:
         return RegistrationFailure(
             RegistrationProblem.REGISTRY_KEY_UNRESOLVED,
             f"注册表里解析不到注册键 {name!r}",
@@ -306,29 +336,54 @@ def check_registry_key(
             "这三样缺一样，discover() 都会静默跳过它。",
         )
 
-    declaring = classes_declaring(name, registry)
-    if len(declaring) > 1:
-        detail = "；".join(
-            f"{identity} 挂在这些键上：{keys}" for identity, keys in declaring.items()
-        )
+    registered_cls = registry.get_class(name)
+    if qualified_identity(registered_cls) != qualified_identity(strategy_cls):
         return RegistrationFailure(
             RegistrationProblem.REGISTRY_KEY_NOT_UNIQUE,
-            f"注册键 {name!r} 不唯一：有 {len(declaring)} 个不同的实现类都声明了这个名字。"
-            f"{detail}",
-            "给每个策略一个独有的 name（后导入的会静默覆盖先导入的，所以这不报错、只是"
-            "选错了实现）。改名后重新登记。",
+            f"注册键 {name!r} 指向的不是本次登记的实现类：键后面挂的是 "
+            f"{qualified_identity(registered_cls)}，本次登记的是 "
+            f"{qualified_identity(strategy_cls)}",
+            "让文件名、类属性 name 与 @register_strategy(name=...) 三者一致，"
+            "且一个文件只放一个策略类；然后重新登记。",
         )
 
-    # 唯一，且必须就是本次登记的这个实现类（比语义身份，不比对象身份）。
-    if declaring and qualified_identity(strategy_cls) not in declaring:
-        occupied = next(iter(declaring))
+    # 键指向的类对了，还要确认「没有别的类在抢同一个键」。抢键的形状：不止一个类
+    # 声明这个名字，且其中至少一个**不是**本次登记类的子类（网格变体的继承是合法的，
+    # 那些类抢不到键——键由文件名决定，父类文件占着父类键）。
+    declaring = classes_declaring(name, registry)
+    rivals = [
+        identity
+        for identity in declaring
+        if identity != qualified_identity(strategy_cls)
+        and not _is_descendant_of(registry, identity, strategy_cls)
+    ]
+    if rivals:
         return RegistrationFailure(
             RegistrationProblem.REGISTRY_KEY_NOT_UNIQUE,
-            f"注册键 {name!r} 指向的是另一个实现类 {occupied}，不是本次登记的 "
-            f"{qualified_identity(strategy_cls)}",
-            "换一个没人用过的策略名，或先清理撞车的那个策略文件。",
+            f"注册键 {name!r} 有别的实现类在抢：{rivals} 也声明了这个名字，"
+            "后导入的会静默覆盖先导入的——下一次 discover() 之后这个键就可能不再指向"
+            "本次登记的实现类。",
+            "给每个策略一个独有的 name（子类化已有策略做网格变体时，在子类里显式写"
+            "自己的 name）。改名后重新登记。",
         )
     return None
+
+
+def _is_descendant_of(registry: Any, identity: str, ancestor: type) -> bool:
+    """`identity` 指向的类是不是 `ancestor` 的子类（含自身）。
+
+    注册键 → 类，只能拿身份串反查：遍历注册表找到语义身份相同的那个类对象。
+    找不到（理论上不会发生，因为身份串就是从注册表里的类算出来的）按「不是后代」
+    处理——宁可多报一次撞车，也不放过一次静默覆盖。
+    """
+    for key in registry.list_registered():
+        try:
+            cls = registry.get_class(key)
+        except ValueError:
+            continue
+        if qualified_identity(cls) == identity:
+            return issubclass(cls, ancestor)
+    return False
 
 
 # ---------------------------------------------------------------------- #
