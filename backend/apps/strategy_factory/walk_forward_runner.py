@@ -36,6 +36,19 @@
 **交接给 #22**：L1 的样本内回测应跑 `[start_date, oos_start)`，即
 `plan_folds(...).in_sample_end` 那一天——参照窗口不含样本外那一段，否则衰减会被系统性
 低估（用样本外自己的数据去解释样本外）。
+
+## 一处刻意留下的边界（#22 落编排时要知道）
+
+折行由**折执行器**落库（`StrategyRunner.run_backtest` → `save_backtest_result`），
+`candidate_id` 由本模块在它返回之后补写（`tag_fold_result`）。所以若进程恰好在
+「执行器已落库」与「补写分组键」之间挂掉，会留下一行**没有 `candidate_id`** 的孤儿
+折行——它不会被 `clear_fold_results` 清掉（清理按 `candidate_id` 匹配）。
+
+没有为此加事务：执行器内部跨 async 边界落库（`sync_to_async` 线程），把它包进外层
+事务既不安全也不省事；而代价是**有界且可见**的——孤儿行没有任何分折结论（`metrics`
+里没有 `walk_forward`），不会被误读成证据，也不会进任何判定。真要收拾，`candidate_id`
+为空的回测行本来就是「不属于任何候选」的既有语义（D22 不回填历史，所以历史行也长
+这样），沿用既有的清理口径即可。
 """
 
 from __future__ import annotations
