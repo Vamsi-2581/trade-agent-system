@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     "apps.datasource",
     "apps.signal_monitor",
     "apps.strategy_engine",
+    "apps.strategy_factory",
     "apps.regime",
     "apps.logging_app",
     # Celery beat
