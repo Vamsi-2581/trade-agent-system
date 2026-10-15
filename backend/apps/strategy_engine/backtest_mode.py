@@ -752,6 +752,11 @@ async def save_backtest_result(
     """
     将回测结果存入数据库（新建或更新已有记录）。
 
+    **审核字段契约（spec D12）**：本函数不改动 `review_status` / `reviewed_at` /
+    `review_notes`。新建落模型默认 `pending`；更新保持库中原值，让人工审核结论
+    在重跑回测后依然留存。审核结论只由 `POST /api/backtest/results/<pk>/review/`
+    或后续的漏斗判定写入。
+
     Args:
         existing_result_id: 已有 BacktestResult 的 ID（提前创建的空记录）
 
@@ -792,8 +797,9 @@ async def save_backtest_result(
             result.indicator_data = (
                 _compute_indicators(ohlcv_data) if ohlcv_data else {}
             )
-            result.review_status = "approved"
-            result.reviewed_at = timezone.now()
+            # 审核字段不在此处改（spec D12）：回测保存路径不承担「通过」的判定，
+            # 否则 result_review 要求的 pending 前置永远不成立、人工审核闸门空转。
+            # 更新路径尤其不能回写 pending——那会把一次已做完的人工审核抹掉。
             result.save()
         else:
             # 新建记录
@@ -821,8 +827,8 @@ async def save_backtest_result(
                 ],
                 ohlcv_data=ohlcv_data if ohlcv_data else [],
                 indicator_data=indicator_data,
-                review_status="approved",
-                reviewed_at=timezone.now(),
+                # review_status 走模型默认值 pending、reviewed_at 留空（spec D12）：
+                # 「自动通过」的职责在漏斗判定（见 P2/T4），不在回测保存路径。
             )
 
         # 保存交易明细：新建时直接创建；更新时先清理旧交易再重建
