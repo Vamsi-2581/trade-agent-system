@@ -518,6 +518,37 @@ def test_clear_fold_results_with_no_candidate_id_is_a_noop():
     assert BacktestResult.objects.count() == 2
 
 
+def test_clear_fold_results_counts_fold_rows_not_cascaded_trades():
+    """返回值是**折行**条数，不是 `QuerySet.delete()` 那个含级联的计数。
+
+    真实的一折有几十笔 `BacktestTrade`（`on_delete=CASCADE`），所以直接返回
+    `delete()` 的结果会把「删了 3 折」报成 18——那个数字要进日志、也要被幂等断言读，
+    必须是折数。这条用例刻意给折行挂上成交，才能判别它（没有成交时两者恰好相等，
+    判别不出来）。
+    """
+    from apps.backtest.models import BacktestTrade
+
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    for index in range(3):
+        row = _fold_result_row(strategy, candidate_id, index, 1.4)
+        for _ in range(5):
+            BacktestTrade.objects.create(
+                backtest=row,
+                entry_time=datetime(2026, 2, 18, tzinfo=timezone.utc),
+                side="long",
+                entry_price=Decimal("100"),
+                quantity=Decimal("1"),
+            )
+    assert BacktestTrade.objects.count() == 15
+
+    removed = clear_fold_results(candidate_id)
+
+    assert removed == 3, "返回折数，不是 3 折 + 15 笔成交 = 18"
+    assert BacktestResult.objects.filter(candidate_id=candidate_id).count() == 0
+    assert BacktestTrade.objects.count() == 0, "成交随折行级联删掉"
+
+
 def test_clear_fold_results_is_scoped_to_one_candidate():
     strategy = _strategy()
     mine, theirs = uuid.uuid4(), uuid.uuid4()

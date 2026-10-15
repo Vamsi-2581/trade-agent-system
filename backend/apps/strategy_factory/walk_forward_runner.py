@@ -109,7 +109,7 @@ def tag_fold_result(
 
 
 def clear_fold_results(candidate_id: Any) -> int:
-    """删掉该候选**已存在的样本外折行**，返回删除条数（D18 的幂等键落点）。
+    """删掉该候选**已存在的样本外折行**，返回删掉的**折行**条数（D18 的幂等键落点）。
 
     判据只有一条：`candidate_id` 非空即为一折。**不解析 `metrics`** —— 那是脆的：
     一行若因任何原因没写上 `window_role` 标记，按 metrics 判就会变成永远清不掉的
@@ -118,13 +118,19 @@ def clear_fold_results(candidate_id: Any) -> int:
     这条判据成立的前提是**候选主行不带 `candidate_id`**（它是 L1 的产物，由
     `in_sample_result_id` 显式指认，不是「一折」）。主行因此天然免疫，而不是靠一个
     可能漏写的标记来保护。
+
+    **返回值刻意不是 `QuerySet.delete()` 的返回**：那个数是「本次删掉的全部对象」，
+    含级联删除的 `BacktestTrade` 行（一行回测有几十笔成交，于是「删了 5 折」会报成
+    几百）。返回值是给人看的日志与幂等断言用的，必须就是折数；所以要显式数一遍再删。
     """
     from apps.backtest.models import BacktestResult
 
     if not candidate_id:
         return 0
-    deleted, _ = BacktestResult.objects.filter(candidate_id=candidate_id).delete()
-    return deleted
+    queryset = BacktestResult.objects.filter(candidate_id=candidate_id)
+    fold_count = queryset.count()
+    queryset.delete()
+    return fold_count
 
 
 def _default_fold_executor(
