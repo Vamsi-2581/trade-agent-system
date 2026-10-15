@@ -362,7 +362,15 @@ def run_walk_forward(
             tag_fold_result(
                 fold_row["result_id"],
                 candidate_id=candidate_id,
-                fold_payload={**fold_row, "split_mode": plan.split_mode},
+                # D4 逐字要求折行载荷含 `candidate_id` / `fold_index` / `window_role`
+                # 三个键。`candidate_id` 在列上已有一份，这里再写进 `metrics` 是刻意的
+                # 冗余：载荷要能**独立**回答「这一行属于谁」，不必回查列（导出/审计时
+                # 列未必被带上）。
+                fold_payload={
+                    **fold_row,
+                    "candidate_id": str(candidate_id) if candidate_id else None,
+                    "split_mode": plan.split_mode,
+                },
             )
         fold_rows.append(fold_row)
 

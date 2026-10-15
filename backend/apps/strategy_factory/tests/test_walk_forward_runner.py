@@ -210,12 +210,21 @@ def test_each_fold_gets_its_own_row_with_a_shared_candidate_id():
 
     fold_rows = BacktestResult.objects.filter(candidate_id=candidate_id)
     assert fold_rows.count() == 5, "每个 fold 一行 BacktestResult（D4）"
+    seen: list[int] = []
     for row in fold_rows:
         assert row.candidate_id == candidate_id, "candidate_id 是分组键，折间必须一致"
         entry = (row.metrics or {})[WALK_FORWARD_METRICS_KEY]
-        assert entry["fold_index"] in range(5)
+        # D4 逐字点名的三个键必须在**每一折**的载荷里。少 `candidate_id` 时载荷就
+        # 无法独立回答「这一行属于谁」，只能回查列——而列未必被带上（导出/审计）。
+        assert entry["candidate_id"] == str(candidate_id)
         assert entry["window_role"] == WalkForwardWindowRole.OOS.value
+        assert entry["fold_index"] in range(5)
+        # 折身份与边界（D4 第三项：序号、窗口角色、窗口边界）
         assert entry["split_mode"] == "rolling"
+        assert entry["start_date"] and entry["end_date"]
+        assert entry["in_sample_start"] and entry["in_sample_end"]
+        seen.append(entry["fold_index"])
+    assert sorted(seen) == [0, 1, 2, 3, 4], "五折的 fold_index 齐全且不重复"
     assert payload["fold_count"] == 5
 
 
