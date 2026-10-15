@@ -406,11 +406,26 @@ def add_cell(
 
 
 class _Fixture(TestCase):
-    """三个策略：两个有实现类（原型不同）、一个没有（未归类的来源）。"""
+    """三个策略：两个有实现类（原型不同）、一个没有（未归类的来源）。
+
+    取样本这一层读的是**全表**（`pool_rebuild._result_rows()` 不带任何过滤——生产里
+    它就该读全部回测结果），所以「候选总数」是这个库里的全局事实。这意味着只要库里
+    **事先**存在 `BacktestResult` 行，用例断言的绝对条数就会被抬高一截：跑在
+    `db_dev.sqlite3` 上时（ticket 记录的复跑命令就是 `core.settings.dev`）库里有 40
+    条真实回测结果，即使本用例一条都没造，`candidates` 也不是 0。
+
+    这不是被测代码的缺陷，是夹具的账：这一层要的是「只有我造的样本」这个环境。所以
+    每个用例动手前先把既存结果清空。`TestCase` 的事务会把这一步连同用例一起回滚，
+    真实库毫发无损。
+    """
 
     @classmethod
     def setUpTestData(cls):
+        from apps.backtest.models import BacktestResult
         from apps.trading.models import Strategy
+
+        # 见类 docstring：取样本读全表，先清干净再断言绝对条数。
+        BacktestResult.objects.all().delete()
 
         cls.alpha = Strategy.objects.create(
             name="AlphaStem", code_path="/t/alpha.py", git_commit_hash="aaaaaaa"

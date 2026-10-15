@@ -517,7 +517,14 @@ class _StubbedConnectionReset:
 class TestMaterialisation(TestCase):
     @classmethod
     def setUpTestData(cls):
+        from apps.backtest.models import BacktestResult
         from apps.trading.models import Strategy
+
+        # 重算命令走的是取样本那一层，读全表（`pool_rebuild._result_rows()` 不带过滤
+        # ——生产里它就该读全部回测结果），所以「切片几条」是全库的事实，不只是本用例
+        # 造的账。跑在 `db_dev.sqlite3` 上时库里有真实回测结果，先清干净；
+        # `TestCase` 的事务会连这一步一起回滚，真实库毫发无损。
+        BacktestResult.objects.all().delete()
 
         cls.strategy = Strategy.objects.create(
             name="SliceTest", code_path="/test", git_commit_hash="abc123"

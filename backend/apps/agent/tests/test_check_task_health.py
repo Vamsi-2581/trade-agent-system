@@ -1,6 +1,15 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+from apps.agent import tasks as task_module
+
+#: 判僵尸的阈值是**实现里的常量**，测试不重复写死一个「够老了」的秒数。
+#: 原先这里写死 400 秒，而实现把 `_ZOMBIE_TIMEOUT` 从 300 提到 3600 之后没人改测试，
+#: 于是「超时该判僵尸」的三条用例静默变成永假。从常量派生，实现再调阈值也不会漂移。
+_ZOMBIE_TIMEOUT = task_module._ZOMBIE_TIMEOUT
+_STALE_AGE = _ZOMBIE_TIMEOUT + 100  # 明确越过阈值，而不是刚好压线
+_FRESH_AGE = 10  # 远新于阈值
+
 
 def _make_mock_redis(keys_data: dict):
     """Build a MagicMock that acts like a sync redis client for scan_iter + hgetall."""
@@ -13,13 +22,17 @@ def _make_mock_redis(keys_data: dict):
     return mock_redis
 
 
+def _ago(seconds: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+
 class TestCheckTaskHealthZombie:
     """Tests for check_task_health zombie detection with last_alive merge."""
 
     def test_detects_zombie_by_updated_at(self):
         from apps.agent.tasks import check_task_health
 
-        stale = (datetime.now(timezone.utc) - timedelta(seconds=400)).isoformat()
+        stale = _ago(_STALE_AGE)
         mock_data = {
             "status": "running",
             "task_id": "task-z1",
@@ -46,7 +59,7 @@ class TestCheckTaskHealthZombie:
     def test_ignores_fresh_task(self):
         from apps.agent.tasks import check_task_health
 
-        recent = datetime.now(timezone.utc).isoformat()
+        recent = _ago(_FRESH_AGE)
         mock_data = {
             "status": "running",
             "task_id": "task-z2",
@@ -70,10 +83,8 @@ class TestCheckTaskHealthZombie:
     def test_last_alive_prevents_false_positive(self):
         from apps.agent.tasks import check_task_health
 
-        stale_updated = (
-            datetime.now(timezone.utc) - timedelta(seconds=400)
-        ).isoformat()
-        recent_alive = datetime.now(timezone.utc).isoformat()
+        stale_updated = _ago(_STALE_AGE)
+        recent_alive = _ago(_FRESH_AGE)
         mock_data = {
             "status": "running",
             "task_id": "task-z3",
@@ -98,7 +109,7 @@ class TestCheckTaskHealthZombie:
     def test_max_retries_notifies_user(self):
         from apps.agent.tasks import check_task_health
 
-        stale = (datetime.now(timezone.utc) - timedelta(seconds=400)).isoformat()
+        stale = _ago(_STALE_AGE)
         mock_data = {
             "status": "running",
             "task_id": "task-z4",
@@ -122,7 +133,7 @@ class TestCheckTaskHealthZombie:
     def test_missing_original_task_notifies(self):
         from apps.agent.tasks import check_task_health
 
-        stale = (datetime.now(timezone.utc) - timedelta(seconds=400)).isoformat()
+        stale = _ago(_STALE_AGE)
         mock_data = {
             "status": "running",
             "task_id": "task-z5",

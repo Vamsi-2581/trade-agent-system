@@ -1,9 +1,11 @@
 import json
 import logging
+import uuid
 from unittest.mock import patch, MagicMock
 
 from django.test import TestCase, Client
 from django.urls import reverse
+from rest_framework.settings import api_settings
 
 from apps.logging_app.models import SystemLog
 from apps.logging_app.handler import SystemLogHandler
@@ -100,53 +102,103 @@ class SystemLogHandlerTest(TestCase):
         self.assertEqual(log.level, "ERROR")
 
 
-class LogAPITest(TestCase):
+class _UnthrottledAPITestCase(TestCase):
+    """TestCase with DRF rate throttling disabled.
+
+    `/api/logs/` is AllowAny, so DRF's `AnonRateThrottle` ("anon": "20/min")
+    applies to the test client like to any other anonymous caller. Its cache key
+    is `throttle_anon_<REMOTE_ADDR>` and the counter lives in the *shared*
+    process cache (dev/test settings use RedisCache), so the counter survives
+    across TestCase instances and across test classes — after 20 requests in a
+    minute every request below answers HTTP 429 instead of exercising the view.
+
+    Disabling the default throttle classes for this module's API tests keeps the
+    endpoint under test reachable regardless of how often the module (or the
+    whole suite) runs; it does not touch what the tests assert.
+    """
+
     def setUp(self):
+        super().setUp()
+        # Client sends REMOTE_ADDR="127.0.0.1"; every test below would otherwise
+        # share one `throttle_anon_127.0.0.1` bucket.
+        self._throttle_settings = patch.object(
+            api_settings,
+            "DEFAULT_THROTTLE_CLASSES",
+            [],
+            create=True,
+        )
+        self._throttle_settings.start()
+        self.addCleanup(self._throttle_settings.stop)
+
+
+class LogAPITest(_UnthrottledAPITestCase):
+    def setUp(self):
+        super().setUp()
         self.client = Client()
-        SystemLog.objects.create(level="INFO", module="agent", message="Agent started")
+        # Scope assertions to this test's own rows: SystemLog may already hold
+        # rows written by other tests in the same run.
+        self.tag = f"logapi-{uuid.uuid4().hex}"
         SystemLog.objects.create(
-            level="ERROR", module="trading", message="Order failed"
+            level="INFO", module="agent", message=f"Agent started {self.tag}"
         )
         SystemLog.objects.create(
-            level="WARNING", module="riskguard", message="High leverage detected"
+            level="ERROR", module="trading", message=f"Order failed {self.tag}"
+        )
+        SystemLog.objects.create(
+            level="WARNING",
+            module="riskguard",
+            message=f"High leverage detected {self.tag}",
         )
         SystemLog.objects.create(
             level="INFO",
             module="agent",
-            message="Skill registered",
+            message=f"Skill registered {self.tag}",
             trace_id="trace-001",
         )
+
+    def _rows(self, query=""):
+        """GET /api/logs/ and return the paginated `results` payload."""
+        resp = self.client.get(reverse("log-list") + query)
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()["results"]
+
+    def _own_rows(self, query=""):
+        """只留本用例自己写的行（消息里带本用例的 `self.tag`）。
+
+        `/api/logs/` 读的是**全表**，不带任何属于「本次测试」的过滤——这正是接口该
+        有的行为。所以断言绝对条数时必须自己收窄到本用例造的那几行，否则库里既存的
+        日志（dev 库上真实存在）会把 `count` 抬到几十，而失败看起来像接口坏了。
+        """
+        return [r for r in self._rows(query) if self.tag in r["message"]]
 
     def test_list_all_logs(self):
         resp = self.client.get(reverse("log-list"))
         self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertEqual(len(data), 4)
+        body = resp.json()
+        # 分页封套的形状（键集）与「本用例这 4 行都在」都要钉住。
+        self.assertEqual(
+            set(body), {"count", "page", "page_size", "has_next", "results"}
+        )
+        self.assertEqual(len(self._own_rows()), 4)
 
     def test_filter_by_level(self):
-        resp = self.client.get(reverse("log-list") + "?level=ERROR")
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertEqual(len(data), 1)
-        self.assertEqual(data[0]["level"], "ERROR")
+        rows = self._own_rows("?level=ERROR")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["level"], "ERROR")
 
     def test_filter_by_module(self):
-        resp = self.client.get(reverse("log-list") + "?module=agent")
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertEqual(len(data), 2)
+        rows = self._own_rows("?module=agent")
+        self.assertEqual(len(rows), 2)
 
     def test_filter_by_search(self):
-        resp = self.client.get(reverse("log-list") + "?search=failed")
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertEqual(len(data), 1)
+        rows = self._own_rows("?search=failed")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["level"], "ERROR")
 
     def test_filter_by_trace_id(self):
-        resp = self.client.get(reverse("log-list") + "?trace_id=trace-001")
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertEqual(len(data), 1)
+        rows = self._own_rows("?trace_id=trace-001")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["trace_id"], "trace-001")
 
     def test_test_log_endpoint(self):
         # Patch the logger to use DBOnlyLogHandler (synchronous)

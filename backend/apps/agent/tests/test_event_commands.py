@@ -44,6 +44,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -65,6 +66,7 @@ from apps.agent.supervisor import (
     SupervisorAgent,
     _split_command,
 )
+from apps.common.time_utils import business_tz_name
 from apps.regime import events
 from apps.regime.events import EventInputError
 from apps.regime.models import (
@@ -80,9 +82,25 @@ from apps.regime.models import (
     MajorEventChange,
 )
 
-#: 事件本身的名义时刻：北京时间 2026-09-25 20:30 == UTC 2026-09-25 12:30。
-EVENT_TEXT = "2026-09-25 20:30"
-EVENT_UTC = datetime(2026, 9, 25, 12, 30, tzinfo=timezone.utc)
+#: 事件本身的名义时刻：北京时间 ``EVENT_BJ``（== UTC ``EVENT_UTC``）。
+#
+# 这个时刻必须**相对 now 取**，不能写死：`_list` 只列
+# `event_time <= now + DEFAULT_HORIZON_DAYS 且 resume_at >= now` 的事件，写死的日子
+# 一旦过去，`/event list` 就永远回「0 条」，于是「列表结构与编号回显」那几条用例
+# 会因为**跟被测行为无关**的原因失败（2026-10-15 实测：写死 2026-09-25，而当天已是
+# 2026-10-15，事件整体落在窗口之外）。取「业务时区的今天 + 3 天 20:30」，既保证
+# 落在 7 天窗口内，又保留「北京时间 20:30」这个被测的时区语义。
+_BJ_TZ = ZoneInfo(business_tz_name())
+EVENT_BJ = (datetime.now(_BJ_TZ) + timedelta(days=3)).replace(
+    hour=20, minute=30, second=0, microsecond=0
+)
+EVENT_TEXT = EVENT_BJ.strftime("%Y-%m-%d %H:%M")
+EVENT_UTC = EVENT_BJ.astimezone(timezone.utc)
+
+#: 词法用例（`TestTheLexer`）断的是「把某个字面量按北京时间解释」这件事本身，
+#: 与 now 无关，所以那里继续用固定字面量 + 固定期望值。
+LITERAL_TIME_TEXT = "2026-09-25 20:30"
+LITERAL_TIME_UTC = datetime(2026, 9, 25, 12, 30, tzinfo=timezone.utc)
 
 SENDER = "tg:42"
 
@@ -192,10 +210,10 @@ class TestTheLexer:
             _parse_scope(EventScope.SYMBOLS.display)
 
     def test_a_time_may_span_two_tokens(self):
-        assert _take_time(["2026-09-25", "20:30", "FOMC"], 0) == (EVENT_UTC, 2)
+        assert _take_time(["2026-09-25", "20:30", "FOMC"], 0) == (LITERAL_TIME_UTC, 2)
 
     def test_a_time_may_be_one_token(self):
-        assert _take_time(["2026-09-25 20:30", "FOMC"], 0) == (EVENT_UTC, 1)
+        assert _take_time(["2026-09-25 20:30", "FOMC"], 0) == (LITERAL_TIME_UTC, 1)
 
     def test_the_clock_is_beijing_not_utc(self):
         # 同一个字面量按 UTC 读会得到 20:30Z；这里必须是 12:30Z。
@@ -480,7 +498,10 @@ class TestTheCommandsAgainstARealDatabase:
 
     def test_rescheduling_moves_the_whole_window(self):
         event = _ingest()
-        result = _run(_call(f"/event reschedule {event.id} 2026-09-26 20:30"))
+        # 改期到的时刻同样要相对 EVENT_BJ 取：写死的日子一旦过去，改期结果会落在
+        # 过去，而这条用例断的是「窗口整体跟着移动」，不是「某个固定日期」。
+        next_day = (EVENT_BJ + timedelta(days=1)).strftime("%Y-%m-%d %H:%M")
+        result = _run(_call(f"/event reschedule {event.id} {next_day}"))
         assert result.success, result.error
         event.refresh_from_db()
         assert event.event_time == EVENT_UTC + timedelta(days=1)

@@ -10,6 +10,7 @@ limit 是 int 而非字符串。
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from apps.agent.tools import market_data
 from apps.agent.tools.market_data import FetchOHLCVTool
 
 # 两条合法的 OHLCV 行：[timestamp(ms), open, high, low, close, volume]
@@ -17,6 +18,20 @@ _FAKE_OHLCV = [
     [1700000000000, 100.0, 102.0, 99.0, 101.0, 500.0],
     [1700003600000, 101.0, 103.0, 100.0, 102.0, 600.0],
 ]
+
+
+@pytest.fixture(autouse=True)
+def _tmp_ohlcv_dir(tmp_path, monkeypatch):
+    """把 ``market_data._TMP_DIR`` 指到 pytest 的临时目录。
+
+    该模块级常量原本写死 ``Path.home()/".tradelogx"/"tmp"``，真实工作区根目录不是
+    测试能写的地方（容器/CI 里直接 ``Operation not permitted``），而且会把测试产物
+    留在用户 home 下。本用例测的是 limit 类型归一，与落盘位置无关，所以只把目录换掉，
+    真实链路（含写文件）保持不动。
+    """
+    target = tmp_path / "tradelogx_tmp"
+    monkeypatch.setattr(market_data, "_TMP_DIR", target)
+    return target
 
 
 @pytest.mark.asyncio

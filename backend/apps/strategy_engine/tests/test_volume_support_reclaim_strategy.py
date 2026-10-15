@@ -3,8 +3,9 @@ Regression: volume_support_reclaim_strategy must not blow up with
 'StrategyContext' object has no attribute 'calculate_quantity' on entry.
 
 Failure history: backtest 7bd70c1e-... failed in <8s on
-`self.ctx.calculate_quantity(risk_pct=...)`. The repo-loaded strategy module
-mirrors /Users/gongzuoyonghu/.tradelogx/strategies/volume_support_reclaim_strategy.py.
+`self.ctx.calculate_quantity(risk_pct=...)`. 被测的是部署位策略文件
+`~/.tradelogx/strategies/volume_support_reclaim_strategy.py`，路径见
+`_strategy_path()`。
 """
 
 import asyncio
@@ -12,6 +13,7 @@ import importlib.util
 import os
 import sys
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -19,7 +21,39 @@ from apps.strategy_engine.backtest_mode import BacktestEngine
 from apps.strategy_engine.base import StrategyContext
 
 
-STRATEGY_PATH = "/root/.tradelogx/strategies/volume_support_reclaim_strategy.py"
+STRATEGY_FILENAME = "volume_support_reclaim_strategy.py"
+
+
+def _strategy_path() -> str:
+    """定位被测策略文件。
+
+    策略的**部署位**是 `~/.tradelogx/strategies/`（见 `apps/skill/loader.py`
+    的 `TRADELOGX_ROOT`；容器里 HOME=/root，开发机上是用户家目录）。
+    此前的常量写死了 `/root/...`，于是本地开发机上 `_load_strategy()` 静默跳过、
+    而 `test_strategy_module_uses_no_missing_context_api` 直接
+    `open()` 一个不存在的路径抛 FileNotFoundError。
+
+    这里按与 `test_box_breakout_threshold.py::_strategy_path` 相同的顺序解析：
+    显式环境变量覆盖 → 部署位（/root 与当前用户家目录）→ 仓库镜像
+    `backend/strategies/`。
+    """
+    override = os.environ.get("VOLUME_RECLAIM_STRATEGY_PATH")
+    if override:
+        return override
+
+    repo_mirror = Path(__file__).resolve().parents[3] / "strategies" / STRATEGY_FILENAME
+    candidates = [
+        Path("/root/.tradelogx/strategies") / STRATEGY_FILENAME,
+        Path.home() / ".tradelogx" / "strategies" / STRATEGY_FILENAME,
+        repo_mirror,
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return str(candidates[1])
+
+
+STRATEGY_PATH = _strategy_path()
 
 
 def _load_strategy():

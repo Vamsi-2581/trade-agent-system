@@ -20,6 +20,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from apps.trading.adapters.base import (
@@ -56,6 +58,42 @@ def _order(**overrides):
     }
     base.update(overrides)
     return SimpleNamespace(**base)
+
+
+def _drop_cached_connections():
+    """丢弃本线程 thread-local 的 DB 连接（调用方决定在哪个线程执行）。
+
+    ``check_order_status`` 的收尾会调 ``close_old_connections()``，而
+    ``close_if_unusable_or_obsolete()`` 只要本线程 ``connections`` 里有非 None
+    连接就会去 ``ensure_connection()``。本文件刻意全部 mock ORM，不该碰库；但
+    若此前有测试用过 ORM，连接会残留在该线程的 thread-local 上 → 撞上
+    pytest-django 的 ``django_db`` blocker，抛出
+    "Database access not allowed"。
+
+    不能用 ``connection.close()``：settings/test.py 的 sqlite 测试库是
+    ``mode=memory``（Django 测试运行器把 NAME 换成 memorydb），sqlite backend
+    对内存库的 ``close()`` 是 no-op（防止销毁库），关不掉；因此直接把
+    ``connection`` 引用置空，让下次使用重新建连。
+    """
+    from django.db import connections
+
+    for alias in connections:
+        conn = connections[alias]
+        if conn.connection is not None:
+            conn.connection = None
+        conn.health_check_done = False
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cached_connections():
+    """用例前清掉主线程与线程池线程里的残留连接。
+
+    Celery 任务体（``check_order_status``）跑在主线程，asgiref 线程池另有副本，
+    两边都要清。
+    """
+    _drop_cached_connections()  # 主线程
+    asyncio.run(sync_to_async(_drop_cached_connections, thread_sensitive=True)())
+    yield
 
 
 class _FakeAdapter:

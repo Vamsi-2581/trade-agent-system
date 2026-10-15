@@ -298,8 +298,16 @@ class TestDataQualityMonitor:
         assert monitor1 is monitor2
 
     def test_record_data(self):
-        """测试记录数据"""
+        """测试记录数据
+
+        `record_data` 是热路径，只把延迟写进原始 `_latencies`，**不**顺手算均值；
+        `get_stats()['avg_latencies']` 是从 `_reports` 快照出来的，所以要让统计里
+        出现这个来源，必须先 `check()` 让 report 落下来。这是刻意的口径：
+        热路径不买单，诊断面现算。
+        """
         monitor = DataQualityMonitor()
+        monitor._reports.clear()
+        monitor._latencies.clear()
 
         monitor.record_data(
             source="binance",
@@ -308,9 +316,13 @@ class TestDataQualityMonitor:
             data_timestamp=datetime.now() - timedelta(milliseconds=50),
         )
 
-        # 检查延迟已记录
-        stats = monitor.get_stats()
-        assert "binance" in stats["avg_latencies"]
+        # record_data 只进原始延迟，不建 report —— 此时统计里还没有这个来源
+        assert "binance" in monitor._latencies
+        assert "binance" not in monitor.get_stats()["avg_latencies"]
+
+        # check() 让 report 落下来，统计才开始反映它
+        monitor.check("binance", "BTC/USDT", "ticker")
+        assert "binance" in monitor.get_stats()["avg_latencies"]
 
     def test_record_anomaly(self):
         """测试记录异常"""

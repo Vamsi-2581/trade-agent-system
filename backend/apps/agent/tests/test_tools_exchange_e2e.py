@@ -205,14 +205,31 @@ class TestExchangeAccountToolE2E(TransactionTestCase):
         self.assertNotIn("币安合约账号", result.data)
 
     def test_execute_tool_filter_by_label(self):
-        """工具应按标签关键词模糊匹配"""
+        """工具应按标签关键词模糊匹配（label__icontains）"""
+        from apps.agent.tools.exchange_account import GetExchangeAccountTool
+
+        tool = GetExchangeAccountTool()
+        # "账号" 同时命中活跃的两个账号（币安主账号 / 币安现货账号），
+        # 非活跃的"币安合约账号"被 is_active=True 过滤掉。
+        result = _run(tool.execute(label="账号"))
+
+        self.assertTrue(result.success)
+        self.assertIn("2 个", result.data)
+        self.assertIn("币安主账号", result.data)
+        self.assertIn("币安现货账号", result.data)
+        self.assertNotIn("币安合约账号", result.data)
+
+    def test_execute_tool_filter_by_label_narrow(self):
+        """窄关键词只命中一个：验证是真正的模糊匹配而非全量返回"""
         from apps.agent.tools.exchange_account import GetExchangeAccountTool
 
         tool = GetExchangeAccountTool()
         result = _run(tool.execute(label="主"))
 
         self.assertTrue(result.success)
-        self.assertIn("2 个", result.data)
+        self.assertIn("1 个", result.data)
+        self.assertIn("币安主账号", result.data)
+        self.assertNotIn("币安现货账号", result.data)
 
     def test_execute_tool_no_match_returns_message(self):
         """无匹配时返回友好提示"""
@@ -237,11 +254,23 @@ class TestExchangeAccountToolE2E(TransactionTestCase):
         self.assertNotIn("encrypted", result.data.lower())
 
     def test_supervisor_tools_list_includes_exchange_account(self):
-        """SupervisorAgent 的工具列表应包含 get_exchange_account"""
+        """get_exchange_account 已注册到全局 ToolRegistry，可被 Agent 取用。
+
+        注：该工具**不在** supervisor 的 prompt 声明工具表内（
+        prompts/v1/supervisor.txt 的 tools 列表是 supervisor 可用工具的权威来源，
+        历史上也从未包含它）。supervisor 只负责编排，交易所账号查询由子 Agent /
+        直接调用完成。因此这里断言的是"注册可见"这一真实契约。
+        """
+        from apps.agent.tools.base import ToolRegistry
         from apps.agent.supervisor import SupervisorAgent
 
-        tools = SupervisorAgent._agent_tools
-        self.assertIn("get_exchange_account", tools)
+        # 1. 全局注册可见（LLM function calling 可枚举到）
+        self.assertIn("get_exchange_account", {t.name for t in ToolRegistry.all()})
+
+        # 2. supervisor 的 prompt 声明工具表是权威来源，且不含该工具
+        supervisor = SupervisorAgent.get_instance()
+        self.assertNotIn("get_exchange_account", supervisor._agent_tools)
+        self.assertTrue(supervisor._agent_tools, "supervisor 工具表不应为空")
 
 
 class TestFrameControlNaturalLanguage(APITestCase):

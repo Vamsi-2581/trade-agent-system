@@ -73,7 +73,26 @@ def _position(notional: str, leverage: int = 1) -> Position:
 
 
 class PerpModeTestBase(unittest.IsolatedAsyncioTestCase):
-    """公共桩：halt 放行、日次数放行、回撤放行；只暴露被测的三条校验。"""
+    """公共桩：halt 放行、日次数放行、回撤放行；只暴露被测的三条校验。
+
+    **这些用例一律用 ``@pytest.mark.django_db(transaction=True)``，不要降级成
+    裸 ``@pytest.mark.django_db``。** 原因（2026-10-15 定位到的静默污染）：
+
+    ``RiskGuard._record_risk_event`` 经 ``apps.core.db_utils.db_async`` 写库，而
+    ``db_async`` 固定 ``sync_to_async(thread_sensitive=False)`` —— 写入发生在
+    **通用线程池线程**上，用的是那个线程自己的 thread-local 连接。pytest-django
+    的裸 ``django_db`` 走 ``TestCase``，事务包在**测试线程**上；异步测试体跑到
+    事件循环/线程池线程，写入落在事务之外，于是**直接提交、永不回滚**。
+
+    实测：同一进程内把该文件跑两遍，``RiskEvent.objects.count()`` 依次是
+    1、2（同步用例的对照组始终是 1、1）。这些残留行会被
+    ``apps/riskguard/views.py::event_list``（无 user/scope 过滤，取最近 50 条）
+    读出来，污染后续用例——``tests/test_risk_events.py::TestRiskEventsApi::
+    test_lists_latest_50_desc`` 断言 ``len(body) == 2`` 却看到 6，就是这么来的。
+
+    ``transaction=True`` 让 pytest-django 改用 ``TransactionTestCase``：用例跑完
+    会 **truncate 各表**，真实提交的行也会被清掉。实测两遍都是 0、1，不再累积。
+    """
 
     def setUp(self):
         self.guard = RiskGuard(mode="trading")
@@ -121,7 +140,7 @@ class TestLeverageLimit(PerpModeTestBase):
         self.assertTrue(ok, reason)
         self.assertEqual(reason, "OK")
 
-    @pytest.mark.django_db
+    @pytest.mark.django_db(transaction=True)
     async def test_6x_rejected_with_numbers(self):
         ok, reason = await self.guard.pre_trade_check(
             _request(leverage=6, is_perp=True), "user-1"
@@ -130,7 +149,7 @@ class TestLeverageLimit(PerpModeTestBase):
         self.assertIn("6x", reason)
         self.assertIn("5x", reason)
 
-    @pytest.mark.django_db
+    @pytest.mark.django_db(transaction=True)
     async def test_rejection_writes_hard_limit_risk_event(self):
         from apps.riskguard.models import RiskEvent
 
@@ -174,7 +193,7 @@ class TestPerpPositionRatio(PerpModeTestBase):
         )
         self.assertFalse(ok)
 
-    @pytest.mark.django_db
+    @pytest.mark.django_db(transaction=True)
     async def test_perp_rejection_writes_risk_event(self):
         from apps.riskguard.models import RiskEvent
 
@@ -209,7 +228,7 @@ class TestTotalNotionalExposure(PerpModeTestBase):
         self.assertFalse(ok)
         self.assertIn("102", reason)
 
-    @pytest.mark.django_db
+    @pytest.mark.django_db(transaction=True)
     async def test_rejection_writes_risk_event(self):
         from apps.riskguard.models import RiskEvent
 

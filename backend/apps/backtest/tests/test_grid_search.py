@@ -32,9 +32,11 @@ def authenticated_client(api_client, user):
 def strategy(db):
     from apps.trading.models import Strategy
 
+    # `Strategy` 只有 name/code_path/git_commit_hash/is_active（`apps/trading/models.py`），
+    # 归属由 `LiveSession` 承载，模型上没有 user 字段。
     return Strategy.objects.create(
         name="TestGridStrategy",
-        user_id=None,
+        code_path="strategies/test_grid_strategy.py",
     )
 
 
@@ -42,7 +44,9 @@ class TestGridSearchAPI:
     @pytest.mark.django_db
     def test_create_grid_search_success(self, authenticated_client, strategy):
         """成功提交网格搜索任务"""
-        with patch("apps.backtest.views.run_grid_search_task") as mock_task:
+        # `run_grid_search_task` 在 `grid_search_create` 内部才 import，不是
+        # `apps.backtest.views` 的模块属性，patch 必须打到定义处 `apps.backtest.tasks`。
+        with patch("apps.backtest.tasks.run_grid_search_task") as mock_task:
             mock_apply = MagicMock()
             mock_apply.id = "test-task-uuid-1234"
             mock_task.apply_async.return_value = mock_apply
@@ -110,7 +114,7 @@ class TestGridSearchAPI:
     @pytest.mark.django_db
     def test_user_isolation(self, authenticated_client, strategy):
         """用户不能访问其他人的网格搜索任务"""
-        with patch("apps.backtest.views.run_grid_search_task") as mock_task:
+        with patch("apps.backtest.tasks.run_grid_search_task") as mock_task:
             mock_apply = MagicMock()
             mock_apply.id = "test-task-uuid-isolation"
             mock_task.apply_async.return_value = mock_apply
@@ -132,7 +136,7 @@ class TestGridSearchAPI:
 
         # 另一个用户查询
         other_user = User.objects.create_user(
-            username="otheruser", password="testpass123"
+            email="otheruser@example.com", username="otheruser", password="testpass123"
         )
         from rest_framework.test import APIClient
 
@@ -145,7 +149,7 @@ class TestGridSearchAPI:
     @pytest.mark.django_db
     def test_cancel_grid_search(self, authenticated_client, strategy):
         """取消网格搜索任务"""
-        with patch("apps.backtest.views.run_grid_search_task") as mock_task:
+        with patch("apps.backtest.tasks.run_grid_search_task") as mock_task:
             mock_apply = MagicMock()
             mock_apply.id = "test-task-uuid-cancel"
             mock_task.apply_async.return_value = mock_apply
@@ -166,8 +170,8 @@ class TestGridSearchAPI:
             job_id = response.json()["grid_search_id"]
 
         # 取消任务
-        with patch("apps.backtest.views.celery_app") as mock_celery:
-            mock_celery.control.revoke = MagicMock()
+        with patch("celery_app.app.control") as mock_control:
+            mock_control.revoke = MagicMock()
             response = authenticated_client.post(
                 f"/api/backtest/grid-search/{job_id}/cancel/"
             )

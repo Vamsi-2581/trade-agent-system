@@ -134,24 +134,26 @@ class TestBacktestResultModel(TestCase):
             final_capital=Decimal("10500.00"),
             total_return_pct=5.0,
         )
+        # `BacktestTrade` 无 symbol 字段（标的在 backtest 外键上），成本也由
+        # `commission` + `slippage` 两栏承载而非单一 `fees`。
         trade = BacktestTrade.objects.create(
             backtest=result,
             entry_time=datetime(2024, 1, 5, 8, 0),
             exit_time=datetime(2024, 1, 6, 14, 0),
-            symbol="BTC/USDT",
             side="long",
             entry_price=Decimal("42000.00"),
             exit_price=Decimal("42800.00"),
             quantity=Decimal("0.5"),
             pnl=Decimal("400.00"),
             pnl_pct=1.90,
-            cumulative_pnl=Decimal("400.00"),
-            fees=Decimal("4.20"),
-            tags=["take_profit"],
+            commission=Decimal("4.20"),
+            slippage=Decimal("0.50"),
+            exit_reason="take_profit",
         )
         self.assertEqual(trade.side, "long")
         self.assertEqual(trade.pnl, Decimal("400.00"))
-        self.assertEqual(trade.tags, ["take_profit"])
+        self.assertEqual(trade.exit_reason, "take_profit")
+        self.assertEqual(trade.backtest.symbol, "BTC/USDT")
 
     def test_backtest_trade_related_name(self):
         """测试通过 backtest.trades 反向查询"""
@@ -170,7 +172,6 @@ class TestBacktestResultModel(TestCase):
                 backtest=result,
                 entry_time=datetime(2024, 1, 5 + i, 8, 0),
                 exit_time=datetime(2024, 1, 6 + i, 14, 0),
-                symbol="ETH/USDT",
                 side="long" if i % 2 == 0 else "short",
                 entry_price=Decimal("2200.00"),
                 exit_price=Decimal("2250.00"),

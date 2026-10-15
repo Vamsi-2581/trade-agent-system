@@ -202,7 +202,14 @@ class _Fixture(TestCase):
     """三个策略：`REAL` 解析得到实现类，`GHOST_*` 两条解析不到（真幽灵）。"""
 
     def setUp(self):
+        from apps.backtest.models import BacktestResult
         from apps.strategy_engine.registry import StrategyRegistry
+
+        # 幽灵清理按「有没有反面引用」判定，而读的是全表（`pool_rebuild._result_rows()`
+        # 不带过滤——生产里它就该读全部回测结果）。库里有既存回测结果时，本用例造的
+        # 幽灵就不再是「零引用」。跑在 `db_dev.sqlite3` 上时库里有真实回测结果，
+        # 先清干净；`TestCase` 的事务会连这一步一起回滚，真实库毫发无损。
+        BacktestResult.objects.all().delete()
 
         self.discover = self.enterContext(
             patch.object(pool_rebuild, "ensure_strategies_discovered", return_value=[])

@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import unittest
 
+from apps.agent.llm_client import LLMClient
 from apps.agent.supervisor import (
     IntentRouter,
     SupervisorAgent,
@@ -65,7 +66,7 @@ class MockSessionManager:
         return self._store.get(user_id)
 
     async def set_session_context(
-        self, user_id: str, state, active_agent=None, ttl=1800
+        self, user_id: str, state, active_agent=None, task_id=None, ttl=1800
     ):
         self.call_log.append(
             ("set_session_context", user_id, state.value, active_agent)
@@ -73,6 +74,7 @@ class MockSessionManager:
         self._store[user_id] = {
             "state": state.value,
             "active_agent": active_agent,
+            "task_id": task_id,
             "expires_at": time.time() + ttl,
         }
 
@@ -182,9 +184,21 @@ def create_supervisor_with_mocks(mock_session_mgr=None):
         side_effect=Exception("no redis in tests"),
     )
 
+    # SupervisorAgent.__init__ 把 LLMClient.get_instance() 注入 Supervisor 自身
+    # **和** IntentParser。必须在构造 supervisor 之前替换单例，否则
+    # _intent_parser 仍持有真实 LLM 客户端 → 意图解析会真的走网络，
+    # 用例变成非确定性的（真实 LLM 的措辞随时会变）。
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value=json.dumps({"agent": "unknown"}))
+    mock_llm.chat_with_tools = AsyncMock()
+    patch_llm = patch.object(
+        LLMClient, "get_instance", classmethod(lambda cls: mock_llm)
+    )
+
     patch_sm.start()
     patch_mm.start()
     patch_redis.start()
+    patch_llm.start()
 
     reset_all_singletons()
 
@@ -214,14 +228,15 @@ def create_supervisor_with_mocks(mock_session_mgr=None):
     )
 
     supervisor = SupervisorAgent()
-    supervisor._llm = MagicMock()
-    supervisor._llm.chat = AsyncMock()
-    supervisor._llm.chat_with_tools = AsyncMock()
+    # 构造时已通过 LLMClient 单例注入 mock_llm；这里再确认一次，
+    # 保证 supervisor._llm 与 _intent_parser._llm 是同一个 mock。
+    supervisor._llm = mock_llm
 
     def stopper():
         patch_sm.stop()
         patch_mm.stop()
         patch_redis.stop()
+        patch_llm.stop()
 
     return supervisor, mock_session_mgr, stopper
 

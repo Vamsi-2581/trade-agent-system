@@ -72,11 +72,15 @@ class MockSessionManager:
         return self._store.get(user_id)
 
     async def set_session_context(
-        self, user_id: str, state, active_agent=None, ttl=1800
+        self, user_id: str, state, active_agent=None, task_id=None, ttl=1800
     ):
+        # ``task_id`` 是真实签名的一部分（apps/agent/session_manager.py 的
+        # set_session_context 有它，supervisor 走工作流时会传）：替身必须跟住，
+        # 否则 WorkflowEngine 一调就 TypeError，用例在路由之前就炸。
         self._store[user_id] = {
             "state": state.value,
             "active_agent": active_agent,
+            "task_id": task_id,
         }
 
     async def pause_session(

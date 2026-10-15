@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db
 async def test_grid_search_timeout_returns_failure_status():
     """验证超时任务返回 FAILURE 状态，而非 SUCCESS"""
     from apps.agent.tools.backtest import GetTaskResultTool
@@ -34,6 +35,7 @@ async def test_grid_search_timeout_returns_failure_status():
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db
 async def test_grid_search_job_not_found_returns_failure():
     """验证 job not found 返回 FAILURE 状态"""
     from apps.agent.tools.backtest import GetTaskResultTool
@@ -61,6 +63,7 @@ async def test_grid_search_job_not_found_returns_failure():
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db
 async def test_grid_search_cancelled_returns_cancelled_status():
     """验证 cancelled 任务返回 CANCELLED 状态"""
     from apps.agent.tools.backtest import GetTaskResultTool
@@ -89,6 +92,7 @@ async def test_grid_search_cancelled_returns_cancelled_status():
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db
 async def test_ohlcv_fetch_failed_returns_failure():
     """验证 OHLCV fetch failed 返回 FAILURE 状态"""
     from apps.agent.tools.backtest import GetTaskResultTool

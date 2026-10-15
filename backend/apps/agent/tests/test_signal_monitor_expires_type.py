@@ -13,12 +13,46 @@ expires_hours 会以字符串到达 execute()。修复前 `expires_hours and exp
 断言真正传给模型的是 float 且 expires_at ≈ now + expires_hours。
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from asgiref.sync import sync_to_async
 
 from apps.agent.tools.signal_monitor import AddSignalMonitorTool
+
+
+def _drop_cached_connections():
+    """丢弃本线程 thread-local 的 DB 连接（调用方决定在哪个线程执行）。
+
+    本文件把三个 I/O 边界都打了桩，断言的是参数归一化，本不该碰库；但
+    ``AddSignalMonitorTool`` 的 ``_create_monitor`` 是 ``sync_to_async``，进入
+    该线程后会先 ``close_old_connections()``。若此前有测试用过 ORM，连接会残留
+    在该线程的 thread-local ``connections`` 上，``close_old_connections()`` 就会
+    碰它 → 撞上 pytest-django 的 ``django_db`` blocker，抛出
+    "Database access not allowed"。
+
+    不能用 ``connection.close()``：settings/test.py 的 sqlite 测试库是
+    ``mode=memory``（Django 测试运行器把 NAME 换成 memorydb），sqlite backend
+    对内存库的 ``close()`` 是 no-op（防止销毁库），关不掉；因此直接把
+    ``connection`` 引用置空，让下次使用重新建连。
+    """
+    from django.db import connections
+
+    for alias in connections:
+        conn = connections[alias]
+        if conn.connection is not None:
+            conn.connection = None
+        conn.health_check_done = False
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cached_connections():
+    """用例前清掉主线程与线程池线程里的残留连接，保证打桩用例不被污染。"""
+    _drop_cached_connections()  # 主线程
+    asyncio.run(sync_to_async(_drop_cached_connections, thread_sensitive=True)())
+    yield
 
 
 class _FakeMonitor:

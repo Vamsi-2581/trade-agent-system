@@ -183,7 +183,14 @@ class _Fixture(TestCase):
 
     @classmethod
     def setUpTestData(cls):
+        from apps.backtest.models import BacktestResult
         from apps.trading.models import Strategy
+
+        # 闸门这一层读的是全表（`pool_rebuild._result_rows()` 不带过滤——生产里它就
+        # 该读全部回测结果），所以库里存在既存结果时，「受管集合」就不再只是本用例造
+        # 的账。跑在 `db_dev.sqlite3` 上时库里有真实回测结果，先清干净。
+        # `TestCase` 的事务会把这一步连同用例一起回滚，真实库毫发无损。
+        BacktestResult.objects.all().delete()
 
         cls.alpha = Strategy.objects.create(
             name="AlphaStem",

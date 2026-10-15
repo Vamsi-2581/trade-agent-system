@@ -142,6 +142,7 @@ async def test_short_uuid_too_short():
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_resolve_short_uuid_helper():
     """直接测试 _resolve_short_uuid 辅助方法"""
     tool = GetTaskResultTool()
@@ -171,6 +172,7 @@ async def test_resolve_short_uuid_helper():
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_celery_task_with_short_id():
     """测试 Celery 任务 ID 使用短 UUID 查询"""
     # Celery 任务 ID 不是 ScheduledOneTimeTask UUID

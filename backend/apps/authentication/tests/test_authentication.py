@@ -21,10 +21,15 @@ class TestUserModel(TestCase):
         self.assertFalse(user.is_admin)
 
     def test_create_superuser(self):
+        # 用户名不能用 "admin"：数据迁移
+        # `apps/authentication/migrations/0002_create_admin_user.py` 已经往测试库里
+        # 播了一个 username="admin" / email="admin@tradeclaw.local" 的账号，再用同一个
+        # 用户名建号会撞 `users.username` 的 UNIQUE 约束。这里测的是「create_superuser
+        # 会把 is_admin 置真」，与用户名取值无关，所以换一个不冲突的名字。
         user = User.objects.create_superuser(
             email="admin@example.com",
             password="adminpass123",
-            username="admin",
+            username="admin_superuser_test",
         )
         self.assertTrue(user.is_admin)
 

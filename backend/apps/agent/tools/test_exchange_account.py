@@ -4,14 +4,24 @@ from __future__ import annotations
 
 import asyncio
 
-from django.test import TestCase
+from django.test import TransactionTestCase
 
 from apps.agent.tools.exchange_account import GetExchangeAccountTool
 from apps.exchange.models import ExchangeAccount
 
 
-class TestGetExchangeAccountTool(TestCase):
-    """测试交易所账号查询工具"""
+class TestGetExchangeAccountTool(TransactionTestCase):
+    """测试交易所账号查询工具
+
+    必须是 ``TransactionTestCase``（不能用 ``django.test.TestCase``）：
+    ``GetExchangeAccountTool`` 走 ``apps.core.db_utils.db_async``，那是
+    ``sync_to_async(thread_sensitive=False)``——ORM 跑在**另一个线程**的连接上。
+    测试用的 SQLite 是文件库，``TestCase`` 用外层事务包住本用例，那个事务持有写锁，
+    异步线程的连接读不到本用例刚造的行，报
+    ``OperationalError: database table is locked: exchange_accounts``。
+    ``TransactionTestCase`` 不包事务、行是真实提交的，异步线程才看得见。
+    同约定见 ``apps/agent/tests/test_event_commands.py``。
+    """
 
     def setUp(self):
         """创建测试数据"""
@@ -38,9 +48,7 @@ class TestGetExchangeAccountTool(TestCase):
         )
 
     def _run(self, **kwargs):
-        return asyncio.get_event_loop().run_until_complete(
-            GetExchangeAccountTool().execute(**kwargs),
-        )
+        return asyncio.run(GetExchangeAccountTool().execute(**kwargs))
 
     def test_list_all_active_accounts(self):
         """查询所有活跃账号"""

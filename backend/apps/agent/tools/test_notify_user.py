@@ -19,20 +19,26 @@ def tool():
 
 @pytest.fixture
 def user(db):
-    """Create a test user."""
-    return User.objects.create_user(
+    """Create a test user.
+
+    ``UserManager.create_user`` only accepts ``(email, username, password)``;
+    profile fields like ``telegram_chat_id`` are set through the plain manager.
+    """
+    return User.objects.create(
+        email="test_notify_user@example.com",
         username="test_notify_user",
         telegram_chat_id=123456789,
     )
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 class TestNotifyUserTool:
     async def test_valid_message_with_user_id(self, tool, user, db):
         """Valid message + user_id → success, notification persisted, Redis published."""
-        with patch("apps.agent.tools.notify_user.redis") as mock_redis_mod:
+        with patch("redis.from_url") as mock_from_url:
             mock_r = MagicMock()
-            mock_redis_mod.from_url.return_value = mock_r
+            mock_from_url.return_value = mock_r
 
             result = await tool.execute(message="BTC 突破 10 万", user_id=str(user.id))
 
@@ -46,7 +52,7 @@ class TestNotifyUserTool:
         assert notifications.first().channel == "web"
 
         # Verify Redis publish called
-        mock_redis_mod.from_url.assert_called_once()
+        mock_from_url.assert_called_once()
         mock_r.publish.assert_called_once()
         publish_args = mock_r.publish.call_args[0]
         payload = json.loads(publish_args[1])
@@ -75,9 +81,9 @@ class TestNotifyUserTool:
         """Message longer than 4000 chars is truncated."""
         long_message = "A" * 5000
 
-        with patch("apps.agent.tools.notify_user.redis") as mock_redis_mod:
+        with patch("redis.from_url") as mock_from_url:
             mock_r = MagicMock()
-            mock_redis_mod.from_url.return_value = mock_r
+            mock_from_url.return_value = mock_r
 
             result = await tool.execute(message=long_message, user_id=str(user.id))
 
@@ -91,8 +97,8 @@ class TestNotifyUserTool:
 
     async def test_redis_failure_does_not_crash(self, tool, user, db):
         """Redis pubsub failure → tool still returns success (best-effort delivery)."""
-        with patch("apps.agent.tools.notify_user.redis") as mock_redis_mod:
-            mock_redis_mod.from_url.side_effect = Exception("Redis unavailable")
+        with patch("redis.from_url") as mock_from_url:
+            mock_from_url.side_effect = Exception("Redis unavailable")
 
             result = await tool.execute(message="test message", user_id=str(user.id))
 
@@ -103,14 +109,15 @@ class TestNotifyUserTool:
 
     async def test_user_lookup_by_username(self, tool, db):
         """When user_id is a username string, lookup works."""
-        user = User.objects.create_user(
+        user = User.objects.create(
+            email="notify_by_name@example.com",
             username="notify_by_name",
             telegram_chat_id=987654321,
         )
 
-        with patch("apps.agent.tools.notify_user.redis") as mock_redis_mod:
+        with patch("redis.from_url") as mock_from_url:
             mock_r = MagicMock()
-            mock_redis_mod.from_url.return_value = mock_r
+            mock_from_url.return_value = mock_r
 
             result = await tool.execute(message="hello", user_id="notify_by_name")
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -145,8 +146,17 @@ class TestExecuteScheduledTaskStateMachine(TestCase):
         self.assertIn("agent failed", task.error)
 
 
-class TestSubmitScheduledTaskToolPersistence(TestCase):
-    """Test SubmitScheduledTaskTool creates DB record and pushes to Celery."""
+class TestSubmitScheduledTaskToolPersistence(TransactionTestCase):
+    """Test SubmitScheduledTaskTool creates DB record and pushes to Celery.
+
+    必须是 ``TransactionTestCase``：工具用 ``db_async``（``sync_to_async(
+    thread_sensitive=False)``）写库，那是在**另一个线程的连接**上提交的，不在本用例
+    的事务里。用 ``TestCase`` 的话两件坏事同时发生：(1) 外层事务挡住异步线程，写不进去；
+    (2) 即使写成功，这一行也是**真实提交**的，用例结束后不会被回滚，于是
+    ``scheduled_analyst``（``task_name=f"scheduled_{agent_name}"``）会泄漏给后面所有
+    用例——``TestListScheduledTasksAPI::test_api_returns_one_time_tasks`` 断言
+    「只有 1 条 one_time」时看到 2 条，就是这么来的。
+    """
 
     @patch("apps.agent.tasks.execute_scheduled_agent_task.apply_async")
     async def test_creates_db_record_and_pushes(self, mock_apply_async):
@@ -438,7 +448,34 @@ class TestGetTaskResultDBUUID(TransactionTestCase):
 
 
 class TestListScheduledTasksAPI(TestCase):
-    """Test that API returns both periodic and one-time tasks."""
+    """Test that API returns both periodic and one-time tasks.
+
+    直接调用 view 函数（不起 HTTP 栈），所以必须**关掉 DRF 限流**：限流计数器按
+    「匿名访问者 IP」存在**共享 Redis** 里（实测键 ``:1:throttle_anon_127.0.0.1``，
+    滑动窗口 60 秒），`REST_FRAMEWORK.DEFAULT_THROTTLE_RATES["anon"]` 是 20/min。
+    每次调用 view 都从 127.0.0.1 出发、都算匿名，于是反复跑本文件（或与其它直接调
+    view 的用例同跑）会攒满窗口 → 返回 429，而这条链路上被测的是**任务列表的组装**，
+    跟限流无关。这里把限流类换成空元组，只在本类生效。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_throttling(self):
+        """只在本类生效地关掉限流。
+
+        用 `patch.object(api_settings, ...)` 而不是 `settings.REST_FRAMEWORK = {...}`：
+        后者会触发 Django 的 `setting_changed` → DRF 的 `reload_api_settings` →
+        `APISettings.reload()`，而它在 `delattr` 自己尚未实例化的属性时会抛
+        `AttributeError: 'APISettings' object has no attribute ...`，把**同进程后续**
+        的用例一并打挂（实测：本类的 3 个用例 setup ERROR）。`patch.object` 只改限流
+        类本身，退出时原样还原，不惊动任何全局设置。
+        """
+        from rest_framework.settings import api_settings
+
+        patched = patch.object(
+            api_settings, "DEFAULT_THROTTLE_CLASSES", [], create=True
+        )
+        patched.start()
+        self.addCleanup(patched.stop)
 
     @patch(
         "rest_framework.permissions.IsAuthenticated.has_permission", return_value=True
@@ -448,9 +485,13 @@ class TestListScheduledTasksAPI(TestCase):
         from apps.agent.models import ScheduledOneTimeTask
         from rest_framework.test import APIRequestFactory
 
+        # 列表接口读的是全表（不带「本次测试」这种过滤，这是它该有的行为），所以断
+        # 绝对条数前要能认出自己那一行。库里既存的一次性任务（dev 库上真实存在）会
+        # 把条数抬高，而失败看起来像接口漏了过滤。`task_name` 带上本用例独有的标记。
+        marker = f"api_test_{uuid.uuid4().hex}"
         run_at = datetime.now(timezone.utc) + timedelta(hours=1)
         ScheduledOneTimeTask.objects.create(
-            task_name="api_test",
+            task_name=marker,
             agent_name="analyst",
             message="test",
             run_at=run_at,
@@ -463,7 +504,9 @@ class TestListScheduledTasksAPI(TestCase):
         response = list_scheduled_tasks(request)
         self.assertEqual(response.status_code, 200)
         one_time_tasks = [
-            t for t in response.data["tasks"] if t.get("source") == "one_time"
+            t
+            for t in response.data["tasks"]
+            if t.get("source") == "one_time" and t.get("name") == marker
         ]
         self.assertEqual(len(one_time_tasks), 1)
         self.assertEqual(one_time_tasks[0]["agent_name"], "analyst")

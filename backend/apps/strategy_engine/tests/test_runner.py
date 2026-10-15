@@ -30,7 +30,12 @@ from apps.strategy_engine.base import BaseStrategy, StrategyContext
 
 class TestStrategy(BaseStrategy):
     name = "test_valid"
-    description = "A valid test strategy"
+    description = (
+        "策略类型：测试用例（合法策略）\\n"
+        "核心指标：无（仅用于验证策略文件可通过校验）\\n"
+        "适用场景：单元测试中的模拟 K 线数据\\n"
+        "入场逻辑：history 满 20 根且空仓时买入"
+    )
     params_schema = {"quantity": {"type": "number", "default": 0.01}}
 
     def __init__(self, context: StrategyContext):
@@ -117,6 +122,12 @@ from apps.strategy_engine.base import BaseStrategy, StrategyContext
 
 class BrokenStrategy(BaseStrategy):
     name = "broken"
+    description = (
+        "策略类型：测试用例（on_bar 抛错）\\n"
+        "核心指标：无（仅用于验证运行时异常被上报）\\n"
+        "适用场景：单元测试中的模拟 K 线数据\\n"
+        "入场逻辑：每根 K 线都抛 ValueError，用于确认异常被捕获并上报"
+    )
 
     def on_bar(self, kline, history):
         raise ValueError("intentional error")
@@ -144,6 +155,12 @@ from apps.strategy_engine.base import BaseStrategy, StrategyContext
 
 class BadReturnStrategy(BaseStrategy):
     name = "bad_return"
+    description = (
+        "策略类型：测试用例（非法返回值）\\n"
+        "核心指标：无（仅用于验证非 OrderSignal 返回值被拒绝）\\n"
+        "适用场景：单元测试中的模拟 K 线数据\\n"
+        "入场逻辑：on_bar 返回字符串而非 OrderSignal/None"
+    )
 
     def on_bar(self, kline, history):
         return "not a signal"
@@ -192,6 +209,12 @@ from apps.strategy_engine.base import BaseStrategy, StrategyContext
 
 class DecimalTypeErrorStrategy(BaseStrategy):
     name = "decimal_type_error"
+    description = (
+        "策略类型：测试用例（Decimal/float 混用）\\n"
+        "核心指标：无（仅用于验证运行时类型错误提示被增强）\\n"
+        "适用场景：单元测试中的模拟 K 线数据\\n"
+        "入场逻辑：kline 收盘价与 float 字面量相乘触发 TypeError"
+    )
     params_schema = {"quantity": {"type": "number", "default": 0.01}}
 
     def __init__(self, context: StrategyContext):
@@ -229,6 +252,12 @@ from apps.strategy_engine.base import BaseStrategy, StrategyContext
 
 class NeverTradesStrategy(BaseStrategy):
     name = "never_trades"
+    description = (
+        "策略类型：测试用例（零交易）\\n"
+        "核心指标：无（仅用于验证零交易降级为 warning 而非 error）\\n"
+        "适用场景：单元测试中的模拟 K 线数据\\n"
+        "入场逻辑：on_bar 恒返回 None，不产生任何信号"
+    )
 
     def on_bar(self, kline, history):
         return None
@@ -254,6 +283,12 @@ from apps.strategy_engine.base import BaseStrategy, StrategyContext
 
 class BuyThenSellStrategy(BaseStrategy):
     name = "buy_then_sell"
+    description = (
+        "策略类型：测试用例（先买后卖）\\n"
+        "核心指标：K 线计数（每 10 根为一个周期）\\n"
+        "适用场景：单元测试中的模拟 K 线数据\\n"
+        "入场逻辑：空仓且处于周期第 5 根时买入，持仓至周期末（第 10 根）平仓"
+    )
     params_schema = {"quantity": {"type": "number", "default": 0.01}}
 
     def __init__(self, context: StrategyContext):
@@ -289,6 +324,12 @@ from apps.strategy_engine.base import BaseStrategy, StrategyContext
 
 class CleanStrategy(BaseStrategy):
     name = "clean_strategy"
+    description = (
+        "策略类型：测试用例（不写库）\\n"
+        "核心指标：无（仅用于验证校验流程不写 BacktestResult）\\n"
+        "适用场景：单元测试中的模拟 K 线数据\\n"
+        "入场逻辑：空仓且 history 超过 5 根时买入"
+    )
     params_schema = {"quantity": {"type": "number", "default": 0.01}}
 
     def __init__(self, context: StrategyContext):

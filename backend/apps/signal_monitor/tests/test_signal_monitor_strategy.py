@@ -11,7 +11,7 @@
 
 import json
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 
@@ -359,7 +359,15 @@ class TestOnValidateTrigger(unittest.TestCase):
                 "trigger_value": {"left": 51000, "right": 50000},
             }
 
-            await runner._on_validate_trigger(event)
+            # 决策前会先做持仓同步（3b34ced「决策前同步真实持仓 + fail-loud」后的
+            # 强制前置）：同步失败会直接 return，根本走不到信号确认。本用例钉的是
+            # 「触发确认后 dispatch 的载荷」，持仓同步是无关前置，按其成功态替身。
+            with patch.object(
+                runner,
+                "_refresh_position_before_decision",
+                AsyncMock(return_value=True),
+            ):
+                await runner._on_validate_trigger(event)
 
             # 策略应确认信号并 dispatch
             runner._dispatcher.dispatch_with_risk_check.assert_called_once()

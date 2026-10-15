@@ -194,7 +194,15 @@ class TestSlippageColumnRoundTrip:
 
     这是 Standards 审查硬问题 #1 的回归护栏：引擎写 slippage 进 trade dict，
     持久化层必须落到 BacktestTrade.slippage 列，而不是静默丢弃。
+
+    `transaction=True` 是必需的：这个用例用 `acreate` 在事件循环线程里写库，
+    而 pytest-django 的普通 `django_db` 把事务包在**测试线程**上——异步体跑在
+    别的线程，写落在事务之外，于是 `Strategy(name="rt_test")` 会**永久提交**，
+    在整轮测试里对其它读全表的用例（如 regime 的幽灵清理）可见。改用
+    `TransactionTestCase` 语义后每例结束即截断，行不再泄漏。
     """
+
+    pytestmark = pytest.mark.django_db(transaction=True)
 
     @pytest.mark.asyncio
     async def test_slippage_persisted_to_backtest_trade(self):

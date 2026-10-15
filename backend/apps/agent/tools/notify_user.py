@@ -8,6 +8,27 @@ from .base import BaseTool, ToolResult
 
 logger = logging.getLogger(__name__)
 
+#: 通知正文上限。与渠道侧同一口径：Telegram API 限制 4096 字符，
+#: `apps/channel/telegram.py::_TG_MAX_LENGTH` 取 4000 留余量给格式化。
+#: 超过这个长度必须在**入库前**截断——`Notification.message` 是无上限的 TextField，
+#: 不截断就等于把一整篇 LLM 报告塞进通知中心（历史上确实会到数万字符）。
+_MAX_MESSAGE_LENGTH = 4000
+
+#: 截断标记。持久化出去的就是「正文 + 这个后缀」，所以最终长度是
+#: ``_MAX_MESSAGE_LENGTH + len(_TRUNCATION_MARKER)`` = 4000 + 8 = 4008。
+_TRUNCATION_MARKER = "…（已截断）"
+
+
+def _truncate(message: str) -> str:
+    """把超长通知正文截到 ``_MAX_MESSAGE_LENGTH`` 并加截断标记。
+
+    只截一次、只加一个标记：对已经截断过的文本再调一次是幂等的
+    （因为它必然已经 <= 上限）。
+    """
+    if len(message) <= _MAX_MESSAGE_LENGTH:
+        return message
+    return message[:_MAX_MESSAGE_LENGTH] + _TRUNCATION_MARKER
+
 
 class NotifyUserTool(BaseTool):
     """
@@ -51,6 +72,10 @@ class NotifyUserTool(BaseTool):
 
         if not user_id:
             return ToolResult(success=False, error="无法确定通知目标用户")
+
+        # 入库与推送用同一份文本：两处都按渠道上限截断，避免「通知中心里是全的、
+        # 推过去的是断的」这种两边对不上的状态。
+        message = _truncate(message)
 
         # 瞬时故障重试（2026-09-18 事故）：celery worker 的 DB 连接在
         # LLM 长生成期间被 PG idle_in_transaction_session_timeout=30s
