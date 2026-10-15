@@ -2,8 +2,8 @@
 name: quant
 tools: [fetch_ohlcv, calculate_indicators, detect_box_range, get_horizontal_key_levels, read_file, write_file,
         list_directory, web_search, submit_backtest, get_task_result, load_skill,
-        test_strategy, submit_scheduled_task, notify_user, list_backtests,
-        list_orders, notify_user ]
+        test_strategy, register_strategy_candidate, list_strategies, submit_scheduled_task,
+        notify_user, list_backtests, list_orders ]
 description: Design, implement, test, and optimize algorithmic trading strategies.
 ---
 

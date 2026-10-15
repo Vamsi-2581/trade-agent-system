@@ -39,6 +39,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -68,11 +69,34 @@ class WalkForwardSplitMode(str, Enum):
 
 
 def _as_float(raw: str) -> float:
-    return float(raw)
+    """浮点阈值解析。**非有限数一律拒绝**（`nan` / `inf` / `-inf`）。
+
+    这不是洁癖，是一道真闸门：`float("nan")` 解析得出来，而**任何与 NaN 的比较都是假**，
+    于是 `sharpe_min=nan` 会让「夏普不足」恒不成立、`paper_min_return_pct=nan` 会让
+    「盈亏不达标」恒不成立——两条钱闸门静默消失，而进程启动时一声不响。
+
+    这与 `evaluate.py` 模块 docstring 第 4 条是**同一条纪律**（非有限数不是结论）：
+    那一端堵的是「判定输入里的 NaN」，这一端堵的是「阈值里的 NaN」。两端都得堵——
+    只堵一端，NaN 就从另一端进来。
+
+    `inf` 同样拒绝：它是「永不触发」的另一种写法（`sharpe_min=inf` 让样本内闸门恒假）。
+    """
+    value = float(raw)
+    if not math.isfinite(value):
+        raise ValueError(f"必须是有限数（不接受 nan / inf），当前 {raw!r}")
+    return value
 
 
 def _as_int(raw: str) -> int:
-    return int(raw)
+    """整数阈值解析。**拒绝小数**（`2.0` 与 `2` 是同一个数，但 `2.5` 不是）。
+
+    放 `2.5` 过去会在更深的地方炸成 `TypeError`（`divmod` 收不了浮点），那时错误
+    信息已经离「哪个环境变量写错了」很远了。在解析处就挡住，报错带着变量名。
+    """
+    value = float(raw)
+    if not math.isfinite(value) or value != int(value):
+        raise ValueError(f"必须是整数，当前 {raw!r}")
+    return int(value)
 
 
 def _as_split_mode(raw: str) -> str:
@@ -169,6 +193,41 @@ class FactoryConfig:
     auto_advance_enabled: bool = True
 
     def __post_init__(self) -> None:
+        # 第一道也是最根本的一道：**非有限数一律不是阈值**。
+        #
+        # 为什么它必须排在最前面：下面每一条都是**比较**，而任何与 NaN 的比较都是假。
+        # `sharpe_min=nan` 于是让 `sharpe_min <= 0` 不成立、让「夏普不足」恒不成立——
+        # 两条钱闸门一起静默消失，且 import 期一声不响。这与 `evaluate.py` 第 4 条
+        # 是同一条纪律：判定输入里的 NaN 由判定层堵，阈值里的 NaN 由这里堵。
+        #
+        # `bool` 单独排掉：它是 `int` 的子类，而 `sharpe_min=True`（= 1.0）不该被
+        # 当成一个门槛。
+        for name in (
+            "sharpe_min",
+            "oos_decay_max_pct",
+            "paper_min_return_pct",
+            "wf_oos_fraction",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{name} 必须是数，当前 {value!r}")
+            if not math.isfinite(value):
+                raise ValueError(
+                    f"{name} 必须是有限数（不接受 nan / inf），当前 {value!r}"
+                    "——与 NaN 的比较恒为假，会让对应那道闸门静默失效"
+                )
+        for name in (
+            "min_trades",
+            "paper_observation_days",
+            "paper_max_risk_hits",
+            "wf_folds",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(
+                    f"{name} 必须是整数（不接受浮点/布尔），当前 {value!r}"
+                    "——放过去只会在更深处炸成 TypeError，那时报错已看不出是哪个配置项"
+                )
         if self.sharpe_min <= 0:
             # 门槛 <= 0 时「夏普不足」这个判据恒假，漏斗最外面那道闸门静默消失。
             raise ValueError(

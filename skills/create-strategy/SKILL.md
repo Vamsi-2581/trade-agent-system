@@ -29,6 +29,7 @@ autonomous: false
 | 2. 确认需求 | 汇总后等确认 | **跳过**，直接阶段 3 |
 | 3. 生成代码 | 同默认 | 同默认 |
 | 4. 测试策略 | 同默认 | 同默认 |
+| 5. 登记为候选 | 同默认 | 同默认 |
 | 完成/失败 | 通知用户 | 通知用户 |
 
 **不跨越 skill 边界自动触发其他 skill。**
@@ -159,7 +160,31 @@ test_strategy(
 
 测试失败（`success: false`）时：分析错误类型 → 修改代码 → 重新 `test_strategy` → 重复直到通过。
 
-通过后告知用户：strategy_name（供回测使用）、文件路径、模拟运行统计（信号数/买卖次数/收益率）、warning 修复建议。
+### 阶段 5：登记为候选（收尾）
+
+`test_strategy` 通过后，**必须**调用 `register_strategy_candidate` 把这份代码登记成一条候选策略，之后由流水线接管：
+
+```
+register_strategy_candidate(
+    strategy_name="{strategy_name}",
+    strategy_file_path="strategies/{strategy_name}.py",
+    hypothesis="<一句话假设：这条策略认为市场会怎样、靠什么赚钱>",
+    origin="agent"
+)
+```
+
+**为什么必须登记，而不是只告诉用户名字**：登记之前，这份代码只是磁盘上的一个文件；登记之后它才有身份，才能被流水线自动推进——样本内回测（夏普 ≥1.5 且样本量达标）→ 样本外 walk-forward 分折（衰减 <30%）→ paper 观察期。**不要再让用户手工拿 strategy_name 去回测**，那是登记要取代的手工串联。
+
+登记返回的 `next_step` 字段就是「下一步会自动做什么」，**照实转述给用户**，不要自己编。
+
+登记失败（`success: false`）时：返回里带 `reason_code` / `reason` / `hint` 三件，**按 `hint` 修**——`hint` 就是给生成侧自我修正用的。典型三类：
+- `description_template_missing` → `description` 缺「策略类型：」「核心指标：」「适用场景：」「入场逻辑：」中的某个字段（阶段 3.1 的模板）
+- `strategy_name_mismatch` / `strategy_name_missing` → 文件里 `name = "..."` 与 `strategy_name` 不一致，或类里根本没写 `name`
+- `syntax_error` / `module_load_error` / `registry_key_unresolved` → 语法、导入路径或 `@register_strategy()` 装饰器的问题
+
+失败**也会留下一条 `registration_failed` 的候选行**（带原因，可在对话里查到）。修好后用同样的参数重新登记即可回到 `registered`。
+
+登记成功后告知用户：候选 id、状态、文件路径、模拟运行统计（信号数/买卖次数/收益率）、warning 修复建议，以及 `next_step` 里那句「接下来会自动做什么」。
 
 ## 导入路径（必须遵守）
 

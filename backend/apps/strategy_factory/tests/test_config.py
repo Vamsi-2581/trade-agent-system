@@ -181,3 +181,85 @@ def test_snapshot_is_json_safe_and_complete():
     assert set(snapshot) == set(SPEC_DEFAULTS)
     # 要能原样进 JSONField：判定结论里嵌的就是它。
     assert json.loads(json.dumps(snapshot, sort_keys=True)) == snapshot
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "NaN", "Infinity"])
+def test_non_finite_numbers_are_never_thresholds(raw):
+    """`nan` / `inf` 一律拒绝——这是**两道钱闸门同时消失**的那一类缺陷。
+
+    与 NaN 的任何比较都是假，于是 `sharpe_min=nan` 让「夏普不足」恒不成立、
+    `paper_min_return_pct=nan` 让「盈亏不达标」恒不成立。它们解析得出来，进程启动
+    时一声不响，而漏斗从此放行一切。
+
+    这与 `evaluate.py` 模块 docstring 第 4 条是**同一条纪律**：那一端堵判定输入里的
+    NaN，这一端堵阈值里的 NaN；只堵一端，NaN 就从另一端进来。
+
+    **必须断言报错里带着环境变量名**：`from_env` 只用 try 包住 `parser(raw)`，
+    随后的 `cls(**kwargs)` 在 try 之外，所以 `__post_init__` 抛的错**不带**变量名。
+    只断言「抛了 ValueError」的话，把解析器里的 isfinite 删掉也照样过
+    （`__post_init__` 会兜住），但部署的人看到的就从
+    「环境变量 STRATEGY_FACTORY_SHARPE_MIN=nan 无法解析」退化成一条不指名道姓的报错。
+    带上变量名才证明是**解析层**挡住的。
+    """
+    for suffix in (
+        "SHARPE_MIN",
+        "OOS_DECAY_MAX_PCT",
+        "PAPER_MIN_RETURN_PCT",
+        "WF_OOS_FRACTION",
+    ):
+        key = ENV_PREFIX + suffix
+        with pytest.raises(ValueError, match="有限数") as excinfo:
+            FactoryConfig.from_env({key: raw})
+        assert key in str(excinfo.value), f"报错必须点名 {key}"
+
+
+@pytest.mark.parametrize("raw", ["2.5", "nan", "inf"])
+def test_non_integer_values_are_rejected_for_count_fields(raw):
+    """计数类字段只收整数：放 `2.5` 过去会在 `divmod` 深处炸成 TypeError。"""
+    with pytest.raises(ValueError, match="整数"):
+        FactoryConfig.from_env({ENV_PREFIX + "WF_FOLDS": raw})
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"sharpe_min": float("nan")},
+        {"paper_min_return_pct": float("nan")},
+        {"oos_decay_max_pct": float("inf")},
+        {"wf_oos_fraction": float("nan")},
+        {"wf_folds": 2.0},
+        {"wf_folds": 2.5},
+        {"min_trades": True},
+        {"wf_folds": True},
+        {"sharpe_min": True},
+    ],
+)
+def test_non_finite_and_non_integer_are_rejected_on_direct_construction(kwargs):
+    """**直接构造**（绕过 `from_env`）同样要挡住。
+
+    `_as_float` / `_as_int` 只在环境变量那条路上；测试与将来的热重载会直接构造，
+    只守环境变量那一条等于留了半个口子。
+    """
+    with pytest.raises(ValueError):
+        FactoryConfig(**kwargs)
+
+
+def test_nan_threshold_no_longer_lets_a_weak_strategy_through():
+    """反向对照：把 NaN 挡在配置之外后，同一份判定输入**必须**被拦下。
+
+    这条钉的是「修的不是解析器而是那道闸门」：若只加了 `_as_float` 的 isfinite
+    而没管直接构造，这里会拿到一个 `oos_running`（放行）而不是 `in_sample_failed`。
+    """
+    from apps.strategy_factory.evaluate import (
+        CandidateEvidence,
+        InSampleEvidence,
+        evaluate_candidate,
+    )
+    from apps.strategy_factory.status import StrategyCandidateStatus as S
+
+    weak = CandidateEvidence(
+        status=S.IN_SAMPLE_RUNNING,
+        in_sample=InSampleEvidence(sharpe_ratio=0.01, total_trades=100),
+    )
+    verdict = evaluate_candidate(weak)
+    assert verdict.next_status is S.IN_SAMPLE_FAILED
