@@ -229,6 +229,17 @@ def _is_usable_number(value: Any) -> bool:
     return math.isfinite(value)
 
 
+def is_usable_metric_number(value: Any) -> bool:
+    """公开口径：什么算「一个能拿去算钱闸门的指标数」（见模块 docstring 第 4 条）。
+
+    存在的理由：walk-forward 的聚合层（`walk_forward.py`）也要判「这个夏普能不能拿去
+    算衰减」，而它**绝不能自己再写一份判据**——两份判据迟早分家，然后一边认 NaN、
+    一边不认，NaN 就从新那一侧漏过去。实现只有一处（`_is_usable_number`），这里只是
+    把它提升成跨模块的契约。
+    """
+    return _is_usable_number(value)
+
+
 def _is_usable_count(value: Any) -> bool:
     """计数类证据（成交笔数、风控命中次数）可用吗。
 

@@ -30,6 +30,7 @@
 | `STRATEGY_FACTORY_PAPER_MAX_RISK_HITS` | `paper_max_risk_hits` | 0 |
 | `STRATEGY_FACTORY_WF_FOLDS` | `wf_folds` | 5 |
 | `STRATEGY_FACTORY_WF_OOS_FRACTION` | `wf_oos_fraction` | 0.2 |
+| `STRATEGY_FACTORY_WF_SPLIT_MODE` | `wf_split_mode` | rolling |
 | `STRATEGY_FACTORY_AUTO_ADVANCE_ENABLED` | `auto_advance_enabled` | true |
 
 环境变量**留空或未设置都算「用默认值」**：空串是一次手滑（`.env` 里写了键没写值），
@@ -41,10 +42,29 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from enum import Enum
 from typing import Any
 
 #: 环境变量前缀。改它等于让所有部署的既有覆盖值一夜失效，所以它是个常量。
 ENV_PREFIX = "STRATEGY_FACTORY_"
+
+
+class WalkForwardSplitMode(str, Enum):
+    """分折窗口的切分方式（spec #19 D15：「滚动 vs 锚定扩张」是配置项）。
+
+    - `rolling`（默认）：每折的**样本内窗口**跟着该折一起向右滚动，长度固定。
+    - `anchored`：每折的样本内窗口都从区间起点开始**扩张**，末尾对齐该折的起点。
+
+    默认取滚动：本系统的目标是「现在能不能上」，滚动式对「最近一段行情是否还成立」
+    更敏感（D15 原文）。锚定式会拿越来越长的历史去拟合，对「最近是否失效」钝。
+    """
+
+    ROLLING = "rolling"
+    ANCHORED = "anchored"
+
+    @classmethod
+    def values(cls) -> list[str]:
+        return [m.value for m in cls]
 
 
 def _as_float(raw: str) -> float:
@@ -53,6 +73,20 @@ def _as_float(raw: str) -> float:
 
 def _as_int(raw: str) -> int:
     return int(raw)
+
+
+def _as_split_mode(raw: str) -> str:
+    """分折模式解析。**不静默回退默认值**：写错一个字母就炸。
+
+    静默回退在这里格外危险：它会把「我要锚定扩张」变成一次没人察觉的滚动，
+    而两种模式的衰减数字不同——门槛判定的输入就这样换了。
+    """
+    value = raw.strip().lower()
+    if value not in WalkForwardSplitMode.values():
+        raise ValueError(
+            f"只接受 {WalkForwardSplitMode.values()}（不区分大小写），当前 {raw!r}"
+        )
+    return value
 
 
 #: 布尔值的可接受写法。**不接受任意字符串**：`bool("false")` 是 True，
@@ -84,6 +118,7 @@ _ENV_FIELDS: tuple[tuple[str, str, Any], ...] = (
     ("paper_max_risk_hits", "PAPER_MAX_RISK_HITS", _as_int),
     ("wf_folds", "WF_FOLDS", _as_int),
     ("wf_oos_fraction", "WF_OOS_FRACTION", _as_float),
+    ("wf_split_mode", "WF_SPLIT_MODE", _as_split_mode),
     ("auto_advance_enabled", "AUTO_ADVANCE_ENABLED", _as_bool),
 )
 
@@ -112,8 +147,11 @@ class FactoryConfig:
       `RiskEvent` 的严重度口径，届时若确认「轻微命中不算超标」，改的是这两个默认值
       加一条注释，而不是判定逻辑的结构。
     - `wf_folds=5` / `wf_oos_fraction=0.2`：spec D19 把这两个数标为「待定 / 末尾一段」，
-      分折实现归 #29。这里先给出可用的默认（5 折滚动、样本外占末尾 20%），**#29 若
-      另有结论就改这里**：默认值只有一处，改了不会漂。
+      分折实现归 #29。**#29 已定稿这两个数**（5 折、样本外占末尾 20%），并按 D15
+      「切分方式是配置项」补了 `wf_split_mode`（默认滚动）。默认值只有一处，改这里
+      不会漂。
+    - `wf_split_mode=rolling`：D15 原文「默认取滚动、样本外占末尾一段」。见
+      `WalkForwardSplitMode`。
     - `auto_advance_enabled=True`：Q5 已裁定「自动升 paper」，这是 D19 明确写下的默认。
       安全性不靠它默认关，而靠三件事：漏斗下限是「什么都不发生」、每层可 `cancelled`、
       有总开关。
@@ -127,6 +165,7 @@ class FactoryConfig:
     paper_max_risk_hits: int = 0
     wf_folds: int = 5
     wf_oos_fraction: float = 0.2
+    wf_split_mode: str = WalkForwardSplitMode.ROLLING.value
     auto_advance_enabled: bool = True
 
     def __post_init__(self) -> None:
@@ -163,6 +202,13 @@ class FactoryConfig:
             raise ValueError(
                 f"wf_oos_fraction 落在开区间 (0, 1)，当前 {self.wf_oos_fraction}"
                 "——它是比例，0 或 1 会让样本内/样本外其中一侧为空"
+            )
+        if self.wf_split_mode not in WalkForwardSplitMode.values():
+            # 直接构造（绕过 from_env）也要挡住拼错：否则分折层拿到一个不认识的
+            # 模式，只会在切窗时静默按某一支走——「我要锚定」变成一次没人察觉的滚动。
+            raise ValueError(
+                f"wf_split_mode 只接受 {WalkForwardSplitMode.values()}，"
+                f"当前 {self.wf_split_mode!r}"
             )
 
     @classmethod

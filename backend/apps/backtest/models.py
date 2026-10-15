@@ -106,6 +106,18 @@ class BacktestResult(models.Model):
         default=False,
         help_text="是否为网格搜索的子回测",
     )
+
+    # Walk-forward grouping key (spec #19 D4)
+    candidate_id = models.UUIDField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "所属候选策略 ID（walk-forward 分折的分组键，spec #19 D4）。"
+            "刻意不是外键：回测域不该知道「候选」这个概念（D13 的单向依赖），"
+            "且 D22 不回填历史——既有行永远为空"
+        ),
+    )
     celery_task_id = models.CharField(
         max_length=128,
         blank=True,

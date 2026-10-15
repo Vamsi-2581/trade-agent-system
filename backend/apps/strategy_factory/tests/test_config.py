@@ -33,6 +33,7 @@ SPEC_DEFAULTS = {
     "paper_observation_days": 14,
     "wf_folds": 5,
     "wf_oos_fraction": 0.2,
+    "wf_split_mode": "rolling",
     "auto_advance_enabled": True,
     # D19 表格未给数、由判定与 #24 细化的两个 paper 门槛（见 config.py 类 docstring）
     "paper_min_return_pct": 0.0,
@@ -70,6 +71,7 @@ def test_env_prefix_is_stable():
         ("paper_max_risk_hits", "PAPER_MAX_RISK_HITS", "3", 3),
         ("wf_folds", "WF_FOLDS", "10", 10),
         ("wf_oos_fraction", "WF_OOS_FRACTION", "0.35", 0.35),
+        ("wf_split_mode", "WF_SPLIT_MODE", "anchored", "anchored"),
         ("auto_advance_enabled", "AUTO_ADVANCE_ENABLED", "false", False),
     ],
 )
@@ -133,11 +135,28 @@ def test_unparsable_value_fails_loud_with_the_variable_name():
         ({"wf_folds": 1}, "单折没有样本外"),
         ({"wf_oos_fraction": 0}, "样本外占比 0 = 样本外为空"),
         ({"wf_oos_fraction": 1}, "样本外占比 1 = 样本内为空"),
+        ({"wf_split_mode": "rollingg"}, "拼错的分折模式必须炸，不静默回退"),
+        ({"wf_split_mode": ""}, "空串不是一种分折模式"),
     ],
 )
 def test_bad_values_blow_up_at_construction(kwargs, reason):
     with pytest.raises(ValueError):
         FactoryConfig(**kwargs)
+
+
+def test_split_mode_env_typo_fails_loud_and_does_not_fall_back():
+    """拼错的分折模式**不能**静默变成滚动。
+
+    静默回退在这里格外危险：它把「我要锚定扩张」变成一次没人察觉的滚动，而两种模式
+    算出的衰减不同——门槛判定的输入就这样换了。
+    """
+    with pytest.raises(ValueError, match="WF_SPLIT_MODE"):
+        FactoryConfig.from_env({ENV_PREFIX + "WF_SPLIT_MODE": "rollling"})
+    # 大小写不敏感（与 `_as_bool` 的既有约定一致），但词必须是那两个之一。
+    assert (
+        FactoryConfig.from_env({ENV_PREFIX + "WF_SPLIT_MODE": "ANCHORED"}).wf_split_mode
+        == "anchored"
+    )
 
 
 def test_module_singleton_is_built_from_the_environment():
