@@ -24,6 +24,35 @@ DEFAULT_COMMISSION_RATE = Decimal("0.001")
 # taker 单边滑点（0.05%），成交价劣化方向：买更贵、卖更便宜
 DEFAULT_SLIPPAGE_RATE = Decimal("0.0005")
 
+# 夏普年化口径：每年交易日数。与周期无关的常数，周期只决定「每日 bar 数」。
+TRADING_DAYS_PER_YEAR = 252
+SECONDS_PER_DAY = 86400
+
+
+def bars_per_year(timeframe: str) -> float:
+    """每年 bar 数（夏普年化的**唯一出处**）。
+
+    由 ``timeframe`` 推出：``1d`` → 252、``4h`` → 1512（252×6）、``1h`` → 6048
+    （252×24）、``15m`` → 24192（252×96）……
+
+    集中一处的理由：闸门口径是「夏普 ≥1.5」，若这个数按周期变含义，门槛就不是
+    一条线；而漏斗恰恰要把不同周期的候选放在同一条线上比。
+
+    ``timeframe`` 的解析复用 ``apps.datasource.exchange.timeframe_to_seconds``
+    （ccxt 周期串 → 秒的既有唯一出处），本函数只负责「252 交易日 × 每日 bar 数」。
+
+    Raises:
+        ValueError: ``timeframe`` 不是 ``<正整数><s|m|h|d|w|M>`` 形式，或步长为 0。
+            此处**报错而不回退 252**——静默按日频年化会把 4h 候选放到 1d 的标尺
+            上量，正是本函数要修掉的缺陷。
+    """
+    from apps.datasource.exchange import timeframe_to_seconds
+
+    bar_seconds = timeframe_to_seconds(timeframe)
+    if bar_seconds <= 0:
+        raise ValueError(f"timeframe {timeframe!r} 的 bar 步长为 0，无法年化")
+    return TRADING_DAYS_PER_YEAR * SECONDS_PER_DAY / bar_seconds
+
 
 def _parse_dt(value: str | None) -> datetime | None:
     if not value or not isinstance(value, str):
@@ -478,7 +507,7 @@ class BacktestEngine:
         total_closed = len(closed_trades)
         win_rate = len(winning_trades) / total_closed if total_closed > 0 else None
 
-        # 夏普比率（简化：用日收益率）
+        # 夏普比率（按 K 线周期年化，口径唯一出处见 bars_per_year）
         sharpe = self._compute_sharpe()
 
         stats: dict = {
@@ -543,7 +572,12 @@ class BacktestEngine:
         }
 
     def _compute_sharpe(self) -> float | None:
-        """计算夏普比率（简化版）"""
+        """计算夏普比率（简化版）。
+
+        年化系数按本策略的 K 线周期推导（``bars_per_year``）：1d 仍是 252（口径
+        与修复前一致），1h 是 6048，4h 是 1512，15m 是 24192。未知 ``timeframe``
+        由 ``bars_per_year`` 抛 ``ValueError``——不静默按日频 252 算。
+        """
         if len(self._equity_curve) < 2:
             return None
 
@@ -566,8 +600,8 @@ class BacktestEngine:
         if std_ret == 0:
             return None
 
-        # 年化夏普（假设日频率）
-        annual_factor = np.sqrt(252)
+        # 年化夏普：年化系数 = sqrt(每年 bar 数)，每年 bar 数由 timeframe 推出
+        annual_factor = np.sqrt(bars_per_year(self.timeframe))
         return float((mean_ret / std_ret) * annual_factor)
 
 
