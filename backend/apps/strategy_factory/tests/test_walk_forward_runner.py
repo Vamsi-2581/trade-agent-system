@@ -558,6 +558,65 @@ def test_rerunning_converges_to_one_set_of_folds():
     assert first.isdisjoint(second), "旧折行被清掉，换成本轮新跑的"
 
 
+def test_clear_existing_false_keeps_previous_fold_rows():
+    """`clear_existing=False` 时不动既有折行——给 #22 的「续跑」留一个开关。
+
+    默认（清理）服务于「重跑收敛」；但编排层若想在同一次推进里分批补跑，需要一个
+    「别把我已有的折删掉」的口子。这条钉住那个开关真的有效，而不是一个被忽略的入参。
+    """
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy)
+
+    _run(main, candidate_id, _fake_executor([1.4] * 5, strategy, candidate_id))
+    before = set(
+        BacktestResult.objects.filter(candidate_id=candidate_id).values_list(
+            "id", flat=True
+        )
+    )
+    assert len(before) == 5
+
+    _run(
+        main,
+        candidate_id,
+        _fake_executor([1.4] * 5, strategy, candidate_id),
+        clear_existing=False,
+    )
+    after = set(
+        BacktestResult.objects.filter(candidate_id=candidate_id).values_list(
+            "id", flat=True
+        )
+    )
+
+    assert before <= after, "关闭清理时旧折行必须留存"
+    assert len(after) == 10, "新一轮又落了 5 行（未清理）"
+
+
+def test_injected_fold_plan_is_used_instead_of_recomputing_geometry():
+    """`fold_plan` 可注入：编排层能自己定几何，而不必让分折再算一遍。
+
+    这条同时证明「配置驱动」不是唯一入口——#22 若要按候选自己的历史长度定制窗口，
+    有地方放。断言用折**数**（3）判别：默认配置是 5，注入生效才会是 3。
+    """
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy)
+    plan = plan_folds(START_DATE, END_DATE, folds=3)
+    assert plan.folds == 3
+
+    payload = _run(
+        main,
+        candidate_id,
+        _fake_executor([1.4] * 3, strategy, candidate_id),
+        fold_plan=plan,
+    )
+
+    assert payload["expected_fold_count"] == 3
+    assert payload["fold_count"] == 3
+    assert payload["decay_pct"] == 30.0
+    assert BacktestResult.objects.filter(candidate_id=candidate_id).count() == 3
+
+
 def test_clear_fold_results_never_touches_the_main_row():
     """清理只针对样本外折行：主行是 L1 的产物，分折无权处置它。
 
