@@ -219,6 +219,12 @@ def test_full_funnel_never_touches_strategy_is_active(db, strategy, user):
         candidate.transition_to(target)
         candidate.save()
 
+    # 两处都要查：**内存态**（`candidate.strategy` 与夹具是同一行）与落库态。
+    # 只查 refresh 之后的值会漏掉 `candidate.strategy.is_active = True` 这种「先在内存里
+    # 改、等下一次 save 落库」的写法——Django 默认 save 全字段，它会跟着漏出去。
+    assert candidate.strategy.is_active is False, (
+        "推进过程中在内存里改了 strategy.is_active——它会在下一次 strategy.save() 落库"
+    )
     strategy.refresh_from_db()
     assert strategy.is_active is False, (
         "候选生命周期与人工总开关是两根互不干扰的轴（D2）——"
@@ -227,7 +233,7 @@ def test_full_funnel_never_touches_strategy_is_active(db, strategy, user):
 
 
 def test_recording_a_first_layer_verdict_never_touches_is_active(db, strategy):
-    """登记后落第一条判定结论（写 evidence）同样不许碰到 `Strategy`。"""
+    """登记后落第一条判定结论（写 evidence）同样不许碰到 `Strategy`（含内存态）。"""
     candidate = _candidate(strategy=strategy)
     candidate.evidence = {
         "in_sample": {"reason_code": "in_sample_passed", "sharpe_ratio": 2.1}
@@ -235,6 +241,7 @@ def test_recording_a_first_layer_verdict_never_touches_is_active(db, strategy):
     candidate.transition_to(S.IN_SAMPLE_RUNNING)
     candidate.save()
 
+    assert candidate.strategy.is_active is False
     strategy.refresh_from_db()
     assert strategy.is_active is False
 

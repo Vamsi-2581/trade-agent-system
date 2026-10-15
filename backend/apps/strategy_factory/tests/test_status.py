@@ -22,6 +22,7 @@ from apps.strategy_factory.status import (
     InvalidTransitionError,
     StrategyCandidateOrigin,
     StrategyCandidateStatus,
+    _self_check,
     allowed_next_statuses,
     can_transition,
     coerce_status,
@@ -109,11 +110,35 @@ def test_every_illegal_edge_is_rejected(current, target):
 
 
 def test_the_exhaustive_sweep_covers_all_169_pairs():
-    """169 = 13×13。上面两个参数化用例的并集必须覆盖全部组合，不能有缝。"""
+    """169 = 13×13。上面两个参数化用例的并集必须覆盖全部组合，不能有缝。
+
+    这一条同时钉**实现**：边数是实现侧的 28，而不是手抄表自己的 28——否则它就只是
+    「我的期望值等于我的期望值」，与制品无关（独立复核指出过这一点）。
+    """
     legal = {(c, t) for c in S for t in S if t in SPEC_EDGES[c]}
     illegal = {(c, t) for c in S for t in S} - legal
+    assert sum(len(targets) for targets in ALLOWED_TRANSITIONS.values()) == 28
     assert len(legal) == 28, "D3 的合法边是 28 条"
     assert len(legal) + len(illegal) == len(S) ** 2 == 169
+
+
+def test_import_time_guard_catches_a_self_loop(monkeypatch):
+    """`_self_check` 这条自环守卫本身要有钉子。
+
+    加一条真实自环会被 `test_transition_table_equals_the_spec` 拦下（数据层面），但那条
+    守卫是**第五道**防线（import 时就炸）——它自己坏掉时没有任何用例会红。这里直接把
+    自环塞进表再调一次守卫，确认它确实会抛。
+    """
+    monkeypatch.setitem(ALLOWED_TRANSITIONS, S.LIVE, frozenset({S.LIVE}))
+    with pytest.raises(RuntimeError, match="自环"):
+        _self_check()
+
+
+def test_import_time_guard_catches_a_missing_state(monkeypatch):
+    """漏一个状态同样必须在 import 时炸（漏掉的状态会安静地卡死）。"""
+    monkeypatch.delitem(ALLOWED_TRANSITIONS, S.OOS_FAILED)
+    with pytest.raises(RuntimeError, match="漏了状态"):
+        _self_check()
 
 
 @pytest.mark.parametrize("status", sorted(SPEC_TERMINAL, key=lambda s: s.value))

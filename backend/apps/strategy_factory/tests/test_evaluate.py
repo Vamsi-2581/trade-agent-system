@@ -458,15 +458,24 @@ def test_paused_days_do_not_count_towards_the_observation_period():
     assert verdict.detail["running_days"] == 10.0
 
 
-def test_running_days_alone_are_not_enough_either():
-    """反方向同样不成立：running 够但墙钟不够，说明会话还没有真正经历那么长的时间。"""
+def test_wall_clock_clause_is_required_too():
+    """观察期的**墙钟**那一半也必须被单独钉住。
+
+    这条用例的输入在现实中不可能出现（running 时长不会超过墙钟），它是**故意**的合成
+    探针：只有「墙钟不够而 running 充足」才能把 `wall_clock_days >= required` 这半个
+    条款与另一半分开判别。原先把两个数都写成不够（13.0 / 13.0），名字说着墙钟、数据
+    却测不出它——独立复核用 import-time 变异删掉墙钟条款后全套 338 例仍然全绿，
+    缺口正在这里。
+    """
     verdict = evaluate_candidate(
         CandidateEvidence(
             status=S.PAPER_RUNNING,
-            paper=_paper(wall_clock_days=13.0, running_days=13.0),
+            paper=_paper(wall_clock_days=13.0, running_days=99.0),
         )
     )
+    assert verdict.next_status is S.PAPER_RUNNING
     assert verdict.reason_code is ReasonCode.PAPER_OBSERVING
+    assert verdict.detail["wall_clock_days"] == 13.0
 
 
 def test_paper_session_that_ended_early_fails_the_observation():
@@ -599,6 +608,105 @@ def test_awaiting_live_approval_stays_for_the_human():
 
 
 # --------------------------------------------------------------------------- #
+# 非有限数（NaN / ±inf）不许 fail open
+# --------------------------------------------------------------------------- #
+
+
+NON_FINITE = [float("nan"), float("inf"), float("-inf")]
+
+
+@pytest.mark.parametrize("value", NON_FINITE, ids=["nan", "+inf", "-inf"])
+def test_non_finite_sharpe_is_insufficient_evidence_not_a_pass(value):
+    """`NaN < 门槛` 恒假：不堵住的话，一个算崩了的夏普能静默通过样本内闸门。
+
+    `-inf` 走的是同一支（比任何门槛都小 → 本来就会拦下），但它同样不是结论，原因码
+    该说「证据不足」而不是「夏普不够」。
+    """
+    verdict = evaluate_candidate(
+        CandidateEvidence(
+            status=S.IN_SAMPLE_RUNNING,
+            in_sample=InSampleEvidence(sharpe_ratio=value, total_trades=100),
+        )
+    )
+    assert verdict.next_status is S.IN_SAMPLE_FAILED
+    assert verdict.reason_code is ReasonCode.INSUFFICIENT_EVIDENCE
+    assert verdict.reason_code is not ReasonCode.IN_SAMPLE_PASSED
+
+
+@pytest.mark.parametrize("value", NON_FINITE, ids=["nan", "+inf", "-inf"])
+def test_non_finite_decay_is_insufficient_evidence_not_a_pass(value):
+    """`-inf >= 上限` 为假 → 不堵住的话，一个算崩了的衰减能静默通过样本外闸门。"""
+    verdict = evaluate_candidate(
+        CandidateEvidence(
+            status=S.OOS_RUNNING, oos=OosEvidence(decay_pct=value, fold_count=5)
+        )
+    )
+    assert verdict.next_status is S.OOS_FAILED
+    assert verdict.reason_code is ReasonCode.INSUFFICIENT_EVIDENCE
+
+
+@pytest.mark.parametrize("value", NON_FINITE, ids=["nan", "+inf", "-inf"])
+def test_non_finite_paper_return_is_insufficient_evidence_not_a_pass(value):
+    """`NaN < 0` 为假 → 不堵住的话，算崩了的 paper 收益能一路走到人工卡点。"""
+    verdict = evaluate_candidate(
+        CandidateEvidence(status=S.PAPER_RUNNING, paper=_paper(return_pct=value))
+    )
+    assert verdict.next_status is not S.AWAITING_LIVE_APPROVAL
+    assert verdict.reason_code is ReasonCode.INSUFFICIENT_EVIDENCE
+
+
+@pytest.mark.parametrize("field", ["wall_clock_days", "running_days"])
+def test_non_finite_observation_lengths_are_insufficient_evidence(field):
+    verdict = evaluate_candidate(
+        CandidateEvidence(status=S.PAPER_RUNNING, paper=_paper(**{field: float("nan")}))
+    )
+    assert verdict.next_status is S.PAPER_RUNNING
+    assert verdict.reason_code is ReasonCode.INSUFFICIENT_EVIDENCE
+
+
+@pytest.mark.parametrize("closed_trades", [-1, 3.7, True])
+def test_nonsense_trade_counts_are_insufficient_evidence(closed_trades):
+    """计数必须是**非负整数**：`3.7` 是口径错了，`-1` 是不可能的计数，都不是结论。"""
+    verdict = evaluate_candidate(
+        CandidateEvidence(
+            status=S.PAPER_RUNNING, paper=_paper(closed_trades=closed_trades)
+        )
+    )
+    assert verdict.next_status is S.PAPER_RUNNING
+    assert verdict.reason_code is ReasonCode.INSUFFICIENT_EVIDENCE
+
+
+@pytest.mark.parametrize("total_trades", [-1, 3.7])
+def test_nonsense_in_sample_trade_counts_are_insufficient_evidence(total_trades):
+    verdict = evaluate_candidate(
+        CandidateEvidence(
+            status=S.IN_SAMPLE_RUNNING,
+            in_sample=InSampleEvidence(sharpe_ratio=9.0, total_trades=total_trades),
+        )
+    )
+    assert verdict.next_status is S.IN_SAMPLE_FAILED
+    assert verdict.reason_code is ReasonCode.INSUFFICIENT_EVIDENCE
+
+
+def test_nonsense_sharpe_values_are_insufficient_evidence():
+    """守门本身也要有钉子：它坏掉的话上面那组 NaN 用例会一起静默失效。
+
+    刻意用**公开入口**间接验它（测试决策：主要测外部行为；私有 import 只留给
+    「没有公开入口的防御机制」，如 `_self_check`）：一个 `True`（`bool` 是 `int`
+    子类）或字符串 `"1.5"` 被当成夏普时，必须落「证据不足」而不是参与比较。
+    """
+    for bad in (True, "1.5"):
+        verdict = evaluate_candidate(
+            CandidateEvidence(
+                status=S.IN_SAMPLE_RUNNING,
+                in_sample=InSampleEvidence(sharpe_ratio=bad, total_trades=100),
+            )
+        )
+        assert verdict.next_status is S.IN_SAMPLE_FAILED, bad
+        assert verdict.reason_code is ReasonCode.INSUFFICIENT_EVIDENCE, bad
+
+
+# --------------------------------------------------------------------------- #
 # 判定与转移表的一致性（对抗式）
 # --------------------------------------------------------------------------- #
 
@@ -620,6 +728,12 @@ def test_every_verdict_is_either_a_hold_or_a_legal_edge(status):
             in_sample=InSampleEvidence(error="boom"),
             oos=OosEvidence(error="boom", data_sufficient=False),
             paper=_paper(return_pct=-99.0, session_ended=True),
+        ),
+        CandidateEvidence(
+            status=status,
+            in_sample=InSampleEvidence(sharpe_ratio=float("nan"), total_trades=100),
+            oos=OosEvidence(decay_pct=float("nan"), fold_count=5),
+            paper=_paper(return_pct=float("nan"), risk_hits=1),
         ),
     ):
         verdict = evaluate_candidate(evidence)

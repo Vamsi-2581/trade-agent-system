@@ -25,10 +25,17 @@
    （观察期没满、等人工账户、终态……），此时它**不是**一条合法边，
    `can_transition` 对它返回假。调用方若要落库，只有 `next_status` 不等于当前
    状态时才该走模型层的 `transition_to`。
+
+4. **非有限数（NaN / ±inf）一律当「证据不足」**，不是「达标」。这不是洁癖：与阈值
+   比较时 NaN 全假，于是 `sharpe=NaN` 会**静默通过** `sharpe < 门槛` 这道钱闸门，
+   `decay=-inf` 会静默通过 `decay >= 上限`。`config.py` 里已经为「阈值取 0 会让判据
+   恒假」立过规矩，NaN 是同一类失效（判据不成立，闸门却在放行），所以在**取值**这一
+   端堵：不是有限数就是没有数。
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -210,6 +217,27 @@ def _verdict(next_status, reason_code, **detail) -> Verdict:
     )
 
 
+def _is_usable_number(value: Any) -> bool:
+    """这个值是不是一个能拿去比大小的有限实数（见模块 docstring 第 4 条）。
+
+    `None`、NaN、±inf 都不是结论：前两个是「没算出来」，NaN 还会让任何比较静默为假
+    （闸门于是放行）。`bool` 显式排除——它是 `int` 的子类，而 `True >= 1.5` 这种比较
+    不该被当成一个指标。
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value)
+
+
+def _is_usable_count(value: Any) -> bool:
+    """计数类证据（成交笔数、风控命中次数）可用吗。
+
+    必须是**非负整数**：`None` 是没算出来，`3.7` 是口径错了，负数是不可能的计数。
+    计数不参与浮点比较，所以这里只防「不是数」与「数不可能是那个数」。
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def evaluate_candidate(evidence: CandidateEvidence) -> Verdict:
     """按候选当前状态分派到对应那一层的判定。"""
     status = coerce_status(evidence.status)
@@ -267,8 +295,8 @@ def _evaluate_in_sample(ev: InSampleEvidence | None, cfg: FactoryConfig) -> Verd
             error=ev.error,
         )
 
-    if ev.total_trades is None or ev.total_trades < cfg.min_trades:
-        # 样本不足 → 「证据不足」，不是「夏普不够」（D6）。
+    if not _is_usable_count(ev.total_trades) or ev.total_trades < cfg.min_trades:
+        # 样本不足（或这个数根本不是个可用计数）→ 「证据不足」，不是「夏普不够」（D6）。
         return _verdict(
             StrategyCandidateStatus.IN_SAMPLE_FAILED,
             ReasonCode.INSUFFICIENT_EVIDENCE,
@@ -276,12 +304,13 @@ def _evaluate_in_sample(ev: InSampleEvidence | None, cfg: FactoryConfig) -> Verd
             min_trades=cfg.min_trades,
         )
 
-    if ev.sharpe_ratio is None:
+    if not _is_usable_number(ev.sharpe_ratio):
+        # None / NaN / ±inf 都在这里：NaN 与门槛比较恒假，放它过去就是闸门静默消失。
         return _verdict(
             StrategyCandidateStatus.IN_SAMPLE_FAILED,
             ReasonCode.INSUFFICIENT_EVIDENCE,
             total_trades=ev.total_trades,
-            sharpe_ratio=None,
+            sharpe_ratio=ev.sharpe_ratio,
         )
 
     if ev.sharpe_ratio < cfg.sharpe_min:
@@ -325,19 +354,20 @@ def _evaluate_oos(ev: OosEvidence | None, cfg: FactoryConfig) -> Verdict:
             fold_count=ev.fold_count,
         )
 
-    if ev.fold_count is None or ev.fold_count < 1:
+    if not _is_usable_count(ev.fold_count) or ev.fold_count < 1:
         return _verdict(
             StrategyCandidateStatus.OOS_FAILED,
             ReasonCode.INSUFFICIENT_EVIDENCE,
             fold_count=ev.fold_count,
         )
 
-    if ev.decay_pct is None:
+    if not _is_usable_number(ev.decay_pct):
+        # None / NaN / -inf 都在这里：`-inf >= 上限` 为假会让闸门静默放行。
         return _verdict(
             StrategyCandidateStatus.OOS_FAILED,
             ReasonCode.INSUFFICIENT_EVIDENCE,
             fold_count=ev.fold_count,
-            decay_pct=None,
+            decay_pct=ev.decay_pct,
         )
 
     if ev.decay_pct >= cfg.oos_decay_max_pct:
@@ -411,7 +441,9 @@ def _evaluate_paper_running(ev: PaperEvidence | None, cfg: FactoryConfig) -> Ver
         return _verdict(current, ReasonCode.PAPER_OBSERVING)
 
     required = float(cfg.paper_observation_days)
-    if ev.wall_clock_days is None or ev.running_days is None:
+    if not (
+        _is_usable_number(ev.wall_clock_days) and _is_usable_number(ev.running_days)
+    ):
         return _session_ended_verdict(
             ReasonCode.INSUFFICIENT_EVIDENCE,
             ev.session_ended,
@@ -435,20 +467,21 @@ def _evaluate_paper_running(ev: PaperEvidence | None, cfg: FactoryConfig) -> Ver
         return _verdict(current, ReasonCode.PAPER_OBSERVING, **detail)
 
     # 观察期满：先要判得了（样本量与三个统计齐不齐），再判好不好。
-    missing = [
+    # 「齐」= 有限实数 / 非负整数（NaN 与负数都不是结论，见模块 docstring 第 4 条）。
+    unusable = [
         name
-        for name, value in (
-            ("closed_trades", ev.closed_trades),
-            ("return_pct", ev.return_pct),
-            ("risk_hits", ev.risk_hits),
+        for name, usable in (
+            ("closed_trades", _is_usable_count(ev.closed_trades)),
+            ("return_pct", _is_usable_number(ev.return_pct)),
+            ("risk_hits", _is_usable_count(ev.risk_hits)),
         )
-        if value is None
+        if not usable
     ]
-    if missing:
+    if unusable:
         return _session_ended_verdict(
             ReasonCode.INSUFFICIENT_EVIDENCE,
             ev.session_ended,
-            missing=missing,
+            unusable=unusable,
         )
 
     if ev.closed_trades < cfg.min_trades:
