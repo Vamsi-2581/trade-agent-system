@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Callable, Mapping
@@ -121,26 +122,27 @@ def tag_fold_result(
     _write_metrics_key(result_id, fold_payload)
 
 
-def clear_fold_results(candidate_id: Any) -> int:
+def clear_fold_results(candidate_id: Any, *, keep_result_id: Any = None) -> int:
     """删掉该候选**已存在的样本外折行**，返回删掉的**折行**条数（D18 的幂等键落点）。
 
     判据只有一条：`candidate_id` 非空即为一折。**不解析 `metrics`** —— 那是脆的：
     一行若因任何原因没写上 `window_role` 标记，按 metrics 判就会变成永远清不掉的
     孤儿，而「同一层重复触发」正是靠清理来收敛的。
 
-    这条判据成立的前提是**候选主行不带 `candidate_id`**（它是 L1 的产物，由
-    `in_sample_result_id` 显式指认，不是「一折」）。主行因此天然免疫，而不是靠一个
-    可能漏写的标记来保护。
+    `keep_result_id` 是**必须显式排除**的那一行：候选主行（样本内行）由调用方传进来，
+    它完全可能也带着同一个 `candidate_id`（对调用方来说那是最自然的做法）。不排除
+    它，一次重跑就会先删掉自己赖以取 `is_sharpe` 的那一行，随后 `DoesNotExist`
+    崩在半路、聚合结论也没写回去——样本内证据就这么没了。
 
-    **返回值刻意不是 `QuerySet.delete()` 的返回**：那个数是「本次删掉的全部对象」，
-    含级联删除的 `BacktestTrade` 行（一行回测有几十笔成交，于是「删了 5 折」会报成
-    几百）。返回值是给人看的日志与幂等断言用的，必须就是折数；所以要显式数一遍再删。
+    **不假设主行「结构上不带 candidate_id」**：那是对调用方的假设，不是保证。
     """
     from apps.backtest.models import BacktestResult
 
     if not candidate_id:
         return 0
     queryset = BacktestResult.objects.filter(candidate_id=candidate_id)
+    if keep_result_id:
+        queryset = queryset.exclude(id=keep_result_id)
     fold_count = queryset.count()
     queryset.delete()
     return fold_count
@@ -232,6 +234,89 @@ def _default_fold_executor(
     return {**stats, "data_source": source_stats}
 
 
+def _require_candidate_id(candidate_id: Any) -> str:
+    """候选分组键必须是**非空、可规范化的 UUID**（B2 的修复）。
+
+    为什么不能只是「非空」：`clear_fold_results` 的判据是 `candidate_id` 非空即为一折，
+    而 Django 的 `filter(candidate_id=None)` 是 `IS NULL`——放一个空值进来，清理会
+    一次删光所有**不属于任何候选**的行（历史回测、样本内行……）。所以空值不是
+    「少写了个参数」，它是一条指向全表删除的路径。
+
+    规范化成 `str(uuid)` 还有第二个好处：写进列与写进 `metrics` 的字符串逐字一致，
+    后续按 `metrics["walk_forward"]["candidate_id"]` 反查不会因为大小写/连字符写法
+    不同而查不到。
+    """
+    if candidate_id is None or candidate_id == "":
+        raise ValueError(
+            "candidate_id 必填且不能为空——空值会让 clear_fold_results 的 "
+            "`filter(candidate_id=None)` 命中「所有不属任何候选的行」"
+        )
+    try:
+        return str(uuid.UUID(str(candidate_id)))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise ValueError(f"candidate_id 必须是 UUID，当前 {candidate_id!r}") from exc
+
+
+def _validate_wiring(
+    *,
+    main_row: Any,
+    main_start: date,
+    main_end: date,
+    plan: FoldPlan,
+    symbol: str,
+    timeframe: str,
+    is_perp: bool,
+) -> None:
+    """调用方把行/区间接错了就**当场炸**（B1 / B3 / B4 的修复）。
+
+    这里抛的都不是「数据不足」——那是结论；这些是**接线错误**，它们共同的特征是：
+    接错了照样能跑出一个 `data_sufficient=True` 且像模像样的 `decay_pct`，于是错误
+    变成一条通过记录。宁可炸在推进任务里，也不要让漏斗放行一条口径错乱的候选。
+
+    三件事：
+
+    1. **主行必须落在样本内区**（`main_end <= plan.in_sample_end`）。主行的
+       `sharpe_ratio` 是衰减的**分母**；若那一行覆盖了整个评估窗口（含各折的样本外
+       段），分母就混进了样本外的表现、被拉向样本外，衰减被系统性低估——真值 30%
+       （应拦下）会算成 ~25.5%（放行）。
+    2. **主行不得删**：它带 `candidate_id` 是合法的（调用方最自然的做法），
+       清理阶段已用 `keep_result_id` 排除它。
+    3. **行与折必须同标的同周期**（B4）：主行 `BTC/USDT:USDT`/`1h` 而各折跑
+       `ETH/USDT`/`15m`，衰减就是在比两个不同的东西——照旧 `data_sufficient=True`。
+       永续口径同理：主行成本里有资金费率、而调用方按现货（`is_perp=False`）跑折，
+       同样是口径分叉。
+    """
+    if main_end > plan.in_sample_end:
+        raise ValueError(
+            f"样本内行 {main_row.id} 的区间 [{main_start}, {main_end}] 越过了样本内区"
+            f"右界 {plan.in_sample_end}——它的 sharpe 是衰减的**分母**，覆盖到样本外"
+            "会让衰减被系统性低估（真值 30% 会算成 ~25.5% 从而错误放行）。"
+            "L1 的样本内回测应只跑 [evaluation_start, plan_folds(...).in_sample_end)"
+        )
+    if main_start < plan.start_date:
+        raise ValueError(
+            f"样本内行 {main_row.id} 的起点 {main_start} 早于评估窗口起点 "
+            f"{plan.start_date}——两者不是同一个候选的窗口"
+        )
+    if main_row.symbol != symbol:
+        raise ValueError(
+            f"行与折的标的不一致：主行 {main_row.symbol!r} vs 本次 {symbol!r}"
+            "——衰减会在两个不同标的上比较"
+        )
+    if main_row.timeframe != timeframe:
+        raise ValueError(
+            f"行与折的周期不一致：主行 {main_row.timeframe!r} vs 本次 {timeframe!r}"
+            "——两个口径的夏普不可比（年化系数不同）"
+        )
+    if not is_perp and float((main_row.cost_detail or {}).get("funding") or 0.0) != 0.0:
+        # 主行计了资金费率 → 它是按永续跑的；本次却声明现货。成本模型分叉，
+        # 衰减比较的是两套成本。
+        raise ValueError(
+            f"成本口径分叉：主行 {main_row.id} 计了资金费率（永续），而本次 is_perp=False"
+            "（现货）——两套成本模型下的夏普不可比"
+        )
+
+
 def run_walk_forward(
     *,
     candidate_id: Any,
@@ -239,6 +324,8 @@ def run_walk_forward(
     symbol: str,
     timeframe: str,
     in_sample_result_id: Any,
+    evaluation_start: date,
+    evaluation_end: date,
     initial_capital: Decimal | None = None,
     parameters: dict | None = None,
     strategy_id: str | None = None,
@@ -253,24 +340,43 @@ def run_walk_forward(
     """跑该候选的样本外分折，并把聚合结论写回候选主行（同步外壳，见模块 docstring 第 2 条）。
 
     返回 `metrics["walk_forward"]` 的那份载荷（同时已落库）。**不抛**「数据不足」类
-    异常——那些是结论；只有配置非法或主行区间解析不出才抛。
+    异常——那些是结论；配置非法、或调用方把行/区间接错了才抛。
 
-    `fold_executor` 可注入（测试用假执行器断言接线；真实路径用默认执行器）。
+    `evaluation_start` / `evaluation_end` 是**候选的完整评估窗口**（`#22` 从候选那里
+    取），分折几何由它推出。**刻意不从 `in_sample_result_id` 那一行反推**：那一行是
+    **样本内**行，它的区间只是完整窗口的前一段。拿它当完整窗口会把折切在样本内区里、
+    真正要测的那段一次都不跑——而它看起来一切正常（`data_sufficient=True` + 一个
+    像模像样的 `decay_pct`）。
+
+    `in_sample_result_id` 指向 L1 的样本内行：提供 `is_sharpe`（衰减分母）、参数、
+    策略与初始资金。它**必须落在样本内区**（`end_date <= plan.in_sample_end`），
+    否则分母里混进了样本外自己的表现、衰减被系统性低估——见 `_validate_wiring`。
     """
     from django.db import close_old_connections
 
     from apps.backtest.models import BacktestResult
 
+    candidate_uuid = _require_candidate_id(candidate_id)
     main_row = BacktestResult.objects.get(id=in_sample_result_id)
-    start = _parse_date(main_row.start_date)
-    end = _parse_date(main_row.end_date)
-    if start is None or end is None:
+    main_start = _parse_date(main_row.start_date)
+    main_end = _parse_date(main_row.end_date)
+    if main_start is None or main_end is None:
         raise ValueError(
             f"候选主行 {in_sample_result_id} 的区间无法解析："
             f"start_date={main_row.start_date!r} end_date={main_row.end_date!r}"
         )
 
-    plan = fold_plan or plan_folds(start, end, config=config)
+    plan = fold_plan or plan_folds(evaluation_start, evaluation_end, config=config)
+    _validate_wiring(
+        main_row=main_row,
+        main_start=main_start,
+        main_end=main_end,
+        plan=plan,
+        symbol=symbol,
+        timeframe=timeframe,
+        is_perp=is_perp,
+    )
+
     executor = fold_executor or _default_fold_executor
     capital = (
         initial_capital
@@ -286,11 +392,13 @@ def run_walk_forward(
     main_sharpe = main_row.sharpe_ratio
 
     if clear_existing:
-        removed = clear_fold_results(candidate_id)
+        # 把主行排除在清理之外：它可能也带着同一个 `candidate_id`（对调用方来说是
+        # 最自然的做法），而删掉它就等于删掉样本内证据——本函数随后还要写它。
+        removed = clear_fold_results(candidate_uuid, keep_result_id=in_sample_result_id)
         if removed:
             logger.info(
                 "[WalkForward] candidate=%s cleared %d stale fold rows",
-                candidate_id,
+                candidate_uuid,
                 removed,
             )
 
@@ -298,11 +406,11 @@ def run_walk_forward(
         # 切不出折：不跑任何回测，直接落「证据不足」（漏斗下限 = 什么都不发生）。
         logger.warning(
             "[WalkForward] candidate=%s insufficient geometry: %s",
-            candidate_id,
+            candidate_uuid,
             plan.reason,
         )
         payload = aggregate_walk_forward(
-            candidate_id=candidate_id,
+            candidate_id=candidate_uuid,
             is_sharpe=main_sharpe,
             plan=plan,
             fold_rows=(),
@@ -334,7 +442,7 @@ def run_walk_forward(
         except Exception as exc:  # noqa: BLE001 — 一折失败不该炸掉整轮分折
             logger.warning(
                 "[WalkForward] candidate=%s fold=%d raised: %s",
-                candidate_id,
+                candidate_uuid,
                 window.fold_index,
                 exc,
             )
@@ -361,14 +469,14 @@ def run_walk_forward(
             close_old_connections()
             tag_fold_result(
                 fold_row["result_id"],
-                candidate_id=candidate_id,
+                candidate_id=candidate_uuid,
                 # D4 逐字要求折行载荷含 `candidate_id` / `fold_index` / `window_role`
                 # 三个键。`candidate_id` 在列上已有一份，这里再写进 `metrics` 是刻意的
                 # 冗余：载荷要能**独立**回答「这一行属于谁」，不必回查列（导出/审计时
-                # 列未必被带上）。
+                # 列未必被带上）。值用规范化后的字符串，与列逐字一致，便于反查。
                 fold_payload={
                     **fold_row,
-                    "candidate_id": str(candidate_id) if candidate_id else None,
+                    "candidate_id": candidate_uuid,
                     "split_mode": plan.split_mode,
                 },
             )
@@ -376,7 +484,7 @@ def run_walk_forward(
 
     close_old_connections()
     payload = aggregate_walk_forward(
-        candidate_id=candidate_id,
+        candidate_id=candidate_uuid,
         is_sharpe=main_row.sharpe_ratio,
         plan=plan,
         fold_rows=fold_rows,
@@ -385,7 +493,7 @@ def run_walk_forward(
     _write_metrics_key(in_sample_result_id, payload)
     logger.info(
         "[WalkForward] candidate=%s folds=%d sufficient=%s decay_pct=%s",
-        candidate_id,
+        candidate_uuid,
         len(fold_rows),
         payload["data_sufficient"],
         payload["decay_pct"],

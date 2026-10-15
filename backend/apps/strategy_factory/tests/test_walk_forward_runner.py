@@ -48,9 +48,14 @@ STEP_MS = 3_600_000
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 #: 100 天区间 / 5 折 / 样本外 20% → 每折 4 天，样本内 80 天（与纯层用例同一组几何）。
+#:
+#: `IN_SAMPLE_END` 是**样本内区的右界**，由 `plan_folds` 从完整窗口推出：
+#: 100 天 × (1 − 0.2) = 80 天 → 2026-03-22。候选主行（L1 样本内行）应当止于此，
+#: 而**不是**止于 `END_DATE`——那是整个评估窗口的右界。
 RANGE_DAYS = 100
 START_DATE = date(2026, 1, 1)
 END_DATE = date(2026, 4, 11)
+IN_SAMPLE_END = date(2026, 3, 22)
 
 STRATEGY_NAME = "wf_probe"
 
@@ -123,20 +128,35 @@ def _seed_days(start: date, days: int) -> None:
     KlineRecord.objects.bulk_create(rows)
 
 
-def _main_row(strategy: Strategy, sharpe: float | None = 2.0) -> BacktestResult:
-    """候选主行（= L1 样本内那一次回测的产物）。"""
+def _main_row(
+    strategy: Strategy,
+    sharpe: float | None = 2.0,
+    *,
+    start: date = START_DATE,
+    end: date = IN_SAMPLE_END,
+    symbol: str = SYMBOL,
+    timeframe: str = TF,
+    funding: float = 0.0,
+) -> BacktestResult:
+    """候选主行（= L1 **样本内**那一次回测的产物）。
+
+    默认区间是 `[START_DATE, IN_SAMPLE_END)`——**样本内区**，不是整个评估窗口。
+    它提供衰减的分母（`is_sharpe`），必须只覆盖样本内那一段；覆盖整个窗口会让
+    分母混进样本外的表现（见 `_validate_wiring`）。
+    """
     return BacktestResult.objects.create(
         strategy=strategy,
-        symbol=SYMBOL,
-        timeframe=TF,
-        start_date=START_DATE,
-        end_date=END_DATE,
+        symbol=symbol,
+        timeframe=timeframe,
+        start_date=start,
+        end_date=end,
         initial_capital=Decimal("10000"),
         final_capital=Decimal("11000"),
         total_return_pct=10.0,
         sharpe_ratio=sharpe,
         total_trades=120,
         parameters={"fast": 7, "slow": 25},
+        cost_detail={"commission": 1.0, "slippage": 1.0, "funding": funding},
     )
 
 
@@ -478,20 +498,34 @@ def test_reverse_control_empty_db_with_unreachable_exchange_does_not_pass():
 
 
 def test_insufficient_geometry_runs_no_backtest_at_all():
-    """区间切不出折时**一次回测都不跑**（漏斗下限 = 什么都不发生）。"""
+    """评估窗口切不出折时**一次回测都不跑**（漏斗下限 = 什么都不发生）。
+
+    判别力说明：上一版这条用例是**空转**的——它靠缩短主行区间来制造「切不出折」，
+    而缩短主行现在会先被 `_validate_wiring` 判成接线错误。更根本的是：
+    `plan.windows == ()` 时循环体本来就不会跑，所以「executor 没被调用」无论守卫
+    在不在都成立。这里改成**显式注入一个切不出折的 plan**，并同时断言
+    `plan.windows` 为空——这样「因为窗口是空的所以没跑」与「守卫拦住了」两件事
+    被分开表达，守卫被删掉时 `data_sufficient` 那条断言会立刻转红。
+    """
     strategy = _strategy()
     candidate_id = uuid.uuid4()
-    main = _main_row(strategy)
-    main.end_date = date(2026, 1, 2)  # 1 天区间，切不出 5 折
-    main.save(update_fields=["end_date"])
+    # 1 天的**评估窗口**（不是 1 天的主行）：切不出 5 折。主行与之自洽
+    # （`main_end == plan.in_sample_end`），这样本条测的纯粹是「几何不足」，
+    # 不会先被接线校验拦下。
+    short_start, short_end = date(2026, 1, 1), date(2026, 1, 2)
+    short_plan = plan_folds(short_start, short_end)
+    assert short_plan.data_sufficient is False
+    assert short_plan.windows == ()
+    main = _main_row(strategy, start=short_start, end=short_plan.in_sample_end)
     recorded: list[dict] = []
     executor = _fake_executor([1.4] * 5, strategy, candidate_id, recorder=recorded)
 
-    payload = _run(main, candidate_id, executor)
+    payload = _run(main, candidate_id, executor, fold_plan=short_plan)
 
     assert recorded == [], "切不出折就不该跑任何一折"
     assert payload["data_sufficient"] is False
     assert payload["decay_pct"] is None
+    assert payload["insufficient_reason"] is not None
     assert BacktestResult.objects.filter(candidate_id=candidate_id).count() == 0
 
 
@@ -734,14 +768,270 @@ def test_plan_exposes_the_in_sample_end_that_l1_should_stop_at():
 
 
 def _run(main: BacktestResult, candidate_id, executor, **overrides):
-    """跑一次分折（同步外壳；统一从主行取参数，与 #22 的调用形状一致）。"""
-    return run_walk_forward(
-        candidate_id=candidate_id,
-        strategy_name=STRATEGY_NAME,
-        symbol=SYMBOL,
-        timeframe=TF,
-        in_sample_result_id=main.id,
-        parameters=main.parameters or {},
-        fold_executor=executor,
-        **overrides,
+    """跑一次分折（同步外壳，与 #22 的调用形状一致）。
+
+    **刻意不传 `parameters`**：让「参数从候选主行继承」这条回退路径成为默认，
+    否则每条用例都在断言调用方自己传的实参，而继承逻辑坏掉也测不出来
+    （`test_parameters_are_inherited_from_the_main_row` 钉的就是它）。
+
+    **完整评估窗口显式传入**：它不等于主行的区间（主行只是样本内那一段）。
+    """
+    kwargs = {
+        "candidate_id": candidate_id,
+        "strategy_name": STRATEGY_NAME,
+        "symbol": SYMBOL,
+        "timeframe": TF,
+        "in_sample_result_id": main.id,
+        "evaluation_start": START_DATE,
+        "evaluation_end": END_DATE,
+        "fold_executor": executor,
+    }
+    kwargs.update(overrides)
+    return run_walk_forward(**kwargs)
+
+
+# --------------------------------------------------------------------------- #
+# 独立对抗式复核找出的接线缺陷（B1–B4）：共同特征是「接错了照样放行」
+#
+# 这几条都不是「数据不足」类的结论，而是**接线错误**——它们的危险恰恰在于：不修也
+# 能跑出一个 `data_sufficient=True` 且像模像样的 `decay_pct`，于是错误变成一条通过
+# 记录。所以每一条都断言**当场炸**，而不是断言某个字段的值。
+# --------------------------------------------------------------------------- #
+
+
+def test_B1_full_range_in_sample_row_is_rejected():
+    """B1(a)：样本内行覆盖了整个评估窗口 → 分母被样本外污染 → 必须炸。
+
+    这是本票最危险的一条：主行 `sharpe_ratio` 是衰减的**分母**，而它若覆盖到样本外
+    各折那一段，分母就被拉向样本外，衰减被系统性低估。实测真值 30%（应拦下）会算成
+    ~25.5%（放行）——一个完全静默的 fail-open。
+    """
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy, start=START_DATE, end=END_DATE)  # 整窗口，越界
+    executor = _fake_executor([1.4] * 5, strategy, candidate_id)
+
+    with pytest.raises(ValueError, match="越过了样本内区右界"):
+        _run(main, candidate_id, executor)
+
+
+def test_B1_in_sample_row_ending_exactly_at_the_boundary_is_accepted():
+    """边界：`main_end == plan.in_sample_end` 是**合法**的（样本内区右开）。
+
+    反向对照，证明上一条不是「凡长区间一律拒绝」的空转断言。
+    """
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy, end=IN_SAMPLE_END)
+    executor = _fake_executor([1.4] * 5, strategy, candidate_id)
+
+    payload = _run(main, candidate_id, executor)
+
+    assert payload["data_sufficient"] is True
+    assert payload["decay_pct"] == 30.0
+
+
+def test_B1_geometry_comes_from_the_evaluation_window_not_the_main_row():
+    """B1(b)：几何必须由**完整评估窗口**推出，不能由主行反推。
+
+    反推的后果：折被切在样本内区里，真正要测的样本外一段一次都没跑——而结果看起来
+    完全正常（`data_sufficient=True` + 一个像模像样的 `decay_pct`）。这条断言各折
+    实际区间落在**真正的样本外区**内。
+    """
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy, end=IN_SAMPLE_END)
+    recorded: list[dict] = []
+    executor = _fake_executor([1.4] * 5, strategy, candidate_id, recorder=recorded)
+
+    _run(main, candidate_id, executor)
+
+    assert len(recorded) == 5
+    for call in recorded:
+        assert date.fromisoformat(call["start_date"]) >= IN_SAMPLE_END, (
+            "每折都必须落在样本外区（>= 样本内区右界）"
+        )
+    assert recorded[0]["start_date"] == IN_SAMPLE_END.isoformat()
+    assert recorded[-1]["end_date"] == END_DATE.isoformat()
+
+
+def test_B2_empty_candidate_id_is_rejected_before_it_can_delete_anything():
+    """B2：`candidate_id` 为空 → 炸，且报的是**空值**那条原因。
+
+    空值不是「少写个参数」：`clear_fold_results` 的判据是「非空即为一折」，而
+    `filter(candidate_id=None)` 在 Django 里是 `IS NULL`——放空值进去会一次删光所有
+    **不属于任何候选**的行（历史回测、样本内行……）。它是一条指向全表删除的路径。
+
+    **必须匹配空值专属的原因**：先前写成宽泛的 `match="candidate_id"`，于是把非空
+    校验整个删掉后测试照样通过——因为后面的 `uuid.UUID(str(None))` 也会抛
+    `ValueError`，而消息里同样含 `candidate_id`。那测的是「最终会抛」，不是「空值在
+    走到删除路径之前就被挡住」。
+    """
+    strategy = _strategy()
+    main = _main_row(strategy)
+    executor = _fake_executor([1.4] * 5, strategy, uuid.uuid4())
+
+    for bad in (None, ""):
+        with pytest.raises(ValueError, match="不能为空"):
+            _run(main, bad, executor)
+
+
+def test_B2_non_uuid_candidate_id_is_rejected():
+    strategy = _strategy()
+    main = _main_row(strategy)
+    executor = _fake_executor([1.4] * 5, strategy, uuid.uuid4())
+
+    with pytest.raises(ValueError, match="必须是 UUID"):
+        _run(main, "not-a-uuid", executor)
+
+
+def test_B3_main_row_carrying_the_candidate_id_survives_rerun():
+    """B3：主行带 `candidate_id` 是合法的，且**必须活过重跑**。
+
+    调用方把样本内行也标上它所属的候选，是最自然的做法。上一版假设它「结构上不带」，
+    于是清理阶段把它删掉、随后 `DoesNotExist` 崩在半路，样本内证据就这么没了。
+    """
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy)
+    main.candidate_id = candidate_id
+    main.save(update_fields=["candidate_id"])
+
+    _run(main, candidate_id, _fake_executor([1.4] * 5, strategy, candidate_id))
+    assert BacktestResult.objects.filter(id=main.id).exists(), "第一次跑不得删掉主行"
+
+    # 重跑（清理阶段会面对一个带 candidate_id 的主行）
+    payload = _run(
+        main, candidate_id, _fake_executor([1.4] * 5, strategy, candidate_id)
     )
+
+    assert BacktestResult.objects.filter(id=main.id).exists(), "重跑也不得删掉主行"
+    main.refresh_from_db()
+    assert WALK_FORWARD_METRICS_KEY in (main.metrics or {})
+    assert payload["decay_pct"] == 30.0
+
+
+def test_B4_symbol_mismatch_is_rejected():
+    """B4：主行与各折必须是同一个标的——否则衰减在比两个不同的东西。"""
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy, symbol=SYMBOL)
+    executor = _fake_executor([1.4] * 5, strategy, candidate_id)
+
+    with pytest.raises(ValueError, match="标的不一致"):
+        _run(main, candidate_id, executor, symbol="ETH/USDT")
+
+
+def test_B4_timeframe_mismatch_is_rejected():
+    """B4：周期不同 → 年化系数不同 → 夏普不可比。"""
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy, timeframe=TF)
+    executor = _fake_executor([1.4] * 5, strategy, candidate_id)
+
+    with pytest.raises(ValueError, match="周期不一致"):
+        _run(main, candidate_id, executor, timeframe="15m")
+
+
+def test_B4_perp_in_sample_row_with_spot_folds_is_rejected():
+    """B4：主行计了资金费率（永续成本口径），而本次按现货跑 → 成本模型分叉。"""
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy, funding=12.5)  # 样本内那一行是永续
+    executor = _fake_executor([1.4] * 5, strategy, candidate_id)
+
+    with pytest.raises(ValueError, match="成本口径分叉"):
+        _run(main, candidate_id, executor, is_perp=False)
+
+
+def test_B4_perp_in_sample_row_with_perp_folds_is_accepted():
+    """反向对照：两边都是永续 → 合法，证明上一条不是「凡有资金费率一律拒绝」。"""
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy, funding=12.5)
+    executor = _fake_executor([1.4] * 5, strategy, candidate_id)
+
+    payload = _run(main, candidate_id, executor, is_perp=True)
+
+    assert payload["data_sufficient"] is True
+
+
+def test_W3_fold_payload_records_the_in_sample_boundary_it_was_compared_against():
+    """W3：折行载荷里的样本内边界必须是真的边界，不是随手写的另一个日期。
+
+    上一个版本把 `in_sample_end` 写成了 `window.oos_end`（变异存活），因为没有任何
+    用例看它。它记错就意味着事后复核时「这一折是跟哪一段样本内比的」是错的。
+    """
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy)
+    executor = _fake_executor([1.4] * 5, strategy, candidate_id)
+
+    _run(main, candidate_id, executor)
+
+    for row in BacktestResult.objects.filter(candidate_id=candidate_id):
+        entry = row.metrics[WALK_FORWARD_METRICS_KEY]
+        assert entry["in_sample_end"] == entry["start_date"], (
+            "样本内参照窗口的右界必须正是该折的起点（口径 4）"
+        )
+        assert entry["in_sample_start"] < entry["in_sample_end"]
+
+
+def test_W4_an_errored_fold_never_contributes_a_sharpe_even_if_one_is_present():
+    """W4（守卫 2）：带 `error` 的折**绝不能**贡献夏普——哪怕执行器同时给了夏普。
+
+    上一版这条纪律由两个守卫共同承担（抛错时置 `error`；见 `error` 就置
+    `sharpe_ratio=None`），于是**每一个单独删掉都不转红**：真实错误 dict 里本来就没有
+    `sharpe_ratio` 键，读出来自然是 `None`，把守卫 2 删掉也看不出差别。
+
+    这里直接喂一个「既报错、又带着夏普」的返回（模拟行为不端的执行器），把守卫 2
+    单独钉住：若它被删，这个 1.5 会被当成真实证据，衰减算成 25%（放行）。
+    """
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy)
+
+    def _lying(**kwargs):
+        # 报错，却同时塞了一个诱人的夏普
+        return {"error": "引擎中途炸了", "sharpe_ratio": 1.5, "total_trades": 40}
+
+    payload = _run(main, candidate_id, _lying)
+
+    assert payload["data_sufficient"] is False
+    assert payload["decay_pct"] is None, "带 error 的折不得参与衰减"
+    for entry in payload["folds"]:
+        assert entry["sharpe_ratio"] is None
+
+
+def test_W4_a_raising_fold_records_its_error_for_attribution():
+    """W4（守卫 1）：折抛错时必须**记下原因**，否则失败不可归因（D20「失败可见」）。"""
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy)
+
+    def _boom(**kwargs):
+        raise RuntimeError("引擎炸了")
+
+    payload = _run(main, candidate_id, _boom)
+
+    assert payload["data_sufficient"] is False
+    assert len(payload["folds"]) == 5
+    for entry in payload["folds"]:
+        assert entry["sharpe_ratio"] is None
+        assert entry.get("error"), "每一折都要留下失败原因"
+
+
+def test_W4_one_lying_fold_makes_the_whole_verdict_insufficient():
+    """W4 的组合形态：五个折都报错却都带着 1.5 时，绝不能算出 25% 放行。"""
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy)
+
+    def _lying(**kwargs):
+        return {"error": "boom", "sharpe_ratio": 1.5, "total_trades": 40}
+
+    payload = _run(main, candidate_id, _lying)
+
+    # 若两个守卫都没了，这里会是 True + 25.0（恰好低于 30 门槛 → 放行）
+    assert payload["data_sufficient"] is False
+    assert payload["decay_pct"] is None
