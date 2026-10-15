@@ -26,6 +26,7 @@ from apps.backtest.models import BacktestResult
 from apps.datasource.models import KlineRecord
 from apps.strategy_engine.base import BaseStrategy
 from apps.strategy_engine.registry import StrategyRegistry
+from apps.strategy_engine.runner import StrategyRunner
 from apps.strategy_factory.walk_forward import (
     WALK_FORWARD_METRICS_KEY,
     WalkForwardWindowRole,
@@ -289,6 +290,93 @@ def test_parameters_are_inherited_from_the_main_row():
         assert call["parameters"] == {"fast": 7, "slow": 25}
         assert call["strategy_id"] == str(strategy.id)
         assert call["initial_capital"] == Decimal("10000")
+
+
+def test_perpetual_folds_include_funding_cost_like_the_in_sample_row():
+    """永续分折必须带上历史资金费率，否则衰减是「含费率」对「不含费率」的比较。
+
+    样本内那一行由 `run_backtest_task` 跑，`is_perp=True` 时注入资金费率回放（P0）。
+    若各折不注入，分母（样本内成本）被抬高、分子（样本外）没有，衰减看起来更小、
+    更容易放行——用户故事 13 要的「每层复用 P0 成本模型、口径一致」就是防这个。
+
+    用**真实**默认执行器（不注入假执行器）：这条断言的整个价值在于「真实路径确实
+    把费率表递进了引擎」，用假执行器会把它变成一句空话。
+    """
+    from apps.backtest.models import FundingRateRecord
+
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy)
+    _seed_days(START_DATE, RANGE_DAYS)
+    _register_probe()
+    # 铺资金费率：区间内每 8h 一条。没有它，`load_funding_rates` 会返回空表，
+    # 「注入与否」就判别不出来。
+    FundingRateRecord.objects.bulk_create(
+        [
+            FundingRateRecord(
+                symbol=SYMBOL,
+                funding_time=datetime(2026, 1, 1, tzinfo=timezone.utc)
+                + timedelta(hours=8 * i),
+                rate=0.0005,
+            )
+            for i in range(RANGE_DAYS * 3)
+        ]
+    )
+    captured: list[dict] = []
+    real_run_backtest = StrategyRunner.run_backtest
+
+    async def _spy(self, **kwargs):
+        captured.append(kwargs)
+        return await real_run_backtest(self, **kwargs)
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("apps.backtest.tasks.build_exchange", _ExchangeGuard())
+        )
+        stack.enter_context(
+            patch("apps.strategy_engine.registry.StrategyRegistry.discover", lambda: [])
+        )
+        stack.enter_context(patch.object(StrategyRunner, "run_backtest", _spy))
+        payload = _run(main, candidate_id, None, is_perp=True, include_funding=True)
+
+    assert payload["data_sufficient"] is True, payload["insufficient_reason"]
+    assert len(captured) == 5
+    for call in captured:
+        assert call["is_perp"] is True
+        assert call["funding_rates"], (
+            "永续分折的每一折都必须带上资金费率——空表意味着衰减在拿"
+            "「含费率的样本内」比「不含费率的样本外」"
+        )
+
+
+def test_spot_folds_do_not_load_funding_rates():
+    """非永续（或显式关掉）时不查资金费率表——省一次全表扫描，且口径正确。"""
+    strategy = _strategy()
+    candidate_id = uuid.uuid4()
+    main = _main_row(strategy)
+    _seed_days(START_DATE, RANGE_DAYS)
+    _register_probe()
+    captured: list[dict] = []
+    real_run_backtest = StrategyRunner.run_backtest
+
+    async def _spy(self, **kwargs):
+        captured.append(kwargs)
+        return await real_run_backtest(self, **kwargs)
+
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("apps.backtest.tasks.build_exchange", _ExchangeGuard())
+        )
+        stack.enter_context(
+            patch("apps.strategy_engine.registry.StrategyRegistry.discover", lambda: [])
+        )
+        stack.enter_context(patch.object(StrategyRunner, "run_backtest", _spy))
+        _run(main, candidate_id, None, is_perp=False, include_funding=True)
+
+    assert len(captured) == 5
+    for call in captured:
+        assert call["is_perp"] is False
+        assert call["funding_rates"] == {}
 
 
 def test_folds_are_contiguous_and_cover_the_oos_region_end_to_end():
@@ -577,7 +665,7 @@ def test_plan_exposes_the_in_sample_end_that_l1_should_stop_at():
     assert plan.in_sample_end == date(2026, 3, 22)
 
 
-def _run(main: BacktestResult, candidate_id, executor):
+def _run(main: BacktestResult, candidate_id, executor, **overrides):
     """跑一次分折（同步外壳；统一从主行取参数，与 #22 的调用形状一致）。"""
     return run_walk_forward(
         candidate_id=candidate_id,
@@ -587,4 +675,5 @@ def _run(main: BacktestResult, candidate_id, executor):
         in_sample_result_id=main.id,
         parameters=main.parameters or {},
         fold_executor=executor,
+        **overrides,
     )

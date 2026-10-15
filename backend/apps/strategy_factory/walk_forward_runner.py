@@ -150,12 +150,22 @@ def _default_fold_executor(
     """一折的默认执行：既有取数（库优先）→ 既有回测入口（D15）。
 
     同步外壳，内部自建事件循环驱动 async 回测（见模块 docstring 第 2 条）。形状与
-    `run_backtest_task` 完全一致——包括在长时间回测后刷新连接、以及关闭 Redis 等
-    异步资源（否则 `__del__` 会在循环关闭后报错）。
+    `run_backtest_task` 完全一致——包括在长时间回测后刷新连接、关闭 Redis 等异步资源
+    （否则 `__del__` 会在循环关闭后报错）、以及**注入资金费率**。
+
+    **为什么必须注入资金费率**：`is_perp=True` 时成本模型（P0）含历史资金费率回放。
+    样本内那一行是 `run_backtest_task` 跑的、带资金费率；若各折不带，衰减比较的就是
+    「含资金费率的样本内」对「不含资金费率的样本外」——分母被系统性抬高，衰减看起来
+    更小、更容易放行。这正是用户故事 13「每一层判定都复用 P0 的成本模型…口径一致」
+    要防的事，也是一次静默的口径分叉。
     """
     from django.db import close_old_connections
 
-    from apps.backtest.tasks import _close_async_resources, _load_ohlcv_for_backtest
+    from apps.backtest.tasks import (
+        _close_async_resources,
+        _load_ohlcv_for_backtest,
+        load_funding_rates,
+    )
     from apps.strategy_engine.runner import StrategyRunner
 
     # 取数是同步的、且内部自己 asyncio.run：必须在**没有**运行中循环的上下文里调它。
@@ -167,6 +177,11 @@ def _default_fold_executor(
         return {
             "error": f"未能获取 {symbol} {timeframe} 在 {start_date}~{end_date} 的K线数据"
         }
+
+    # 与 `run_backtest_task` 同一条件、同一函数：永续 + 计入资金费率时才组装费率表。
+    funding_rates = (
+        load_funding_rates(symbol, ohlcv_data) if (is_perp and include_funding) else {}
+    )
 
     runner = StrategyRunner()
     loop = asyncio.new_event_loop()
@@ -184,6 +199,7 @@ def _default_fold_executor(
                 strategy_id=strategy_id,
                 commission_rate=Decimal("0.001"),
                 is_perp=is_perp,
+                funding_rates=funding_rates,
             )
         )
     finally:
