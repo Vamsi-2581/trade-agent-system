@@ -1,0 +1,41 @@
+# Ruff 配置。
+#
+# 为什么要显式配 per-file-ignores，而不是改代码：
+#
+# E402（module-import-not-at-top-of-file）：这些文件里有 **运行时硬约束**——
+# 必须先在模块级 `os.environ.setdefault("DJANGO_SETTINGS_MODULE", ...)` 或
+# `django.setup()`，之后才能 import Django 依赖模块，否则直接
+# `ImproperlyConfigured` / `AppRegistryNotReady`。import 不能上移，
+# 所以豁免而不是改代码。`apps/` 下没有这类约束（那里已是零违规）。
+#
+# E741（ambiguous-variable-name）：`l` 是 OHLC 行情的领域惯用语，
+# `for ts, o, h, l, c, v in ohlcv` 改名反而降低可读性。
+#
+# F405（undefined-local-with-import-star-usage）：settings 模块故意用
+# `from .base import *` 做分层覆盖，`BASE_DIR` 等符号来自 star import，
+# 是 Django settings 的标准分层写法。
+#
+# 注意：`ruff check apps/`（CI 的 l1-semantic 实际跑的路径）本来就全绿，
+# 本文件管的是它之外的仓库根脚本与 scripts/。
+
+[lint]
+# 只关注 pycodestyle 的 E4/E7/E9 与 pyflakes 的 F —— 与仓库历史口径一致
+# （不清 E501 行长：`ruff format` 已统一格式，行长由它把关，不另行手排）。
+select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+# 环境变量必须先于 Django import 设置
+"celery_app.py" = ["E402"]
+"core/asgi.py" = ["E402"]
+"core/settings/test.py" = ["E402", "F405"]
+"conftest.py" = ["E402"]
+"check_progress.py" = ["E402"]
+"lark_e2e.py" = ["E402"]
+"run_hft_backtest.py" = ["E402"]
+"debug_signal_trigger.py" = ["E402"]
+"scripts/debug_signal_trigger.py" = ["E402"]
+"scripts/smoke_box_breakout_volume.py" = ["E402"]
+# 分层 settings 的 star-import 惯用法
+"core/settings/dev.py" = ["F405"]
+# OHLC 领域惯用语
+"scripts/run_box_4h_backtest.py" = ["E741"]

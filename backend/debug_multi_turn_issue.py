@@ -5,9 +5,8 @@
 """
 
 import asyncio
-import json
 from apps.agent.supervisor import SupervisorAgent
-from apps.agent.base import AgentMessage, AgentResult
+from apps.agent.base import AgentMessage
 from apps.agent.session_manager import get_session_manager, SessionState
 
 

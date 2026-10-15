@@ -5,7 +5,6 @@
 SignalMonitor会先检测这些最小周期信号，触发后再运行完整策略验证。
 """
 
-from apps.strategy_engine.base import BaseStrategy
 
 
 class SignalMonitorMixin:

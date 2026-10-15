@@ -36,7 +36,7 @@ def check_signal_monitors(live_session_id: str) -> list:
         status="active"
     ).select_related("user")
 
-    print(f"\n=== SignalMonitor 检查 ===")
+    print("\n=== SignalMonitor 检查 ===")
     print(f"LiveSession ID: {live_session_id}")
     print(f"活跃监控数: {monitors.count()}")
 
@@ -74,7 +74,7 @@ def check_redis_list(live_session_id: str) -> dict:
     r = redis.from_url(settings.REDIS_URL, decode_responses=True)
     key = f"strategy:validate:{live_session_id}"
 
-    print(f"\n=== Redis List 检查 ===")
+    print("\n=== Redis List 检查 ===")
     print(f"Key: {key}")
 
     # 检查List长度
@@ -87,13 +87,13 @@ def check_redis_list(live_session_id: str) -> dict:
 
     # 查看最新事件（不消费）
     events = r.lrange(key, 0, min(5, length - 1)) if length > 0 else []
-    print(f"事件列表（前5个）:")
+    print("事件列表（前5个）:")
     for i, event_str in enumerate(events):
         try:
             event = json.loads(event_str)
             print(f"  [{i}] {event.get('strategy_name')} {event.get('symbol')}")
             print(f"      trigger_value: {event.get('trigger_value')}")
-        except:
+        except (json.JSONDecodeError, TypeError, AttributeError):
             print(f"  [{i}] {event_str[:100]}")
 
     r.close()
@@ -113,11 +113,11 @@ def check_live_session(live_session_id: str) -> dict:
             "strategy", "exchange_account", "user"
         ).get(pk=live_session_id)
     except LiveSession.DoesNotExist:
-        print(f"\n=== LiveSession 不存在 ===")
+        print("\n=== LiveSession 不存在 ===")
         print(f"Session ID: {live_session_id} 未找到")
         return None
 
-    print(f"\n=== LiveSession 状态 ===")
+    print("\n=== LiveSession 状态 ===")
     print(f"ID: {session.id}")
     print(f"Strategy: {session.strategy.name}")
     print(f"Symbol: {session.symbol}")
@@ -157,7 +157,7 @@ def simulate_trigger_event(live_session_id: str, strategy_name: str, symbol: str
     r.rpush(key, payload)
     r.expire(key, 300)  # 5分钟TTL
 
-    print(f"\n=== 模拟触发事件已发布 ===")
+    print("\n=== 模拟触发事件已发布 ===")
     print(f"Key: {key}")
     print(f"Payload: {payload[:100]}")
 
@@ -172,7 +172,7 @@ def check_live_strategy_runner(live_session_id: str) -> dict:
     fm = FrameManager.get_instance()
     status = fm.status()
 
-    print(f"\n=== FrameManager 状态 ===")
+    print("\n=== FrameManager 状态 ===")
     print(f"Trading: {status['trading']}")
     print(f"Assist: {status['assist']}")
     print(f"RiskGuard: {status['risk_guard']}")

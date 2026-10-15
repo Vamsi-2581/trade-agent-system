@@ -32,11 +32,10 @@ from apps.trading.models import LiveSession
 def check_signal_monitors(live_session_id: str) -> list:
     """检查该live_session的SignalMonitor配置"""
     monitors = SignalMonitor.objects.filter(
-        live_session_id=live_session_id,
-        status="active"
+        live_session_id=live_session_id, status="active"
     ).select_related("user")
 
-    print(f"\n=== SignalMonitor 检查 ===")
+    print("\n=== SignalMonitor 检查 ===")
     print(f"LiveSession ID: {live_session_id}")
     print(f"活跃监控数: {monitors.count()}")
 
@@ -74,7 +73,7 @@ def check_redis_list(live_session_id: str) -> dict:
     r = redis.from_url(settings.REDIS_URL, decode_responses=True)
     key = f"strategy:validate:{live_session_id}"
 
-    print(f"\n=== Redis List 检查 ===")
+    print("\n=== Redis List 检查 ===")
     print(f"Key: {key}")
 
     # 检查List长度
@@ -87,13 +86,13 @@ def check_redis_list(live_session_id: str) -> dict:
 
     # 查看最新事件（不消费）
     events = r.lrange(key, 0, min(5, length - 1)) if length > 0 else []
-    print(f"事件列表（前5个）:")
+    print("事件列表（前5个）:")
     for i, event_str in enumerate(events):
         try:
             event = json.loads(event_str)
             print(f"  [{i}] {event.get('strategy_name')} {event.get('symbol')}")
             print(f"      trigger_value: {event.get('trigger_value')}")
-        except:
+        except (json.JSONDecodeError, TypeError, AttributeError):
             print(f"  [{i}] {event_str[:100]}")
 
     r.close()
@@ -113,11 +112,11 @@ def check_live_session(live_session_id: str) -> dict:
             "strategy", "exchange_account", "user"
         ).get(pk=live_session_id)
     except LiveSession.DoesNotExist:
-        print(f"\n=== LiveSession 不存在 ===")
+        print("\n=== LiveSession 不存在 ===")
         print(f"Session ID: {live_session_id} 未找到")
         return None
 
-    print(f"\n=== LiveSession 状态 ===")
+    print("\n=== LiveSession 状态 ===")
     print(f"ID: {session.id}")
     print(f"Strategy: {session.strategy.name}")
     print(f"Symbol: {session.symbol}")
@@ -139,25 +138,29 @@ def check_live_session(live_session_id: str) -> dict:
     }
 
 
-def simulate_trigger_event(live_session_id: str, strategy_name: str, symbol: str) -> str:
+def simulate_trigger_event(
+    live_session_id: str, strategy_name: str, symbol: str
+) -> str:
     """模拟SignalMonitor触发事件"""
     from django.conf import settings
 
     r = redis.from_url(settings.REDIS_URL, decode_responses=True)
     key = f"strategy:validate:{live_session_id}"
 
-    payload = json.dumps({
-        "monitor_id": "test-monitor-id",
-        "strategy_name": strategy_name,
-        "symbol": symbol,
-        "interval": "1h",
-        "trigger_value": {"test": True, "timestamp": datetime.now().isoformat()},
-    })
+    payload = json.dumps(
+        {
+            "monitor_id": "test-monitor-id",
+            "strategy_name": strategy_name,
+            "symbol": symbol,
+            "interval": "1h",
+            "trigger_value": {"test": True, "timestamp": datetime.now().isoformat()},
+        }
+    )
 
     r.rpush(key, payload)
     r.expire(key, 300)  # 5分钟TTL
 
-    print(f"\n=== 模拟触发事件已发布 ===")
+    print("\n=== 模拟触发事件已发布 ===")
     print(f"Key: {key}")
     print(f"Payload: {payload[:100]}")
 
@@ -172,7 +175,7 @@ def check_live_strategy_runner(live_session_id: str) -> dict:
     fm = FrameManager.get_instance()
     status = fm.status()
 
-    print(f"\n=== FrameManager 状态 ===")
+    print("\n=== FrameManager 状态 ===")
     print(f"Trading: {status['trading']}")
     print(f"Assist: {status['assist']}")
     print(f"RiskGuard: {status['risk_guard']}")
@@ -183,7 +186,7 @@ def check_live_strategy_runner(live_session_id: str) -> dict:
     runner_exists = fm._strategy_runner is not None
     print(f"\n策略运行器: {'存在' if runner_exists else '不存在'}")
 
-    if runner_exists and hasattr(fm._strategy_runner, '_live_runner'):
+    if runner_exists and hasattr(fm._strategy_runner, "_live_runner"):
         runner = fm._strategy_runner._live_runner
         print(f"LiveSession ID: {runner.live_session_id}")
         print(f"Running: {runner._running}")
@@ -254,7 +257,9 @@ def main():
         print("  2. 检查SignalMonitor的condition是否可能触发")
         print("  3. 手动模拟触发事件（见下方）")
         print("\n模拟触发命令：")
-        print(f"  python backend/scripts/debug_signal_trigger.py {live_session_id} --trigger")
+        print(
+            f"  python backend/scripts/debug_signal_trigger.py {live_session_id} --trigger"
+        )
     else:
         print("\n❌ 发现以下问题：")
         for i, issue in enumerate(issues, 1):
@@ -263,12 +268,11 @@ def main():
     # 如果指定了 --trigger 参数，模拟触发事件
     if len(sys.argv) > 2 and sys.argv[2] == "--trigger":
         simulate_trigger_event(
-            live_session_id,
-            session_info["strategy_name"],
-            session_info["symbol"]
+            live_session_id, session_info["strategy_name"], session_info["symbol"]
         )
         print("\n模拟事件已发布，等待30秒检查是否被消费...")
         import time
+
         time.sleep(30)
         redis_info_after = check_redis_list(live_session_id)
         if redis_info_after["length"] < redis_info["length"]:

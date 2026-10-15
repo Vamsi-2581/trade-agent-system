@@ -717,7 +717,7 @@ def grid_search_detail(request, pk):
     except GridSearchJob.DoesNotExist:
         return Response({"error": "Grid search job not found"}, status=404)
 
-    if not request.user.is_superuser and str(job.user_id) != str(request.user.id):
+    if not request.user.is_admin and str(job.user_id) != str(request.user.id):
         return Response({"error": "无权访问此任务"}, status=403)
 
     from .serializers import GridSearchJobSerializer
@@ -736,7 +736,7 @@ def grid_search_results(request, pk):
     except GridSearchJob.DoesNotExist:
         return Response({"error": "Grid search job not found"}, status=404)
 
-    if not request.user.is_superuser and str(job.user_id) != str(request.user.id):
+    if not request.user.is_admin and str(job.user_id) != str(request.user.id):
         return Response({"error": "无权访问此任务"}, status=403)
 
     # Whitelist allowed sort fields
@@ -803,7 +803,7 @@ def grid_search_cancel(request, pk):
     except GridSearchJob.DoesNotExist:
         return Response({"error": "Grid search job not found"}, status=404)
 
-    if not request.user.is_superuser and str(job.user_id) != str(request.user.id):
+    if not request.user.is_admin and str(job.user_id) != str(request.user.id):
         return Response({"error": "无权操作此任务"}, status=403)
 
     if job.status in ("completed", "cancelled", "failed"):

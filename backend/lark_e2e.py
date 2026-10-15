@@ -1,12 +1,15 @@
 """飞书端到端 v2：起 AgentTaskConsumer + publish 真实消息 + 监听 reply"""
-import os, django, json, asyncio, time, logging
+import os
+import django
+import asyncio
+import time
+import logging
 os.environ['DJANGO_SETTINGS_MODULE'] = 'core.settings.dev'
 django.setup()
 
 logging.getLogger('apps.strategy_engine.registry').setLevel(logging.WARNING)
 logging.getLogger('apps').setLevel(logging.WARNING)
 
-from apps.channel.lark import LarkChannel
 from apps.agent.bus import publish, build_agent_task, wait_reply, AGENT_TASKS
 from apps.agent.consumer import AgentTaskConsumer
 from django.conf import settings
@@ -14,9 +17,9 @@ from django.conf import settings
 app_id = os.environ.get("LARK_APP_ID", "") or getattr(settings, "LARK_APP_ID", "")
 app_secret = os.environ.get("LARK_APP_SECRET", "") or getattr(settings, "LARK_APP_SECRET", "")
 
-print(f"=== 飞书真实端到端 v2 ===")
+print("=== 飞书真实端到端 v2 ===")
 print(f"LARK_APP_ID={app_id[:12]}...")
-print(f"启动 AgentTaskConsumer...")
+print("启动 AgentTaskConsumer...")
 
 consumer = AgentTaskConsumer(concurrency=1)
 
@@ -24,7 +27,7 @@ USER_TEXT = "帮我回测 4h 箱体突破策略：4h 收盘价突破 7 日箱体
 
 async def main():
     await consumer.start()
-    print(f"Consumer started. 等待业务跑完（预计 1-3 分钟）...\n")
+    print("Consumer started. 等待业务跑完（预计 1-3 分钟）...\n")
     t0 = time.monotonic()
 
     msg = build_agent_task(
@@ -40,7 +43,7 @@ async def main():
 
     print(f"\n=== 完成（耗时 {elapsed:.1f}s）===")
     if reply:
-        print(f"<<< 收到 reply（前 2000 字符）:")
+        print("<<< 收到 reply（前 2000 字符）:")
         print(str(reply)[:2000])
     else:
         print("<<< 超时未收到 reply")

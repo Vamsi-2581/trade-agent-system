@@ -18,7 +18,6 @@ LiveSession.current_equity 盈亏显示为 0 的问题。本脚本对存量数�
 
 import os
 import sys
-from decimal import Decimal
 
 # scripts/ 目录脚本需手动把项目根 (/app) 加入 path，否则 `python scripts/x.py`
 # 时 sys.path[0]=scripts/ 找不到 core 包。
@@ -59,9 +58,7 @@ def _load_history(order: Order) -> list[dict]:
 def main() -> None:
     dry_run = "--dry-run" in sys.argv
     sells = (
-        Order.objects.filter(
-            side="sell", status="filled", realized_pnl__isnull=True
-        )
+        Order.objects.filter(side="sell", status="filled", realized_pnl__isnull=True)
         .exclude(filled_quantity=0)
         .exclude(avg_fill_price__isnull=True)
         .order_by("created_at")

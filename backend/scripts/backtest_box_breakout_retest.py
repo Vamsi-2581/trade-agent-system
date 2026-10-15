@@ -28,20 +28,20 @@ import json
 import math
 import os
 import statistics
-import sys
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
 # ---------------------------------------------------------------- 参数
-BOX_BARS = 42          # 7 日 = 7 * 6 根 4h
-VOL_PERIOD = 20        # 20 根均量
-VOL_MULT = 3.0         # 放量倍数
-RETEST_BARS = 18       # 突破后回踩进场窗口（根）
-RR = 2.0               # 盈亏比
-FEE = 0.001            # 单边手续费
+BOX_BARS = 42  # 7 日 = 7 * 6 根 4h
+VOL_PERIOD = 20  # 20 根均量
+VOL_MULT = 3.0  # 放量倍数
+RETEST_BARS = 18  # 突破后回踩进场窗口（根）
+RR = 2.0  # 盈亏比
+FEE = 0.001  # 单边手续费
 RISK_PER_TRADE = 0.01  # 每笔风险占权益比例
 INITIAL_EQUITY = 10000.0
+
 
 # ---------------------------------------------------------------- 数据
 def _http_get_json(url: str, timeout: int = 30, proxy: str | None = None) -> list:
@@ -55,7 +55,9 @@ def _http_get_json(url: str, timeout: int = 30, proxy: str | None = None) -> lis
         return json.loads(resp.read().decode())
 
 
-def fetch_klines(symbol: str, interval: str = "4h", since: datetime | None = None) -> list[dict]:
+def fetch_klines(
+    symbol: str, interval: str = "4h", since: datetime | None = None
+) -> list[dict]:
     """分页拉取全部 4h K 线，返回按时间升序的 dict 列表。"""
     since_ms = int(since.timestamp() * 1000) if since else None
     sources = [
@@ -83,7 +85,9 @@ def fetch_klines(symbol: str, interval: str = "4h", since: datetime | None = Non
                         rows = None
                         errors.append(f"{base}: {exc}")
                 if rows is None:
-                    raise RuntimeError(f"重试 4 次仍失败：{errors[-1] if errors else '未知错误'}")
+                    raise RuntimeError(
+                        f"重试 4 次仍失败：{errors[-1] if errors else '未知错误'}"
+                    )
                 rows_chunk.extend(rows)
                 cursor = rows[-1][0] + 1
                 if len(rows) < 1000:
@@ -110,7 +114,7 @@ def fetch_klines(symbol: str, interval: str = "4h", since: datetime | None = Non
             "high": float(r[2]),
             "low": float(r[3]),
             "close": float(r[4]),
-            "volume": float(r[5]),        # 基础资产成交量
+            "volume": float(r[5]),  # 基础资产成交量
             "quote_volume": float(r[7]),  # 计价资产成交额
         }
         for r in rows
@@ -201,7 +205,11 @@ def run_backtest(
         if pending is not None:
             if i <= pending["deadline"]:
                 if lo <= pending["box_high"]:
-                    entry = pending["box_high"] if opens[i] >= pending["box_high"] else opens[i]
+                    entry = (
+                        pending["box_high"]
+                        if opens[i] >= pending["box_high"]
+                        else opens[i]
+                    )
                     stop = pending["box_low"]
                     target = entry + rr * (entry - stop)
                     if entry - stop > 0:
@@ -261,10 +269,18 @@ def summarize(result: dict, initial_equity: float = INITIAL_EQUITY) -> dict:
     equity_curve = result["equity_curve"]
     if not trades:
         return {
-            "n_trades": 0, "win_rate": 0.0, "avg_r": 0.0, "median_r": 0.0,
-            "profit_factor": 0.0, "expectancy_r": 0.0, "max_cons_loss": 0,
-            "total_return_pct": 0.0, "max_drawdown_pct": 0.0, "avg_bars": 0.0,
-            "reasons": {}, "by_year": [],
+            "n_trades": 0,
+            "win_rate": 0.0,
+            "avg_r": 0.0,
+            "median_r": 0.0,
+            "profit_factor": 0.0,
+            "expectancy_r": 0.0,
+            "max_cons_loss": 0,
+            "total_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "avg_bars": 0.0,
+            "reasons": {},
+            "by_year": [],
         }
     rs = [t["r"] for t in trades]
     wins = [r for r in rs if r > 0]
@@ -297,28 +313,41 @@ def summarize(result: dict, initial_equity: float = INITIAL_EQUITY) -> dict:
         "win_rate": round(len(wins) / len(trades) * 100, 2),
         "avg_r": round(statistics.mean(rs), 4),
         "median_r": round(statistics.median(rs), 4),
-        "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else math.inf,
+        "profit_factor": round(gross_win / gross_loss, 3)
+        if gross_loss > 0
+        else math.inf,
         "expectancy_r": round(statistics.mean(rs), 4),
         "max_cons_loss": max_cons_loss,
-        "total_return_pct": round((result["final_equity"] / initial_equity - 1) * 100, 2),
+        "total_return_pct": round(
+            (result["final_equity"] / initial_equity - 1) * 100, 2
+        ),
         "max_drawdown_pct": round(max_dd * 100, 2),
         "avg_bars": round(statistics.mean([t["bars_held"] for t in trades]), 1),
         "reasons": reasons,
         "by_year": [
-            {"year": y, "n": len(rs2), "win_rate": round(sum(1 for r in rs2 if r > 0) / len(rs2) * 100, 1), "sum_r": round(sum(rs2), 2)}
+            {
+                "year": y,
+                "n": len(rs2),
+                "win_rate": round(sum(1 for r in rs2 if r > 0) / len(rs2) * 100, 1),
+                "sum_r": round(sum(rs2), 2),
+            }
             for y, rs2 in sorted(years.items())
         ],
     }
 
 
-def load_data(symbol: str, since_days: int | None = None, cache_dir: str | None = None) -> list[dict]:
+def load_data(
+    symbol: str, since_days: int | None = None, cache_dir: str | None = None
+) -> list[dict]:
     if cache_dir:
         cache_path = os.path.join(cache_dir, f"{symbol}_4h.json")
         if os.path.exists(cache_path):
             with open(cache_path) as f:
                 return json.load(f)
-    since = datetime(2018, 1, 1, tzinfo=timezone.utc) if since_days is None else (
-        datetime.now(timezone.utc) - timedelta(days=since_days)
+    since = (
+        datetime(2018, 1, 1, tzinfo=timezone.utc)
+        if since_days is None
+        else (datetime.now(timezone.utc) - timedelta(days=since_days))
     )
     klines = fetch_klines(symbol, since=since)
     if cache_dir:
@@ -331,21 +360,36 @@ def load_data(symbol: str, since_days: int | None = None, cache_dir: str | None 
 # ---------------------------------------------------------------- 主流程
 def main() -> None:
     parser = argparse.ArgumentParser(description="4h 箱体突破·回踩进场回测")
-    parser.add_argument("symbols", nargs="*", default=["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"])
+    parser.add_argument(
+        "symbols", nargs="*", default=["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
+    )
     parser.add_argument("--sweep", action="store_true", help="参数敏感性扫描")
-    parser.add_argument("--since-days", type=int, default=None, help="仅取最近 N 天数据")
+    parser.add_argument(
+        "--since-days", type=int, default=None, help="仅取最近 N 天数据"
+    )
     args = parser.parse_args()
 
-    out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backtest_results", "box_breakout_retest")
+    out_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "backtest_results",
+        "box_breakout_retest",
+    )
     cache_dir = os.path.join(out_dir, "cache")
     os.makedirs(out_dir, exist_ok=True)
 
     base_params = {
-        "box_bars": BOX_BARS, "vol_period": VOL_PERIOD, "vol_mult": VOL_MULT,
-        "retest_bars": RETEST_BARS, "rr": RR, "fee": FEE, "risk_per_trade": RISK_PER_TRADE,
+        "box_bars": BOX_BARS,
+        "vol_period": VOL_PERIOD,
+        "vol_mult": VOL_MULT,
+        "retest_bars": RETEST_BARS,
+        "rr": RR,
+        "fee": FEE,
+        "risk_per_trade": RISK_PER_TRADE,
     }
-    print(f"策略参数: 箱体={BOX_BARS}根(7日) 均量={VOL_PERIOD}根 放量={VOL_MULT}x "
-          f"回踩窗口={RETEST_BARS}根 盈亏比=1:{RR} 手续费={FEE*100}%/边 单笔风险={RISK_PER_TRADE*100}%")
+    print(
+        f"策略参数: 箱体={BOX_BARS}根(7日) 均量={VOL_PERIOD}根 放量={VOL_MULT}x "
+        f"回踩窗口={RETEST_BARS}根 盈亏比=1:{RR} 手续费={FEE * 100}%/边 单笔风险={RISK_PER_TRADE * 100}%"
+    )
     print(f"初始资金: ${INITIAL_EQUITY:,.0f} | 数据源: Binance 4h K线\n")
 
     all_stats: dict[str, dict] = {}
@@ -354,12 +398,31 @@ def main() -> None:
         span_days = (klines[-1]["ts"] - klines[0]["ts"]) / 86400000
         result = run_backtest(klines, **base_params)
         stats = summarize(result)
-        all_stats[symbol] = {"stats": stats, "span_days": span_days, "bars": len(klines)}
+        all_stats[symbol] = {
+            "stats": stats,
+            "span_days": span_days,
+            "bars": len(klines),
+        }
         _print_symbol(symbol, stats, span_days, len(klines))
 
         trades_path = os.path.join(out_dir, f"trades_{symbol}.csv")
         with open(trades_path, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=["entry_ts", "exit_ts", "entry", "stop", "target", "exit", "r", "pnl_pct", "pnl_abs", "bars_held", "reason"])
+            w = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "entry_ts",
+                    "exit_ts",
+                    "entry",
+                    "stop",
+                    "target",
+                    "exit",
+                    "r",
+                    "pnl_pct",
+                    "pnl_abs",
+                    "bars_held",
+                    "reason",
+                ],
+            )
             w.writeheader()
             for t in result["trades"]:
                 w.writerow(t)
@@ -371,7 +434,11 @@ def main() -> None:
         "params": base_params,
         "initial_equity": INITIAL_EQUITY,
         "symbols": {
-            s: {**all_stats[s]["stats"], "span_days": round(all_stats[s]["span_days"], 0), "bars": all_stats[s]["bars"]}
+            s: {
+                **all_stats[s]["stats"],
+                "span_days": round(all_stats[s]["span_days"], 0),
+                "bars": all_stats[s]["bars"],
+            }
             for s in all_stats
         },
     }
@@ -386,7 +453,12 @@ def main() -> None:
         symbol = "BTCUSDT"
         klines = load_data(symbol, since_days=args.since_days, cache_dir=cache_dir)
         sweeps = [
-            ("box_bars", "箱体窗口", [BOX_BARS // 2, BOX_BARS, BOX_BARS * 2], {"BOX_BARS//2": "3日", "BOX_BARS": "7日", "BOX_BARS*2": "14日"}),
+            (
+                "box_bars",
+                "箱体窗口",
+                [BOX_BARS // 2, BOX_BARS, BOX_BARS * 2],
+                {"BOX_BARS//2": "3日", "BOX_BARS": "7日", "BOX_BARS*2": "14日"},
+            ),
             ("vol_mult", "放量倍数", [2.0, 3.0, 4.0], None),
             ("retest_bars", "回踩窗口", [6, 12, 18, 24], None),
         ]
@@ -397,21 +469,31 @@ def main() -> None:
                 p[key] = v
                 r = run_backtest(klines, **p)
                 s = summarize(r)
-                print(f"  {key}={v:<4} → 收益率 {s['total_return_pct']:+8.2f}% | 胜率 {s['win_rate']:5.1f}% | "
-                      f"交易 {s['n_trades']:4d} | 平均R {s['avg_r']:+.3f} | 最大回撤 {s['max_drawdown_pct']:.1f}%")
+                print(
+                    f"  {key}={v:<4} → 收益率 {s['total_return_pct']:+8.2f}% | 胜率 {s['win_rate']:5.1f}% | "
+                    f"交易 {s['n_trades']:4d} | 平均R {s['avg_r']:+.3f} | 最大回撤 {s['max_drawdown_pct']:.1f}%"
+                )
 
 
 def _print_symbol(symbol: str, s: dict, span_days: float, bars: int) -> None:
-    print(f"═══ {symbol} ═══ (数据 {span_days/365:.1f} 年 / {bars} 根 4h K线)")
-    print(f"  总收益率: {s['total_return_pct']:+.2f}%    最大回撤: {s['max_drawdown_pct']:.2f}%")
-    print(f"  交易数: {s['n_trades']}    胜率: {s['win_rate']:.1f}%    平均盈亏比(R): {s['avg_r']:+.3f}")
+    print(f"═══ {symbol} ═══ (数据 {span_days / 365:.1f} 年 / {bars} 根 4h K线)")
+    print(
+        f"  总收益率: {s['total_return_pct']:+.2f}%    最大回撤: {s['max_drawdown_pct']:.2f}%"
+    )
+    print(
+        f"  交易数: {s['n_trades']}    胜率: {s['win_rate']:.1f}%    平均盈亏比(R): {s['avg_r']:+.3f}"
+    )
     print(f"  期望值: {s['expectancy_r']:+.4f}R/笔    盈利因子: {s['profit_factor']}")
     print(f"  最大连亏: {s['max_cons_loss']} 笔    平均持仓: {s['avg_bars']} 根")
     print(f"  平仓原因: {s['reasons']}")
     if s["by_year"]:
-        print("  分年度: " + " | ".join(
-            f"{y['year']}:{y['n']}笔/{y['win_rate']}%/{y['sum_r']:+.1f}R" for y in s["by_year"]
-        ))
+        print(
+            "  分年度: "
+            + " | ".join(
+                f"{y['year']}:{y['n']}笔/{y['win_rate']}%/{y['sum_r']:+.1f}R"
+                for y in s["by_year"]
+            )
+        )
 
 
 if __name__ == "__main__":

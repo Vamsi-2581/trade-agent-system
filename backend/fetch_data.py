@@ -1,7 +1,6 @@
 """Fetch ETH/USDT 5m data for backtest (run on host)"""
 import asyncio
 import json
-import os
 from datetime import datetime, timedelta
 
 import ccxt.async_support as ccxt

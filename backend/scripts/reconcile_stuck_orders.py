@@ -10,7 +10,6 @@
 import asyncio
 import os
 import sys
-from decimal import Decimal
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings.dev")
 
