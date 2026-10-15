@@ -637,3 +637,68 @@ def test_split_payload_is_json_safe_and_self_describing():
     assert payload["split_mode"] == "rolling"
     assert payload["data_sufficient"] is True
     assert payload["in_sample_end"] == plan.windows[0].oos_start.isoformat()
+
+
+def test_bool_fold_index_is_not_a_fold_index():
+    """`True` 不是折序号：`bool` 是 `int` 的子类，`hash(True) == hash(1)`。
+
+    `[0, True, 2, 3, 4]` 能骗过集合比较（`{0,True,2,3,4} == {0,1,2,3,4}`），于是
+    「折身份齐全」这句判据被一个布尔值满足——而它的意思是「折 1 没跑，却混进来一个
+    真假值」。这类输入只可能来自调用方装配错误，必须判不了而不是照算。
+    """
+    plan = plan_folds(GEOMETRY_START, GEOMETRY_END)
+    rows = [_fold_row(i, 1.4) for i in range(5)]
+    rows[1] = {**_fold_row(1, 1.4), "fold_index": True}
+
+    payload = aggregate_walk_forward(
+        candidate_id="c", is_sharpe=2.0, plan=plan, fold_rows=rows
+    )
+
+    assert payload["data_sufficient"] is False
+    assert payload["insufficient_reason"] == "fold_identity_mismatch"
+
+
+def test_a_fold_without_a_persisted_result_is_not_auditable():
+    """有夏普、却没有可回查的 `BacktestResult` 行 → 这个数字无从复核。
+
+    用户故事 11：「每个 fold 的回测结果各自落库并归属到同一条候选，这样衰减的算法
+    事后可复核、可重算」。没有 `result_id` 就答不出「依据哪几次回测」——衰减成了
+    一个不可验证的数，而它照样会放行或拦下一个候选。
+    """
+    plan = plan_folds(GEOMETRY_START, GEOMETRY_END)
+    rows = [_fold_row(i, 1.4) for i in range(5)]
+    rows[2] = {**_fold_row(2, 1.4), "result_id": None}
+
+    payload = aggregate_walk_forward(
+        candidate_id="c", is_sharpe=2.0, plan=plan, fold_rows=rows
+    )
+
+    assert payload["data_sufficient"] is False
+    assert payload["decay_pct"] is None
+    assert payload["insufficient_reason"] == "fold_not_auditable"
+
+
+def test_fold_failure_reason_travels_with_the_fold_into_the_payload():
+    """失败原因必须跟着折进聚合载荷（D20「失败可见」）。
+
+    载荷里只留一个「证据不足」而不说是哪一折、为什么——提出人就无从判断该补数据
+    还是改参数。
+    """
+    plan = plan_folds(GEOMETRY_START, GEOMETRY_END)
+    rows = [_fold_row(i, 1.4) for i in range(5)]
+    rows[1] = {
+        "fold_index": 1,
+        "window_role": WalkForwardWindowRole.OOS.value,
+        "result_id": None,
+        "sharpe_ratio": None,
+        "total_trades": None,
+        "error": "未能获取 BTC/USDT:USDT 在 2026-02-21~2026-02-23 的K线数据",
+    }
+
+    payload = aggregate_walk_forward(
+        candidate_id="c", is_sharpe=2.0, plan=plan, fold_rows=rows
+    )
+
+    assert payload["data_sufficient"] is False
+    entry = next(e for e in payload["folds"] if e["fold_index"] == 1)
+    assert "未能获取" in entry["error"]

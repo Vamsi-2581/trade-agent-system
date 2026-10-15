@@ -306,6 +306,10 @@ def _fold_payload(row: Mapping[str, Any]) -> dict[str, Any]:
         "total_trades": row.get("total_trades"),
         "in_sample_start": row.get("in_sample_start"),
         "in_sample_end": row.get("in_sample_end"),
+        # 失败原因必须**跟着折走**（D20「失败可见」）。少了它，「五折里哪一折、
+        # 为什么没跑出来」在聚合结论里就答不出来——只剩一个「证据不足」，而
+        # 提出人据此无从判断该补数据还是改参数。
+        "error": row.get("error"),
     }
 
 
@@ -362,7 +366,12 @@ def aggregate_walk_forward(
     # 丢了、另一折多算一次）时，个数照样等于 `plan.folds`，但等权均值已经不再代表
     # 「每折各一段互不相同的未来」——它会被那一折重复加权。这种证据集缺陷必须在
     # 这里拦住，否则会产出一个看起来很确定的 `decay_pct`。
+    #
+    # `bool` 显式排除：它是 `int` 的子类，`hash(True) == hash(1)`，于是
+    # `[0, True, 2, 3, 4]` 能骗过集合比较——而 `True` 不是一个折序号。
     indices = [entry.get("fold_index") for entry in folds_payload]
+    if any(isinstance(i, bool) or not isinstance(i, int) for i in indices):
+        return _insufficient("fold_identity_mismatch")
     if len(set(indices)) != len(indices) or set(indices) != set(range(plan.folds)):
         return _insufficient("fold_identity_mismatch")
 
@@ -373,6 +382,12 @@ def aggregate_walk_forward(
             # 某折算不出有限夏普（权益曲线 <2 点、或标准差为 0）。把它当 0 参与均值
             # 会让衰减静默变小 → 放行，正是 #26 修掉的那类 fail-open。
             return _insufficient("fold_sharpe_unusable")
+        if not row.get("result_id"):
+            # 有夏普、却没有可回查的那一行 `BacktestResult`：这个数字**无从复核**。
+            # 用户故事 11 要求「每个 fold 的回测结果各自落库并归属到同一条候选，
+            # 这样衰减的算法事后可复核、可重算」——没有 `result_id` 就答不出
+            # 「依据哪几次回测」，衰减成了一个不可验证的数。判「证据不足」。
+            return _insufficient("fold_not_auditable")
         fold_sharpes.append(float(sharpe))
 
     oos_sharpe = sum(fold_sharpes) / len(fold_sharpes)
