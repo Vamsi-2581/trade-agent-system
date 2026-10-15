@@ -53,7 +53,7 @@ def _candidate_live_config(**overrides) -> FactoryConfig:
 # 纯度守卫
 # --------------------------------------------------------------------------- #
 
-PURE_MODULES = ("status.py", "config.py", "evaluate.py")
+PURE_MODULES = ("status.py", "config.py", "evaluate.py", "walk_forward.py")
 FORBIDDEN_IMPORT_ROOTS = ("django", "rest_framework", "celery")
 
 
