@@ -165,6 +165,10 @@ class TestAdvanceCandidatesTask:
             "oos_running",
             "paper_pending",
             "paper_running",
+            # 被行情闸门拦下的候选（#37）。它**必须**在扫描集合里：批扫描是
+            # 「行情翻回来了吗」唯一的自动驱动，漏掉它的后果是候选安静地停在
+            # `regime_hold`——转移表给了回边、判定层也会放行，但没有东西去推那一下。
+            "regime_hold",
         }
 
     def test_paper_running_candidate_is_scanned_but_holds(self):

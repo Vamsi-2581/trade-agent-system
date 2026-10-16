@@ -13,9 +13,14 @@
    集体停摆，而**哪几条失败了**必须能从返回值里读出来（失败可见，D20）。
 
 2. **批扫描只碰「正在推进中」的状态**。`registered` / `in_sample_running` /
-   `oos_running` / `paper_pending` / `paper_running` —— 其余状态（终态、各种 `*_failed`
-   等待态、`registration_failed`、`awaiting_live_approval`）都要**人来动或别处来动**，
-   每轮扫它们只会白读一遍库。
+   `oos_running` / `paper_pending` / `paper_running` / `regime_hold` —— 其余状态
+   （终态、各种 `*_failed` 等待态、`registration_failed`、`awaiting_live_approval`）
+   都要**人来动或别处来动**，每轮扫它们只会白读一遍库。
+
+   `regime_hold` 在集合里要特别注意（#37）：它自己不会好（得等池化表重算、或当前生效
+   阶段变化），而这些变化**不通知漏斗**——所以扫描必须每轮回来问一次「翻回来了吗」。
+   它的推进是幂等的：行情没变就停在原地，`_is_repeat` 把同一条结论的重复记录与通知
+   吃掉，所以不会每 5 分钟刷一行。
 
 3. **总开关关掉时连库都不扫**。`auto_advance_enabled=False` 时直接返回
    `{"skipped": "auto_advance_disabled"}`：判定层确实也会给出同一条结论，但那时已经
@@ -48,6 +53,11 @@ ADVANCEABLE_STATUSES: tuple[str, ...] = (
     # paper_running 的判定（观察期满 / 盈亏 / 风控命中）归 #24；先留在扫描集合里，
     # 那一层落地时不必回来改这里。
     StrategyCandidateStatus.PAPER_RUNNING.value,
+    #: 被行情闸门拦下的候选（#37）。**必须在这里**，否则它永远不会被再扫到：
+    #: `advance` 是唯一会问「行情翻回来了吗」的地方，而批扫描是它唯一的自动驱动。
+    #: 漏掉这一行的后果是候选安静地停在 `regime_hold`——转移表给了它回边、判定层
+    #: 也会放行，但没有任何东西去推那一下。用户故事 4 整条折在这一行上。
+    StrategyCandidateStatus.REGIME_HOLD.value,
 )
 
 
