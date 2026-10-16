@@ -91,6 +91,7 @@ from typing import Iterable, Mapping, Sequence
 
 from django.db import transaction
 
+from apps.common.time_utils import as_utc
 from apps.regime import config
 from apps.regime import slice as slice_core
 from apps.regime.judgement import SYMBOL, load_candles
@@ -141,17 +142,12 @@ def tag_fingerprint(tags: Mapping[date, BaseRegime], window: tuple[date, date]) 
 # --------------------------------------------------------------------------- #
 
 
-def _as_utc(moment: datetime) -> datetime:
-    """把 DB 读回来的时刻归一成 UTC。
-
-    `USE_TZ=True` 下 `DateTimeField` 读出来一定是 aware 的，这里防的是「将来某处写进
-    一个 naive datetime」：naive 交给 `astimezone()` 会按**进程 TZ** 解释，而进程 TZ 是
-    Django 加载 settings 时按 `TIME_ZONE` 覆写的产物（见 `apps/common/time_utils.py` 的
-    实测记录）——切片的口径挂在别人的副作用上，宁可在这里显式钉死。
-    """
-    if moment.tzinfo is None:
-        return moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(timezone.utc)
+#: 时刻归一成 UTC 的实现住在 `apps/common/time_utils.py`。它原本在这里有一份逐字拷贝，
+#: 与 `capital_efficiency_slicing._as_utc` 一模一样——同一个「naive → UTC」的口径分头
+#: 维护，正是 `capital_efficiency.py` 模块 docstring 那句「口径不会在两处分叉」要防的事。
+#: 保留 `_as_utc` 这个名字：本模块与它的调用点/测试都按这个名字读，而这一层只是换个
+#: 出处，不是换个语义。
+_as_utc = as_utc
 
 
 def adapt_trades(rows: Iterable) -> tuple[list[slice_core.SliceTrade], int]:

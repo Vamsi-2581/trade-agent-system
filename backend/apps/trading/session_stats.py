@@ -182,8 +182,12 @@ def efficiency_payload(
     )
     metrics = result.as_payload()
 
-    # `reason` 与 `computed`在结果对象上、不在载荷里（纯模块 docstring 钉过），所以子
-    # 载荷在这里把它们补回来：没有原因码的「判不了」在事后无法归因。
+    # `reason` / `computed` 现在由 `as_payload()` 一并带出（spec D6 契约，#33 已把归因
+    # 收进载荷），下面这两行因此**是冗余的**。保留它们的理由是这一侧的值**才是权威**：
+    # 同一个键在 `_unavailable_efficiency()` 那条不经纯模块的路径上也要有（本金未设的
+    # 会话连窗口都造不出来），两条路径因此共用同一个装配位置——让其中一条去读
+    # `metrics["reason"]` 会把「谁说了算」拆成两处。值恒等于 `result.reason`，不是第二
+    # 份口径，只是同一份口径的显式重述。
     notes = list(_POINT_OBSERVATION_NOTES) if result.computed else []
     if not result.computed:
         notes.append(f"整段判不了：{result.reason}")

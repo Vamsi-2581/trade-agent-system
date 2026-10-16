@@ -655,11 +655,11 @@ def test_the_payload_is_json_safe_and_money_is_fixed_point_text():
 
 
 def test_an_unresolvable_result_says_so_on_the_object_and_stays_key_complete():
-    """判不了时整段 None，但键仍然齐全，且 `reason` 在**对象**上而不是载荷里。
+    """判不了时整段 None，但键仍然齐全，且 `reason` 也在载荷上（spec D6）。
 
-    「算过、结论是无从判断」与「从没算过」必须能分开，而分开的依据是这个对象上的
-    `computed` / `reason`；载荷那一侧保持与「算出来了」同一组键，前端不必为判不了
-    单独写一条分支。
+    「算过、结论是无从判断」与「从没算过」必须能分开，而分开的依据是 `computed` /
+    `reason`；载荷那一侧保持与「算出来了」同一组键（`reason` 为 `None`，但键在），
+    前端不必为判不了单独写一条分支。
     """
     result = compute_capital_efficiency([], _window(), CAPITAL)
 
@@ -671,3 +671,62 @@ def test_an_unresolvable_result_says_so_on_the_object_and_stays_key_complete():
     assert payload["avg_capital_used"] is None
     assert payload["time_in_market_pct"] is None
     assert payload["sample_sufficient"] is False
+    assert payload["reason"] == CapitalEfficiencyReason.NO_TRADES.value
+
+
+# --------------------------------------------------------------------------- #
+# D6 契约：判不了的那一段自带归因（`reason` / `computed` 进载荷）
+# --------------------------------------------------------------------------- #
+
+
+def test_the_payload_carries_reason_for_each_of_the_three_failure_reasons():
+    """三个原因码**逐个**都要能只读载荷就读出来（spec D6）。
+
+    参数化而不是只测一个 `no_trades`：三个码对应三个不同的补救动作，所以「载荷带得出
+    归因」这件事必须对三者都成立。只测其中一个的话，将来谁把 `reason` 写成由
+    `no_trades` 触发的一条分支，另外两条会安静退化成 `None`——而它们的补救动作
+    （去修本金 / 去修窗口）恰恰是最不显眼的那两条。
+
+    载荷是消费方**唯一**会读的东西（#35 写库、#38 组装、前端展示都从它出发）：把归因
+    留在对象上等于要求每个消费方都记得手工补回来，少补一处，「判不了」就退化成
+    「一堆 `None`」。
+    """
+    cases = {
+        # 本金不成立：`None` 走 invalid_capital（分母都没有）。
+        CapitalEfficiencyReason.INVALID_CAPITAL.value: (
+            [_held(T0, T0 + DAY, "10000", "500")],
+            _window(),
+            None,
+        ),
+        # 空窗：`end <= start`，时间加权平均的分母不存在。
+        CapitalEfficiencyReason.EMPTY_WINDOW.value: (
+            [_held(T0, T0 + DAY, "10000", "500")],
+            EfficiencyWindow(start=T0, end=T0),
+            CAPITAL,
+        ),
+        # 零笔数：这一段什么都没发生（不是「没占资金」）。
+        CapitalEfficiencyReason.NO_TRADES.value: ([], _window(), CAPITAL),
+    }
+    assert set(cases) == {r.value for r in CapitalEfficiencyReason}
+
+    for reason, (intervals, window, total_capital) in cases.items():
+        result = compute_capital_efficiency(intervals, window, total_capital)
+        payload = result.as_payload()
+
+        assert result.computed is False, reason
+        assert payload["computed"] is False, reason
+        assert payload["reason"] == reason, reason
+
+
+def test_the_payload_reason_is_none_when_the_metrics_did_compute():
+    """算得出时 `reason` 是 `None`，且**键在**——「没有原因」与「没有这个字段」是两回事。
+
+    算得出时把 `reason` 整个省掉，消费方就得写 `payload.get("reason")` 才能不炸，
+    而 `.get()` 的默认值恰好会把「字段被挪走了」读成「算出来了」——本票要防的正是
+    这种「两处看起来都正常」的静默。
+    """
+    payload = _full_position().as_payload()
+
+    assert "reason" in payload
+    assert payload["reason"] is None
+    assert payload["computed"] is True

@@ -19,7 +19,7 @@ DB 时间戳，并让 celery-beat 用新时区重新解析 `PeriodicTask.last_ru
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
@@ -61,3 +61,27 @@ def format_business(dt: datetime | None) -> str:
     if dt is None:
         return "未执行"
     return f"{to_business(dt):%Y-%m-%d %H:%M}（{business_tz_label()}）"
+
+
+def as_utc(moment: datetime) -> datetime:
+    """把 DB 读回来的时刻归一成 UTC。
+
+    与上面几个函数同一个主题的另一半：那几个负责「UTC ↔ 业务时区」的**展示与调度**口径，
+    这一个负责**存储侧**的归一——DB 里所有绝对时刻都是 UTC，而 naive 时间戳交给
+    `astimezone()` 会按**进程 TZ** 解释，进程 TZ 又是 Django 加载 settings 时按
+    `TIME_ZONE` 覆写的产物（见本模块 docstring 的实测记录）。于是「切片按哪个时刻归属」
+    这类口径会挂在别人的副作用上，宁可在这里显式钉死。
+
+    两个消费方（`apps/regime/slicing.py` 的切片适配层、#35 的
+    `capital_efficiency_slicing.py`）原本各有一份**逐字相同**的实现。放进这里而不是让
+    一方 import 另一方：两个 app 之间没有既有的依赖边，任选一个方向都会凭空造出一条，
+    而 `apps/common/` 本来就是「谁都不许拥有它、谁都可以用」的那一层。
+
+    naive → UTC 而不是抛出，是因为下游的纯模块已经在构造处**拒绝** naive
+    （`OccupancyInterval.__post_init__` 的那条 `ValueError` 说得更清楚）。两层都要：
+    这一层负责**归一**，那一层负责**拒绝**——只归一不拒绝会让一个本该报错的时间戳
+    静默变成一个看起来正常的结论。
+    """
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
