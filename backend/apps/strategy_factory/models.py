@@ -23,6 +23,7 @@ from django.db import models
 
 from apps.strategy_factory.status import (
     InvalidTransitionError,
+    StrategyCandidateLayer,
     StrategyCandidateOrigin,
     StrategyCandidateStatus,
     allowed_next_statuses,
@@ -193,3 +194,80 @@ class StrategyCandidate(models.Model):
             raise InvalidTransitionError(self.status_enum, coerced)
         self.status = coerced.value
         return coerced
+
+
+class StrategyCandidateTransition(models.Model):
+    """候选的一次推进记录（spec #19 D20 的审计面）。
+
+    用户故事 36：「流水线的推进动作有审计记录（什么时候把哪条候选从哪层推到哪层、
+    依据是什么），这样机制本身可归因」。所以每次推进落一行，**包括没推进的那些**
+    ——`from_status == to_status` 的行正是「卡在 `paper_pending` 等账户 / 排队」的
+    落点（D20：卡住也要可见，否则就是静默消失）。
+
+    **为什么 `at` 不写 `auto_now_add`**：时刻是编排层注入的外部效应之一（D14 的
+    `deps` 里有「取现时刻」），而 `auto_now_add` 会绕过注入、用数据库那一刻的钟。
+    判定依据里的时间区间要与真实时刻可比，测试也要能钉住一个确定的时刻。
+
+    **为什么 `detail` 是 JSON 而不是列**：它装的是「依据」——判定数字（夏普、笔数、
+    衰减、折数）、钉住的行/会话 id、以及被拒绝时的原文原因。这些形状会随层演化
+    （#24 的 paper 统计就在长），而它们是**证据**、不是查询维度。要查询的维度
+    （候选、状态、原因码、时刻）都已经是列。
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    candidate = models.ForeignKey(
+        StrategyCandidate,
+        on_delete=models.CASCADE,
+        related_name="transitions",
+        help_text="被推进的候选",
+    )
+    layer = models.CharField(
+        max_length=16,
+        choices=StrategyCandidateLayer.choices(),
+        help_text="这一步落在哪一层（统计「哪一层刷掉最多」靠它，别从原因码推）",
+    )
+    from_status = models.CharField(
+        max_length=32,
+        choices=StrategyCandidateStatus.choices(),
+        help_text="推进前的状态；与 to_status 相同表示「停住」（等账户 / 排队 / 观察中）",
+    )
+    to_status = models.CharField(
+        max_length=32,
+        choices=StrategyCandidateStatus.choices(),
+        help_text="推进后的状态；与 from_status 相同时这一行是「停住」的证据",
+    )
+    reason_code = models.CharField(
+        max_length=48,
+        db_index=True,
+        help_text="判定纯函数给出的原因码（`evaluate.ReasonCode` 的值）",
+    )
+    detail = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="依据：判定数字 + 钉住的行 / 会话 id + 被拒绝时的原文原因",
+    )
+    at = models.DateTimeField(
+        db_index=True, help_text="推进时刻（由编排层注入的时钟给出，不走 auto_now）"
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text=(
+            "这一行落库的时刻，只用来给同一 `at` 的多行定序（注入的时钟在一次推进里"
+            "是同一个值，光按 `at` 排不出先后，「从哪层到哪层」的顺序就丢了）"
+        ),
+    )
+
+    class Meta:
+        db_table = "strategy_candidate_transitions"
+        verbose_name = "候选推进记录"
+        verbose_name_plural = "候选推进记录"
+        ordering = ["-at", "-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["candidate", "-at", "-created_at"]),
+            models.Index(fields=["reason_code"]),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"[{self.layer}] {self.from_status} → {self.to_status} ({self.reason_code})"
+        )

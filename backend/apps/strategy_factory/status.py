@@ -100,6 +100,41 @@ _ORIGIN_DISPLAY = {
 }
 
 
+class StrategyCandidateLayer(str, Enum):
+    """一次推进落在**哪一层**（转移记录的归属列，spec #19 D20 / D3）。
+
+    为什么要单独一列，而不是从 `reason_code` 推：`INSUFFICIENT_EVIDENCE` 是跨层的
+    原因码（样本内样本量不足、分折缺 K 线、paper 成交太少都用它），光看它答不出
+    「是哪一层刷掉的」；而「统计哪一层刷掉最多」正是漏斗自身可归因的入口。
+    状态也推不出层：`in_sample_failed` 是「L1 判完的结果」，但 `registered →
+    in_sample_running` 这一步同样是 L1 的动作。
+
+    `pipeline` 是不属于任何单层判定的那一档（登记失败、等人工卡点、总开关关闭）——
+    它存在，是为了让本列在每一条转移记录上都有值，而不是留一片空。
+    """
+
+    IN_SAMPLE = "in_sample"
+    OOS = "oos"
+    PAPER = "paper"
+    PIPELINE = "pipeline"
+
+    @property
+    def display(self) -> str:
+        return _LAYER_DISPLAY[self]
+
+    @classmethod
+    def choices(cls) -> list[tuple[str, str]]:
+        return [(m.value, m.display) for m in cls]
+
+
+_LAYER_DISPLAY = {
+    StrategyCandidateLayer.IN_SAMPLE: "L1 样本内",
+    StrategyCandidateLayer.OOS: "L2 样本外",
+    StrategyCandidateLayer.PAPER: "L3 paper",
+    StrategyCandidateLayer.PIPELINE: "流水线",
+}
+
+
 class InvalidTransitionError(ValueError):
     """非法状态转移。
 
