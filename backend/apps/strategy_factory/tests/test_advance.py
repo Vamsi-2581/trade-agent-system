@@ -37,6 +37,8 @@ from apps.strategy_factory.evaluate import (
     OosEvidence,
     PaperEvidence,
     ReasonCode,
+    RegimeEvidence,
+    RegimePoolCellEvidence,
 )
 from apps.strategy_factory.models import (
     StrategyCandidate,
@@ -173,6 +175,12 @@ class FakePipeline:
         self.oos_evidence: OosEvidence | None = None
         #: L3 观察期的证据（#24）。默认 None = 尚无结论（停在观察中）。
         self.paper_evidence: PaperEvidence | None = None
+        #: 行情证据（#34）。默认 None = **拿不到适用性结论**（冷启动 / 没有当代池化表），
+        #: 与其它层的 None 同义。想验「闸门判定接上了」的用例注入一份 `RegimeEvidence` 即可。
+        self.regime_evidence: RegimeEvidence | None = None
+        #: 这个假实现收不收 `now=`：默认收（照默认实现的签名）。置 False 时它只接受一个
+        #: 位置参数，用来钉编排层的 `TypeError` 兜底（#34 的签名兼容纪律）。
+        self.regime_accepts_clock = True
         self.resolved_contexts = 0
 
     # -- deps 成员 ---------------------------------------------------------- #
@@ -216,6 +224,21 @@ class FakePipeline:
         """
         return self.paper_evidence
 
+    def read_regime(self, candidate=None, **kwargs):
+        """行情证据（#34）。默认返回 `self.regime_evidence`（默认 None = 拿不到结论）。
+
+        与 `read_paper` 同一条纪律：`**kwargs` 让它可以被以 `now=` 调用而不必关心那个时钟
+        （`self.regime_accepts_clock=False` 时它只接受一个位置参数，用来验编排层的
+        `TypeError` 兜底）。
+        """
+        if not self.regime_accepts_clock:
+            if kwargs:
+                raise TypeError(
+                    "read_regime() got an unexpected keyword argument "
+                    f"{next(iter(kwargs))!r}（本替身故意只接受一个位置参数）"
+                )
+        return self.regime_evidence
+
     def notify(self, candidate, message):
         self.notifications.append(message)
         return True
@@ -233,6 +256,7 @@ class FakePipeline:
             # 真实实现：只把余额读取 patch 掉（见 `_patch_balance`）。
             create_paper_session=effects.create_paper_session,
             read_paper=self.read_paper,
+            read_regime=self.read_regime,
             notify=self.notify,
             now=self.now,
             config=self.config,
@@ -1328,3 +1352,168 @@ def test_plan_geometry_matches_reference_window():
     assert plan.folds == 5
     assert sum(w.days for w in plan.windows) == 20
     assert timedelta(0) <= (END - START)
+
+
+# --------------------------------------------------------------------------- #
+# 行情证据的注入点（#34，spec #30 D2 / D3 / D5）
+# --------------------------------------------------------------------------- #
+
+
+class TestRegimeInjection:
+    """`AdvanceDeps.read_regime` 是一个**能被整个换掉**的注入口（D2）。
+
+    这一份钉三件事：
+
+    1. **注入的替身能让判定层在零 DB 下跑**（`AdvanceDeps(read_regime=lambda ...)` 递一份
+       `RegimeEvidence` 进去，值原样流到判定侧）。这是 D2 要的可测性本身。
+    2. **替身只接受一个位置参数也不炸**（签名兼容纪律）：编排层先试 `now=`，吃一个
+       `TypeError` 就退化成不传时钟——与 `read_paper` 既有那条兜底同源。
+    3. **证据如实进依据栏**，而判定一字不改（闸门那条规则是 #37 的 `regime_verdict`）。
+
+    注意这一份**不**断言任何闸门结论：那需要 #32 的 `regime_hold` 状态与 #37 的判定。
+    """
+
+    @pytest.fixture
+    def _oos_candidate(self):
+        strategy = _strategy("regime_inject")
+        candidate = _candidate(
+            strategy, StrategyCandidateStatus.OOS_RUNNING, name="regime_inject"
+        )
+        # 样本内层记录在位：`_oos_step` 要拿它当衰减的分母。
+        candidate.evidence = {
+            "layers": {
+                "in_sample": {
+                    "result_id": "00000000-0000-0000-0000-000000000001",
+                    "started_at": FIXED_NOW.isoformat(),
+                }
+            }
+        }
+        candidate.save(update_fields=["evidence"])
+        return candidate
+
+    def _deps(self, *, regime=None, accepts_clock=True) -> AdvanceDeps:
+        return AdvanceDeps(
+            resolve_run_context=lambda candidate: _ctx(),
+            start_in_sample=lambda candidate, ctx, plan: {},
+            read_in_sample=lambda candidate: None,
+            start_oos=lambda candidate, ctx, plan, rid: {},
+            read_oos=lambda candidate: OosEvidence(decay_pct=5.0, fold_count=5),
+            create_paper_session=lambda candidate: None,
+            read_paper=lambda candidate: None,
+            read_regime=regime,
+            notify=lambda candidate, message: True,
+            now=lambda: FIXED_NOW,
+        )
+
+    def test_injected_double_flows_through(self, _oos_candidate):
+        """一份注入的 `RegimeEvidence` 原样流到编排侧（值不被改写、不被丢）。"""
+        expected = RegimeEvidence(
+            regime="downtrend",
+            effective_at=FIXED_NOW,
+            cell=RegimePoolCellEvidence(
+                state="unfit", reason="direction_conflict", source="strategy"
+            ),
+        )
+        deps = self._deps(regime=lambda candidate: expected)
+
+        out = advance(_oos_candidate, deps=deps)
+
+        # 判定一字不改（样本外通过 → paper_pending）：行情闸门是 #37 的事。
+        assert out.to_status is StrategyCandidateStatus.PAPER_PENDING
+        assert out.reason_code is ReasonCode.OOS_PASSED
+        # 证据如实进依据栏（转移记录 / 通知正文都读它）。
+        assert out.detail["regime"] == "downtrend"
+        assert out.detail["regime_effective_at"] == FIXED_NOW.isoformat()
+        assert out.detail["cell_state"] == "unfit"
+        assert out.detail["cell_reason"] == "direction_conflict"
+
+    def test_exemptions_land_in_the_detail_as_readable_pairs(self, _oos_candidate):
+        """豁免的键是 (策略 id, 阶段)，落进 JSONField 前换成可读的字符串对。
+
+        原样落会把一对元组写成 Python repr，事后审计只能靠反推当初豁免了谁。
+        """
+        strategy_id = _oos_candidate.strategy_id
+        deps = self._deps(
+            regime=lambda candidate: RegimeEvidence(
+                regime="downtrend",
+                cell=RegimePoolCellEvidence(state="unfit"),
+                exemptions={(strategy_id, "downtrend"): "ex-1"},
+            )
+        )
+
+        out = advance(_oos_candidate, deps=deps)
+
+        assert out.detail["exempt"] == [
+            {"strategy_id": str(strategy_id), "regime": "downtrend"}
+        ]
+
+    def test_real_orchestrator_clock_reaches_the_reader(self, _oos_candidate):
+        """默认路径把 `deps.now()` 喂给采集侧（与转移记录的 `at` 同一个时刻）。"""
+        seen: list[Any] = []
+
+        def reader(candidate, **kwargs):
+            seen.append(kwargs.get("now"))
+            return RegimeEvidence(regime="range", cell=RegimePoolCellEvidence("fit"))
+
+        deps = self._deps(regime=reader)
+        advance(_oos_candidate, deps=deps)
+        assert seen == [FIXED_NOW]
+
+    def test_single_positional_double_is_not_broken_by_the_signature(
+        self, _oos_candidate
+    ):
+        """只接受 `(candidate)` 的假实现照样跑得动（`TypeError` 兜底，#34 的签名兼容纪律）。
+
+        没有这条兜底，「把一个真心只想知道候选的替身接进来」会炸在签名上，于是
+        接线用例为了迁就编排层而给自己的假实现加一个用不到的 `now=` 参数。
+        """
+        calls: list[Any] = []
+
+        def reader(candidate):
+            calls.append(candidate)
+            return RegimeEvidence(regime="range", cell=RegimePoolCellEvidence("fit"))
+
+        deps = self._deps(regime=reader)
+
+        out = advance(_oos_candidate, deps=deps)
+
+        assert [c.pk for c in calls] == [_oos_candidate.pk]
+        assert out.detail["regime"] == "range"
+        assert out.detail["cell_state"] == "fit"
+
+    def test_no_evidence_adds_nothing_to_the_detail(self, _oos_candidate):
+        """采集侧给 `None`（拿不到适用性结论）→ 依据栏里什么都不加。
+
+        不是「没有行情这回事」，是「问不出来」——两者在记录上必须分得开，而
+        #37 的闸门判定要能指着这里说「没有证据所以 Hold」。
+        """
+        fake = FakePipeline(strategy=_oos_candidate.strategy)
+        fake.regime_evidence = None
+        fake.oos_evidence = OosEvidence(decay_pct=5.0, fold_count=5)
+
+        out = advance(_oos_candidate, deps=fake.deps())
+
+        assert "regime" not in out.detail
+        assert "exempt" not in out.detail
+        assert out.to_status is StrategyCandidateStatus.PAPER_PENDING
+
+    def test_blanket_cell_is_carried_not_reinterpreted(self, _oos_candidate):
+        """`blanket`（保命档）原样进依据栏，采集与编排都不把它读成 `unfit`。
+
+        高波动档下全场停用由保命档那一层负责，本机制不重复产出建议——照抄它的状态、
+        不在半路改写成别的取值，是这条既有边界不被悄悄抹掉的方式。
+        """
+        deps = self._deps(
+            regime=lambda candidate: RegimeEvidence(
+                regime="high_vol",
+                cell=RegimePoolCellEvidence(
+                    state="blanket", reason="high_vol_blanket_halt"
+                ),
+            )
+        )
+
+        out = advance(_oos_candidate, deps=deps)
+
+        assert out.detail["regime"] == "high_vol"
+        assert out.detail["cell_state"] == "blanket"
+        assert out.detail["cell_reason"] == "high_vol_blanket_halt"
