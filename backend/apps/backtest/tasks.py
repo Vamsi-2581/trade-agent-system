@@ -254,6 +254,18 @@ def run_backtest_task(
         # 的模块 docstring 说明为什么不放在这里同步算）。投递失败不抛也不会走到这个
         # except：一次成功的回测不该被附加产物拖成失败。
         dispatch_slice([stats.get("result_id")])
+        # 资金效率：与切片并排的**另一条**附加产物，同一条纪律（spec #30 D11 ——
+        # `apps/backtest` 这一侧只有这一行 dispatch）。
+        #
+        # import 在函数体内，**不能**挪到模块顶部：`celery_app.py:22` 先 import 本模块，
+        # 而本模块在模块顶部 import `apps.strategy_factory.tasks`，那一边又 `from celery_app
+        # import app` → 循环导入（`ImportError: partially initialized module`）。
+        # `dispatch_slice` 那条边之所以能放在顶部，纯粹是因为 `celery_app.py:27` 在
+        # `import apps.backtest.tasks` **之后**才轮到 `apps.regime.tasks`——那是导入顺序的
+        # 巧合，不是一条可以照抄的许可（与 `slicing.save_slice` 函数内 import 同因）。
+        from apps.strategy_factory.tasks import dispatch_capital_efficiency
+
+        dispatch_capital_efficiency([stats.get("result_id")])
         return stats
     except Exception as e:
         tracker.fail(f"回测失败: {strategy_name} {symbol} {timeframe}: {str(e)}")
@@ -780,6 +792,13 @@ def run_grid_search_task(self, job_id: str, user_id: str | None = None) -> dict:
         # 超时，把切片塞进去等于让「切片有多慢」决定「网格搜索跑不跑得完」。超时/取消
         # 的路径不投（那些结果由 recompute_regime_slices 兜底，见命令的 docstring）。
         dispatch_slice([r.get("result_id") for r in results])
+        # 资金效率：同一条理由、同一个位置——**循环外一次整批**。逐组合投会让这条 7200 秒
+        # 硬超时的循环多背上 200 次 broker 往返，而它跑不跑得完与「效率算不算得出」无关。
+        # 超时/取消的路径同样不投，兜底也是 recompute_regime_slices。
+        # import 在函数体内，理由与上面那处逐字相同（循环导入）。
+        from apps.strategy_factory.tasks import dispatch_capital_efficiency
+
+        dispatch_capital_efficiency([r.get("result_id") for r in results])
 
         tracker.complete(
             f"网格搜索完成：{len(results)}/{job.total_combinations}，"
