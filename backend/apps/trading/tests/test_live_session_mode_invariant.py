@@ -182,26 +182,68 @@ class TestModeAccountInvariant:
         assert session.mode_account_mismatch() is not None
 
 
-def _promote(user, session):
+def _promote(user, session, *, body=None):
     client = Client()
     token = AccessToken.for_user(user)
     return client.post(
         f"/api/trading/sessions/{session.id}/promote/",
+        data=body if body is not None else {},
+        content_type="application/json",
         HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+
+
+def _candidate_for(session, *, status: str):
+    """给一条 paper 会话挂上候选主行（升实盘闸门的依据，D12 后半 / #28）。
+
+    闸门读的是候选的**状态**，而不是重算观察期——所以这里要造的就是那个状态。
+    """
+    from apps.strategy_factory.models import StrategyCandidate
+    from apps.strategy_factory.status import StrategyCandidateOrigin
+
+    return StrategyCandidate.objects.create(
+        name=f"cand-{session.id.hex[:8]}",
+        origin=StrategyCandidateOrigin.MANUAL.value,
+        strategy=session.strategy,
+        status=status,
+        paper_session=session,
+        proposed_by=session.user,
     )
 
 
 @pytest.mark.django_db
 class TestPromoteProducesConsistentSession:
-    """promote 原样继承源账户，源会话是 paper ⇒ 账户必然 testnet=True ⇒ 产物是
-    一支 mode=live + testnet=True 的会话，启动时必被上面的校验拒绝。不能一边返回
-    201「Promoted to live trading session」一边交出一支永远起不来的会话。"""
+    """promote 的**新契约**（#28，spec D11）：目标账户由人工显式指定，不再继承源账户。
 
-    def test_promote_rejects_testnet_account_and_leaves_source_untouched(self):
+    旧契约是「原样继承源账户」⇒ 源是 paper ⇒ 账户必然 testnet=True ⇒ 产物是一支
+    `mode=live + testnet=True`、启动必被拒绝的会话，于是这个接口**永远 400**。
+    新契约把「继承」换成「显式指定」：`mode_account_mismatch` 不变式**不放松**，
+    它仍然是最后一道校验——只是现在有一组参数能让它通过。
+
+    旧用例的两条断言意图被完整保留，只是换了触发方式：
+    「拒绝时先于停止源会话、不产出 live 会话」→ 现在由**闸门拒绝**与**目标账户 testnet
+    拒绝**两条路径各自钉住；「拒绝的唯一依据是账户属性、不是无差别封路」→ 现在由
+    「指定了实盘账户就能成功」钉住（旧用例靠给源会话硬塞实盘账户来钉同一件事，
+    新契约下源账户已经不参与判定了）。
+    """
+
+    def test_promote_rejects_testnet_target_account_and_leaves_source_untouched(self):
+        """目标账户 testnet=True → 拒绝，且原因可读、源会话未被停止、无 live 会话。
+
+        （替代旧 `test_promote_rejects_testnet_account_and_leaves_source_untouched`
+        的触发方式：旧版靠源账户是 testnet 触发，新版靠**目标账户**是 testnet 触发。
+        两条断言 `status == "running"` 与「无 live 会话」原样保留。）
+        """
         user = _user("promote-testnet")
         session = _session(user, "paper", testnet=True, status="running")
+        _candidate_for(session, status="awaiting_live_approval")
+        target = _account("target-testnet", testnet=True)
 
-        resp = _promote(user, session)
+        resp = _promote(
+            user,
+            session,
+            body={"confirmed": True, "exchange_account_id": str(target.id)},
+        )
 
         assert resp.status_code == 400, resp.content
         assert "testnet" in resp.json()["error"]
@@ -210,25 +252,38 @@ class TestPromoteProducesConsistentSession:
         assert not LiveSession.objects.filter(mode="live").exists()
 
     def test_promote_rejects_session_without_account(self):
-        user = _user("promote-no-account")
-        session = _session(user, "paper", testnet=True, status="stopped")
-        LiveSession.objects.filter(pk=session.pk).update(exchange_account=None)
+        """没有候选主行 → 拒绝且不产出 live 会话。
 
-        resp = _promote(user, session)
+        （替代旧 `test_promote_rejects_session_without_account`：旧版是「源会话没有
+        交易所账户」，新契约里源账户已不参与判定，改由「闸门查不到候选主行」触发——
+        同一个「没有依据就不放行」的意图。旧断言「400 + 无 live 会话」原样保留。）
+        """
+        user = _user("promote-no-candidate")
+        session = _session(user, "paper", testnet=True, status="stopped")
+
+        resp = _promote(
+            user,
+            session,
+            body={
+                "confirmed": True,
+                "exchange_account_id": str(_account("any", testnet=False).id),
+            },
+        )
 
         assert resp.status_code == 400, resp.content
         assert not LiveSession.objects.filter(mode="live").exists()
 
     def test_promote_checks_the_account_not_the_mode(self):
-        """只对 testnet 拒绝，不是无差别封路：绑了实盘账户时 promote 照常产出。
+        """不是无差别封路：候选已通过判定 + 目标账户是实盘账户 ⇒ 正常产出。
 
-        这个 paper + testnet=False 的源会话是直接写库造出来的（绕过启动校验），
-        用来钉住「拒绝的唯一依据是账户属性」。
+        （替代旧同名用例：旧版给源会话硬塞实盘账户来钉「拒绝的唯一依据是账户属性」；
+        新契约下源账户不再参与判定，「能成功」这件事改由**目标账户 testnet=False**
+        + **候选处于 awaiting_live_approval** 两个条件共同钉住。旧断言
+        `promoted.mode_account_mismatch() is None` 原样保留——不变式仍然是最后一道关。）
         """
-        from apps.exchange.models import ExchangeAccount
-
         user = _user("promote-live-account")
         session = _session(user, "paper", testnet=True, status="stopped")
+        _candidate_for(session, status="awaiting_live_approval")
         live_account = ExchangeAccount.objects.create(
             exchange="binance",
             label="promote-live",
@@ -236,13 +291,22 @@ class TestPromoteProducesConsistentSession:
             api_secret_enc=b"enc",
             testnet=False,
         )
-        LiveSession.objects.filter(pk=session.pk).update(exchange_account=live_account)
 
-        resp = _promote(user, session)
+        resp = _promote(
+            user,
+            session,
+            body={
+                "confirmed": True,
+                "exchange_account_id": str(live_account.id),
+            },
+        )
 
         assert resp.status_code == 201, resp.content
         promoted = LiveSession.objects.get(mode="live")
         assert promoted.mode_account_mismatch() is None
+        # 目标账户被用上了，源 paper 账户没被继承（旧契约的病根）。
+        assert promoted.exchange_account_id == live_account.id
+        assert promoted.exchange_account_id != session.exchange_account_id
 
 
 # --------------------------------------------------------------------------- #

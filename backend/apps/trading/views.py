@@ -2,6 +2,7 @@ import logging
 from decimal import Decimal
 
 from asgiref.sync import async_to_sync
+from django.core.exceptions import ValidationError
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -16,6 +17,27 @@ from .models import (
 from .serializers import OrderSerializer, StrategySerializer, LiveSessionSerializer
 
 logger = logging.getLogger(__name__)
+
+#: 明确表示「同意」的字面量。**只有这些**算同意，其余一律算没同意。
+#:
+#: 与 `apps/agent/tools/positions.py::_confirmed` 同一张表、同一条理由：降级 DSML 路径
+#: 会把布尔参数传成**字符串**，而 `bool("false") is True`——LLM 明明说了「不要」，
+#: 字符串 `"false"` 会被读成「已确认」。这里的代价是**一次不该发生的实盘升格**，
+#: 所以方向必须反过来：只认明确的肯定，其余全当没确认（干跑）。
+_AFFIRMATIVE = frozenset({"true", "1", "yes", "y", "on", "t"})
+
+
+def _confirmed(raw) -> bool:
+    """`confirmed` → `bool`，**fail-closed**：认不出的一律 `False`（干跑）。"""
+    if raw is None:
+        return False
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return raw == 1
+    if isinstance(raw, str):
+        return raw.strip().lower() in _AFFIRMATIVE
+    return False
 
 
 @api_view(["GET"])
@@ -434,18 +456,22 @@ def live_session_create(request):
             {"error": "Backtest must be approved before deployment"}, status=400
         )
 
-    # 强制先模拟：live 模式必须有 paper 会话记录
+    # 强制先模拟（D12 后半，子票 #28）：live 模式的前置**不再**是「存在任意一条 paper
+    # 会话」，而是「存在一条**跑满观察期且判定通过**的 paper 会话」。
+    #
+    # 旧口径只查 `.exists()`：一条刚建出来、一天都没跑、甚至盈亏为负的 paper 会话
+    # 就能放行实盘。弱化的闸门比没有闸门更危险——它看起来像一道关。判定口径的**唯一
+    # 出处**是 `apps.strategy_factory.live_gate`（读候选的 `awaiting_live_approval`
+    # 状态），这里不重算观察期，否则同一口径会有两处实现、必然漂移。
+    approved_gate = None
     if mode == "live":
-        has_paper = LiveSession.objects.filter(
-            user=request.user,
-            backtest_result=backtest,
-            mode="paper",
-        ).exists()
-        if not has_paper:
-            return Response(
-                {"error": "Must run a paper trading session first before going live"},
-                status=400,
-            )
+        from apps.strategy_factory.live_gate import find_approved_paper_session
+
+        approved_gate = find_approved_paper_session(
+            user=request.user, backtest_result=backtest
+        )
+        if not approved_gate.allowed:
+            return Response({"error": approved_gate.reason}, status=400)
 
     # 校验交易所账户
     try:
@@ -477,6 +503,25 @@ def live_session_create(request):
     # 显式传入的 config 键优先于回测参数。
     config = {**(backtest.parameters or {}), **(request.data.get("config") or {})}
 
+    if approved_gate is not None:
+        # 交付 4：新 live 会话继承 **paper 期**的权益与配置（D11）。
+        #
+        # 为什么覆盖掉上面那份「回测参数」继承：paper 会话的 config 是**真的跑过那两周**
+        # 的那一份（有可能在观察期内被调过），而回测参数是它出生时的快照。让 live 会话
+        # 跟着「实际观察过的配置」走，才是「继承 paper 期」这句话的意思。
+        # 继承顺序与 promote 一致（那里也是从 paper 会话逐键取）。
+        #
+        # 显式传入的 config 键仍然是**最优先**的：人工可以在升实盘那一刻再做覆盖。
+        paper_session = approved_gate.paper_session
+        config = {
+            **dict(paper_session.config or {}),
+            **(request.data.get("config") or {}),
+        }
+        # 权益取 paper 会话的当前权益（没有则退回它的初始权益）——D11：升实盘不是
+        # 「换一个账户重新开始」，而是「把观察过的这条策略挪到实盘账户上接着跑」。
+        # 不用实盘账户余额覆盖它：那个数属于账户，不属于这条候选的观察结论。
+        initial_capital = paper_session.current_equity or paper_session.initial_capital
+
     # 创建 LiveSession
     session = LiveSession.objects.create(
         user=request.user,
@@ -490,6 +535,13 @@ def live_session_create(request):
         current_equity=initial_capital,
         config=config,
     )
+
+    # 最后一道校验：不变式**不放松**。建完立刻自查 mode/账户是否自洽，错配就回滚，
+    # 不留一支起不来的会话（与 promote 同一道保险）。
+    mismatch = session.mode_account_mismatch()
+    if mismatch:
+        session.delete()
+        return Response({"error": mismatch}, status=400)
 
     return Response(
         {
@@ -782,6 +834,33 @@ def live_session_delete(request, pk):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def live_session_promote(request, pk):
+    """把一条 paper 会话升成 live 会话（spec #19 D11，子票 #28）。
+
+    ## 三步人工卡点：干跑摘要 → 显式确认 → 目标账户
+
+    复用 `reduce_position` 那种既有形状（`apps/agent/tools/positions.py`）：
+    **默认干跑**（不带 `confirmed=true` 时只回一段「将执行」摘要，什么都不改），
+    得到用户明确同意后再带 `confirmed=true` 与目标实盘账户重新调用。
+
+    为什么不建在 workflow interrupt 上：那个 HITL 点**无法恢复**——暂停写
+    `active_agent="workflow"`，恢复时 `AgentRegistry.get("workflow")` 抛 `KeyError`。
+    一个只能暂停不能恢复的卡点，比没有卡点更糟。
+
+    ## 与旧实现的两处关键差异
+
+    1. **账户不再继承源会话**，而是由 `exchange_account_id` 显式指定。旧实现继承
+       paper 账户 ⇒ 必然 `testnet=True` ⇒ 新 live 会话必然被 `mode_account_mismatch`
+       拒绝，于是这个接口**永远 400**。源码注释当时就承认「要让 promote 真正可用，
+       得让它接受一个 `testnet=False` 的目标账户——那是新增能力」；本票就是来加这个能力的。
+    2. **前置闸门收紧**：源 paper 会话必须有候选主行且状态为
+       `awaiting_live_approval`（跑满观察期且判定通过）。口径的**唯一出处**是
+       `apps.strategy_factory.live_gate`，这里不重算一遍观察期（重算 = 第二处口径）。
+
+    `mode_account_mismatch` 不变式**不放松**：它仍是最后一道校验（见下方显式调用）。
+    """
+
+    from apps.strategy_factory.live_gate import evaluate_live_gate
+
     try:
         session = LiveSession.objects.get(pk=pk, user=request.user)
     except LiveSession.DoesNotExist:
@@ -795,62 +874,152 @@ def live_session_promote(request, pk):
             {"error": f"Session is {session.status}, cannot promote"}, status=400
         )
 
-    # promote 把源账户**原样继承**给新的 live 会话，而 live 会话按不变式要求
-    # testnet=False；源会话是 paper、按同一条不变式必须绑 testnet 账户，所以继承
-    # 来的账户必然 testnet=True——产物是一支永远启动不了的 live 会话，而本接口却
-    # 返回 201「Promoted to live trading session」。一个起不来的会话配一句成功
-    # 文案，比直接失败更难查，所以这里 fail-loud。
-    # （要让 promote 真正可用，得让它接受一个 testnet=False 的目标账户——那是新增
-    # 能力，不在第①段「只把静默失效变成可见失败」的范围内。）
-    account = session.exchange_account
-    if account is None:
-        return Response(
-            {"error": "源会话未绑定交易所账户，无法 promote 出实盘会话"}, status=400
-        )
-    if account.testnet:
+    # 前置闸门（D12 后半）：跑满观察期且判定通过。fail-closed。
+    gate = evaluate_live_gate(session)
+    if not gate.allowed:
+        return Response({"error": gate.reason}, status=status.HTTP_400_BAD_REQUEST)
+
+    # 目标实盘账户：显式指定，**不继承**源 paper 账户。
+    target_account_id = request.data.get("exchange_account_id")
+    if not target_account_id:
         return Response(
             {
                 "error": (
-                    f"promote 需要实盘账户（testnet=False），但源会话绑定的"
-                    f"「{account.label}」testnet=True：新的 live 会话会继承该账户，"
-                    f"启动时必被 mode 一致性校验拒绝。"
-                    "请改用 testnet=False 的账户直接创建 live 会话。"
+                    "升实盘必须显式指定目标实盘账户（exchange_account_id，testnet=False）。"
+                    "paper 会话绑的是 testnet 账户，它不能当实盘账户用——"
+                    "旧的「原样继承」正是这个接口必然失败的原因。"
                 )
             },
-            status=400,
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # 停止当前 paper 会话
-    session.status = "stopped"
-    session.stopped_at = timezone.now()
-    # 时间线（#24，D8）：promote 停掉 paper 会话也是一次「离开 running」，
-    # 它的最后一段 running 终点同样要落地——观察期判定在 promote 之前发生，
-    # 但判定要可复核，时间线就必须完整到 promote 这一刻。
+    from apps.exchange.models import ExchangeAccount
+
+    try:
+        target_account = ExchangeAccount.objects.get(
+            pk=target_account_id, is_active=True
+        )
+    except (ExchangeAccount.DoesNotExist, ValidationError, ValueError):
+        return Response({"error": "Exchange account not found or inactive"}, status=404)
+
+    # 目标账户必须真的是实盘账户。**这一条先于 `confirmed` 检查**：一个 testnet
+    # 账户无论确认与否都不该被用来建 live 会话，早一次拒绝就少一次「我确认了却没用」。
+    if target_account.testnet:
+        return Response(
+            {
+                "error": (
+                    f"升实盘需要实盘账户（testnet=False），但指定的账户"
+                    f"「{target_account.label}」testnet=True。"
+                    "请改选一个 testnet=False 的账户。"
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # runner 共享该品种的账户级持仓：同账户同品种两个策略必然互相平仓
+    # （2026-10-07：box 会话平掉 donchian 开的 DOGE/USDT 仓）。与 create 同一道闸门。
+    conflict = LiveSession.conflicting_active_session(target_account, session.symbol)
+    if conflict:
+        return Response({"error": conflict}, status=status.HTTP_400_BAD_REQUEST)
+
+    # 门①：是否已显式确认。fail-closed——认不出的值一律当没确认（干跑）。
+    if not _confirmed(request.data.get("confirmed")):
+        return Response(
+            {
+                "action": "promote",
+                "dry_run": True,
+                "candidate": {
+                    "id": str(gate.candidate.pk),
+                    "name": gate.candidate.name,
+                    "status": gate.candidate.status,
+                },
+                "paper_session": {
+                    "id": str(session.id),
+                    "symbol": session.symbol,
+                    "status": session.status,
+                },
+                "target_account": {
+                    "id": str(target_account.id),
+                    "label": target_account.label,
+                    "testnet": target_account.testnet,
+                },
+                "will_inherit": {
+                    "initial_capital": str(
+                        session.current_equity or session.initial_capital
+                    ),
+                    "config": session.config,
+                },
+                "message": (
+                    "这是干跑：还没有做任何改动。确认后将停止该 paper 会话，"
+                    f"并用账户「{target_account.label}」建一条 live 会话。"
+                    "把上面内容给用户看并得到明确同意后，带 confirmed=true 重新调用。"
+                ),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    # -- 已确认：停止 paper 会话 + 建 live 会话（同一事务） ---------------- #
     from django.db import transaction
 
+    now = timezone.now()
     with transaction.atomic():
-        record_status_change(session, to_status="stopped", changed_at=timezone.now())
+        # 时间线（#24，D8）：promote 停掉 paper 会话也是一次「离开 running」，
+        # 它的最后一段 running 终点同样要落地——观察期判定在 promote 之前发生，
+        # 但判定要可复核，时间线就必须完整到 promote 这一刻。
+        record_status_change(session, to_status="stopped", changed_at=now)
+        session.status = "stopped"
+        session.stopped_at = now
         session.save(update_fields=["status", "stopped_at", "updated_at"])
 
-    # 创建新的 live 会话
-    live_session = LiveSession.objects.create(
-        user=request.user,
-        backtest_result=session.backtest_result,
-        strategy=session.strategy,
-        symbol=session.symbol,
-        mode="live",
-        status="pending",
-        exchange_account=session.exchange_account,
-        initial_capital=session.current_equity or session.initial_capital,
-        current_equity=session.current_equity or session.initial_capital,
-        config=session.config,
-    )
+        # 继承 paper 期的权益与配置（D11，用户已定夺 Q3）：equity 从 paper 会话取，
+        # config 逐键继承（`dict()` 拷贝——直接传 `session.config` 会让两条会话共享
+        # 同一个可变对象，改一条的另一条跟着变）。
+        inherited_capital = session.current_equity or session.initial_capital
+        live_session = LiveSession.objects.create(
+            user=request.user,
+            backtest_result=session.backtest_result,
+            strategy=session.strategy,
+            symbol=session.symbol,
+            mode="live",
+            status="pending",
+            exchange_account=target_account,
+            initial_capital=inherited_capital,
+            current_equity=inherited_capital,
+            config=dict(session.config or {}),
+        )
+
+        # 最后一道校验：不变式**不放松**，只把「继承」换成「显式指定」。
+        # 走到这里还错配，说明上面的前置漏了某个组合——fail-loud，删掉刚建的会话
+        # （回滚）比留一支起不来的会话好。
+        mismatch = live_session.mode_account_mismatch()
+        if mismatch:
+            transaction.set_rollback(True)
+            return Response({"error": mismatch}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 候选主行：记下目标账户与 live 会话，并把状态推进到 `live`（终态）。
+        # `decided_at` 由这一步写（D1：人工什么时候点的，不该由状态机替人回答）。
+        candidate = gate.candidate
+        candidate.live_account = target_account
+        candidate.live_session = live_session
+        candidate.decided_at = now
+        candidate.transition_to("live")
+        candidate.save(
+            update_fields=[
+                "live_account",
+                "live_session",
+                "decided_at",
+                "status",
+                "updated_at",
+            ]
+        )
 
     return Response(
         {
             "id": str(live_session.id),
             "mode": live_session.mode,
             "status": live_session.status,
+            "candidate_id": str(gate.candidate.pk),
+            "exchange_account_id": str(target_account.id),
             "message": "Promoted to live trading session",
         },
         status=status.HTTP_201_CREATED,
