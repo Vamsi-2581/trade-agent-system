@@ -19,3 +19,6 @@ backend/docs/
 # Temp/one-off scripts
 *CUDA_VISIBLE_DEVICES*
 
+# Production DB backup dumps (large binaries; keep local only)
+backend/backups/*.dump
+
