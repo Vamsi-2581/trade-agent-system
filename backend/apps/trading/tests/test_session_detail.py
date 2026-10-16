@@ -267,3 +267,128 @@ class TestTheListStaysCheap(_SessionDetailBase):
         ids = [s["id"] for s in self._list().json()]
 
         self.assertEqual(ids, [str(self.session.id)])
+
+
+class TestTheListCarriesTheEfficiencySegment(_SessionDetailBase):
+    """spec 用户故事 18：「指标在会话列表的统计接口里同样可得」。
+
+    这一条**不是免费的**：列表原本只做 `annotate_realized_pnl` 一个 SQL 聚合，从不调
+    `compute_session_stats`，所以新键不会自动出现。另一条路（逐行调 `session_stats_for`）
+    被 `TestTheListStaysCheap` 那个类否掉了——50 条会话 50 次查询。所以这里钉的是第三条
+    路：**在同一个聚合里**带出效率段要的标量。
+    """
+
+    #: 六个契约键（`capital_efficiency_keys()`）。列表响应里逐字同名——前端只有一套读法。
+    EFFICIENCY_KEYS = (
+        "avg_capital_used",
+        "capital_utilization",
+        "idle_pct",
+        "time_in_market_pct",
+        "return_per_capital_used_pct",
+    )
+
+    def test_the_list_item_carries_every_contract_key(self):
+        self._order(self.session, pnl=Decimal("12"))
+
+        item = self._list().json()[0]
+
+        for key in self.EFFICIENCY_KEYS:
+            self.assertIn(key, item)
+        self.assertIn("capital_efficiency", item)
+        self.assertIn("capital_efficiency_metrics_available", item)
+        self.assertIn("capital_efficiency_notes", item)
+
+    def _window_around_now(self):
+        """把 `setUp` 造的那条会话推进到「有窗口、且窗口**确实包住**订单」的状态。
+
+        ## 为什么 stopped_at 必须造在**未来**
+
+        `Order.created_at` 是 `auto_now_add`，写的是真实挂钟，所以订单必然落在 `_order()`
+        被调用**的那一刻**。而窗口是左闭右开 `[started_at, stopped_at)`（纯模块口径 4），
+        所以 `stopped_at = now()` 会把几微秒之后创建的订单分到窗口**外**——详情路径于是
+        判 `no_trades`。那不是被测代码的错，是一份自相矛盾的测试数据（真实系统里不会出现
+        「订单在会话停止之后才成交」）。
+
+        这条边界值得写下来：**它是本票里唯一一处两条取数路径会真正分叉的地方**，而
+        `test_the_list_and_the_detail_agree_on_the_efficiency_segment` 就是为它写的。
+        """
+        self.session.started_at = timezone.now() - datetime.timedelta(days=1)
+        self.session.stopped_at = timezone.now() + datetime.timedelta(days=1)
+        self.session.status = "stopped"
+        self.session.save(update_fields=["started_at", "stopped_at", "status"])
+
+    def test_the_list_and_the_detail_agree_on_the_efficiency_segment(self):
+        """卡片与弹窗的「资金效率」是同一组数。分叉的表现是两个数都正常、但不一样。"""
+        self._window_around_now()
+        self._order(self.session, pnl=Decimal("12.5"))
+        self._order(self.session, pnl=Decimal("-2.25"))
+
+        item = self._list().json()[0]
+        stats = self._detail().json()["stats"]
+
+        for key in self.EFFICIENCY_KEYS:
+            self.assertEqual(item[key], stats[key], f"{key} 两条路分叉了")
+        self.assertEqual(item["capital_efficiency"]["trade_count"], 2)
+
+    def test_the_list_says_why_the_numbers_are_thin(self):
+        """列表也带上「这一侧是点观测口径」那句保留意见——**算得出时也要带**。
+
+        少了它，`capital_utilization = 0` 就会被当成回测侧那个数读：把重仓读成高效，方向
+        正是最危险的那一侧。
+        """
+        self._window_around_now()
+        self._order(self.session, pnl=Decimal("12"))
+
+        item = self._list().json()[0]
+
+        self.assertTrue(item["capital_efficiency_metrics_available"])
+        self.assertTrue(item["capital_efficiency_notes"])
+        self.assertIn("点观测", item["capital_efficiency_notes"][0])
+
+    def test_an_order_outside_the_window_is_not_counted_on_either_path(self):
+        """窗口外的订单**两条路都不算**——这是唯一一处两条取数会真正分叉的地方。
+
+        列表路径靠 SQL 注解的 `created_at` 比较裁窗口，详情路径靠纯模块 `_clip_to_window`
+        裁（左闭右开）。**任何一侧漏了这道裁剪**，同一个键就会在卡片与弹窗上给出两个值，
+        而两处看起来都正常：列表把窗口外那笔算进来、详情没算，于是「2 笔」与「1 笔」并排
+        显示，谁也不知道哪个对。
+
+        这条用例是变异探针逼出来的：把列表那侧退回「只数全量笔数」时，其余用例全绿
+        ——因为它们造的订单恰好都落在窗口内。
+        """
+        # 会话在**任何订单创建之前**就停下了，所以它名下的订单全部落在窗口外。
+        self.session.started_at = timezone.now() - datetime.timedelta(days=5)
+        self.session.stopped_at = timezone.now() - datetime.timedelta(days=1)
+        self.session.status = "stopped"
+        self.session.save(update_fields=["started_at", "stopped_at", "status"])
+        self._order(self.session, pnl=Decimal("12.5"))
+
+        item = self._list().json()[0]
+        stats = self._detail().json()["stats"]
+
+        self.assertEqual(item["capital_efficiency"]["trade_count"], 0)
+        self.assertEqual(stats["capital_efficiency"]["trade_count"], 0)
+        self.assertEqual(item["capital_efficiency"]["reason"], "no_trades")
+        # 盈亏照样算——窗口只裁「效率」，不裁「收益」。
+        self.assertEqual(item["realized_pnl"], "12.50000000")
+        self.assertEqual(stats["realized_pnl_total"], "12.50000000")
+        for key in self.EFFICIENCY_KEYS:
+            self.assertEqual(item[key], stats[key], f"{key} 两条路分叉了")
+
+    def test_a_session_that_cannot_be_measured_is_none_not_zero(self):
+        """量不了的行：整段 `None` + 原因，**不是 0**（0 会被读成「完全没用钱」）。
+
+        `setUp` 造的会话没有 `started_at`（还没启动），所以它必然落在这一支上——这恰好
+        是列表里最常见的一行：新建的会话。
+        """
+        item = self._list().json()[0]
+
+        self.assertIsNone(item["started_at"])
+        self.assertFalse(item["capital_efficiency_metrics_available"])
+        self.assertEqual(
+            item["capital_efficiency"]["reason"],
+            "invalid_capital",
+        )
+        for key in self.EFFICIENCY_KEYS:
+            self.assertIsNone(item[key], f"{key} 判不了时必须是 None")
+        self.assertTrue(item["capital_efficiency_notes"])
