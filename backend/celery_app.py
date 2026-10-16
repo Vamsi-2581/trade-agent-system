@@ -6,14 +6,15 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings.dev')
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings.dev")
 
 # Set strategy path for auto-discovery of strategy modules
 from apps.strategy_engine.registry import StrategyRegistry
-StrategyRegistry.set_strategy_path('/root/.tradelogx/strategies')
 
-app = Celery('trade_agent')
-app.config_from_object('django.conf:settings', namespace='CELERY')
+StrategyRegistry.set_strategy_path("/root/.tradelogx/strategies")
+
+app = Celery("trade_agent")
+app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 
 # 显式导入 task 模块（autodiscover_tasks 在某些环境下不生效）
@@ -27,7 +28,7 @@ import apps.regime.tasks  # noqa: F401
 
 # Grid search independent queue
 app.conf.task_routes = {
-    'apps.backtest.tasks.run_grid_search_task': {'queue': 'grid_search'},
+    "apps.backtest.tasks.run_grid_search_task": {"queue": "grid_search"},
 }
 
 app.conf.beat_schedule = {
@@ -50,53 +51,53 @@ app.conf.beat_schedule = {
     #     'schedule': crontab(hour=2, minute=0),
     # },
     # Check task health every 30 seconds — heartbeat, zombie detection, auto-retry
-    'check-task-health': {
-        'task': 'apps.agent.tasks.check_task_health',
-        'schedule': 30.0,
+    "check-task-health": {
+        "task": "apps.agent.tasks.check_task_health",
+        "schedule": 30.0,
     },
     # Check session expiry every 30 seconds
-    'check-session-expiry': {
-        'task': 'apps.agent.tasks.check_session_expiry',
-        'schedule': 30.0,
+    "check-session-expiry": {
+        "task": "apps.agent.tasks.check_session_expiry",
+        "schedule": 30.0,
     },
     # Check signal monitors every 30 seconds
-    'check-signals': {
-        'task': 'apps.signal_monitor.tasks.check_signals',
-        'schedule': 30.0,
+    "check-signals": {
+        "task": "apps.signal_monitor.tasks.check_signals",
+        "schedule": 30.0,
     },
     # Sync perpetual funding rates every 8h (after settlement points 00/08/16 UTC)
-    'sync-funding-rates': {
-        'task': 'apps.backtest.tasks.sync_funding_rates',
-        'schedule': crontab(hour='1,9,17', minute=30),
+    "sync-funding-rates": {
+        "task": "apps.backtest.tasks.sync_funding_rates",
+        "schedule": crontab(hour="1,9,17", minute=30),
     },
     # 增量同步 K 线（15min 一轮，覆盖 15m 周期最新 bar）
     # 间隔与任务同源读 settings.KLINE_SYNC_INTERVAL，避免两处硬编码漂移
-    'sync-klines': {
-        'task': 'apps.datasource.tasks.sync_klines',
-        'schedule': settings.KLINE_SYNC_INTERVAL,
+    "sync-klines": {
+        "task": "apps.datasource.tasks.sync_klines",
+        "schedule": settings.KLINE_SYNC_INTERVAL,
     },
     # Refresh expiring Feishu user tokens every 15 minutes
-    'refresh-feishu-user-tokens': {
-        'task': 'apps.channel.tasks.refresh_feishu_user_tokens',
-        'schedule': 900.0,
+    "refresh-feishu-user-tokens": {
+        "task": "apps.channel.tasks.refresh_feishu_user_tokens",
+        "schedule": 900.0,
     },
     # Clean expired signal monitors every hour
-    'clean-expired-monitors': {
-        'task': 'apps.signal_monitor.tasks.clean_expired_monitors',
-        'schedule': crontab(minute=15),
+    "clean-expired-monitors": {
+        "task": "apps.signal_monitor.tasks.clean_expired_monitors",
+        "schedule": crontab(minute=15),
     },
     # 悬挂订单兜底扫描（本地已落单但交易所 ID 为空的行 → 反查交易所）
     # 交易框架活跃时本任务自行跳过，由进程内成交同步（10s 一轮）负责
-    'check-order-status': {
-        'task': 'apps.trading.tasks.check_order_status',
-        'schedule': 60.0,
+    "check-order-status": {
+        "task": "apps.trading.tasks.check_order_status",
+        "schedule": 60.0,
     },
     # 当日净值快照（日内回撤检查的期初净值只有这一个来源：daily_snapshots 表
     # 在此之前没有任何写入方，检查于是必然走「无法获取期初资金数据」拒绝下单且不告警）
     # 5 分钟一轮 + 幂等（当日只写第一条）→ 不需要「必须在日界准确跑」
-    'snapshot-daily-equity': {
-        'task': 'apps.trading.tasks.snapshot_daily_equity',
-        'schedule': 300.0,
+    "snapshot-daily-equity": {
+        "task": "apps.trading.tasks.snapshot_daily_equity",
+        "schedule": 300.0,
     },
     # 日报投递（第①段单元 8iv）：把当天那一份日报按人裁剪后送到每个 is_active 用户。
     # 幂等（已送达的人不重投），所以密一点只是几次空转。
@@ -106,9 +107,9 @@ app.conf.beat_schedule = {
     # 之和大（心跳是喂日报的那个写入者），否则看门狗会早于「投递最晚什么时候才轮到」
     # 动手，而抢跑的表现是每天一条假告警。把这两条 beat 调**密**不违例，调稀就违例。
     # test_delivery.py::test_the_grace_covers_the_two_intervals_it_bounds 钉着这一条。
-    'regime-report-deliver': {
-        'task': 'apps.regime.tasks.deliver_report',
-        'schedule': 300.0,
+    "regime-report-deliver": {
+        "task": "apps.regime.tasks.deliver_report",
+        "schedule": 300.0,
     },
     # 日报投递看门狗（第①段单元 8iv）：当天日报过了 report.REPORT 的截止时刻
     # （+ WATCHDOG_GRACE）还是 delivered_at 为空，就升级告警。
@@ -118,9 +119,9 @@ app.conf.beat_schedule = {
     # 不用 crontab 表达式把「北京 09:00」翻成 UTC 小时：判定链路之所以反复强调
     # 「北京 08:00 == 日线换线」，就是因为口译钟点的地方只能有一处，而
     # CELERY_TIMEZONE 是 UTC——`crontab(hour=9)` 会在北京 17:00 触发。
-    'regime-report-delivery-watchdog': {
-        'task': 'apps.regime.tasks.check_report_delivery',
-        'schedule': 300.0,
+    "regime-report-delivery-watchdog": {
+        "task": "apps.regime.tasks.check_report_delivery",
+        "schedule": 300.0,
     },
     # 停止声明窗口同步（第②段单元 ②c）：把事件表与生效判定上的事实对账成
     # HaltDeclaration 行——声明表是 halt 状态机唯一读的那份状态，判定函数不读事件表。
@@ -128,9 +129,9 @@ app.conf.beat_schedule = {
     # 间隔就是这套写法的敞口上限：一段窗口结束后、下一段开启前如果窄于一轮（比如两件
     # 高影响事件挨得极近），那一小段里谁都拦不住——而事件熔断不可人工豁免（见
     # halt_sync.py 的模块 docstring）。所以这个数是**安全参数**，调稀要按同一句话权衡。
-    'regime-halt-window-sync': {
-        'task': 'apps.regime.tasks.sync_halt_windows',
-        'schedule': 300.0,
+    "regime-halt-window-sync": {
+        "task": "apps.regime.tasks.sync_halt_windows",
+        "schedule": 300.0,
     },
     # 行情阶段 gate 同步（第③段单元 ③b）：把「本阶段该停哪些策略」对账成声明行（与
     # 上面那条同一张表、不同一档），并在**Shadow 期也照跑**——档位关着时它不拦人，但
@@ -140,9 +141,9 @@ app.conf.beat_schedule = {
     # 固定间隔，不用 crontab：它只关心「多久跑一次」——行情阶段本身是日频判定的产物
     # （`regime_daily`），取数用不上比一轮 5 分钟更密的节奏；而**区间下限是安全参数**：
     # 阶段换档到「这一批策略真被停掉」之间的滞后上限就是这一轮，调稀要按同一句话权衡。
-    'regime-gate-sync': {
-        'task': 'apps.regime.tasks.sync_gate',
-        'schedule': 300.0,
+    "regime-gate-sync": {
+        "task": "apps.regime.tasks.sync_gate",
+        "schedule": 300.0,
     },
     # 候选事件到期清理（CONTEXT.md 第 37 / 94 条）：把过了 14 天失效期、还没人确认的候选
     # 标成「已丢弃」。**这一条此前没有任何调度入口**，所以「到期即丢弃」只存在于实现与
@@ -155,9 +156,18 @@ app.conf.beat_schedule = {
     # **要重启 beat 才会被调度**：`beat_schedule` 只在 beat 启动那一刻合并进
     # `PeriodicTask` 一次（见 `apps/regime/beat_health.py` 的模块 docstring），在那之前
     # 体检页的「调度表（beat）」会把它印成「从未进入调度表」。
-    'regime-candidate-expiry': {
-        'task': 'apps.regime.tasks.expire_candidates',
-        'schedule': 300.0,
+    "regime-candidate-expiry": {
+        "task": "apps.regime.tasks.expire_candidates",
+        "schedule": 300.0,
+    },
+    # 候选策略流水线推进（P2，#22/#23）：扫一遍「正在推进中的」候选，逐个推一层。
+    # 幂等（同层重复触发不起跑，见 apps/strategy_factory/orchestrator.py），所以
+    # 5 分钟一轮的代价是多数轮次一次带索引的查询加零行更新。判定各自有前置条件，
+    # 卡住（等账户 / 等人工卡点）时任务只是空转，不产生任何副作用。
+    # **要重启 beat 才会被调度**（同上 DatabaseScheduler 的合并语义）。
+    "strategy-factory-advance": {
+        "task": "apps.strategy_factory.tasks.advance_candidates_task",
+        "schedule": 300.0,
     },
     # 调度表体检（第③段单元 U3）：把「哪几条 beat 条目没在正常跑」变成一条给全体用户
     # 的即时消息（体检页那一段是它的第一半，见 `apps/regime/beat_health.py`）。
@@ -167,14 +177,14 @@ app.conf.beat_schedule = {
     # ——判据里已经含了落库滞后（180 秒）这一项，再密也只是把同一份读数看两遍。
     # **要重启 beat 才会被调度**（这一条自己也不例外）：在那之前它不会跑，而这件事恰好
     # 正是它要报告的形状——只有体检页看得见。
-    'regime-beat-health': {
-        'task': 'apps.regime.tasks.check_beat_health',
-        'schedule': 300.0,
+    "regime-beat-health": {
+        "task": "apps.regime.tasks.check_beat_health",
+        "schedule": 300.0,
     },
 }
 
 # 使用数据库调度器，支持动态添加/删除定时任务
-app.conf.beat_scheduler = 'django_celery_beat.schedulers:DatabaseScheduler'
+app.conf.beat_scheduler = "django_celery_beat.schedulers:DatabaseScheduler"
 
 # ---------------------------------------------------------------------------
 # Worker startup signal — one-time recovery check
@@ -187,6 +197,7 @@ from celery.signals import worker_ready
 def on_worker_ready(sender=None, **kwargs):
     """Trigger startup recovery check exactly once on worker boot."""
     from apps.agent.tasks import startup_recovery_check
+
     logger.info("[worker_ready] triggering startup recovery check")
     # Run synchronously so the worker doesn't proceed without recovery
     try:

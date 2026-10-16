@@ -63,6 +63,12 @@ class ReasonCode(str, Enum):
     AWAITING_REGISTRATION_RETRY = "awaiting_registration_retry"
     AWAITING_RERUN = "awaiting_rerun"
 
+    # -- 人工卡点（REST 端点的否决 / 取消，#23） ---------------------------- #
+    #: 不是判定结论，是**人的决定**：进转移记录的 reason_code，让审计面能区分
+    #: 「机器判它不合格」与「人把它叫停」（D20：推进动作可归因）。
+    HUMAN_REJECTED = "human_rejected"
+    HUMAN_CANCELLED = "human_cancelled"
+
     # -- L1 样本内 --------------------------------------------------------- #
     IN_SAMPLE_RUN_STARTED = "in_sample_run_started"
     IN_SAMPLE_PENDING = "in_sample_pending"
@@ -119,6 +125,8 @@ _REASON_DISPLAY = {
     ReasonCode.PAPER_RISK_HITS_ABOVE_MAX: "paper 期风控命中超过上限",
     ReasonCode.PAPER_PASSED: "paper 观察通过，等人工卡点升实盘",
     ReasonCode.INSUFFICIENT_EVIDENCE: "证据不足，判不了（不放行）",
+    ReasonCode.HUMAN_REJECTED: "人工否决",
+    ReasonCode.HUMAN_CANCELLED: "人工取消",
 }
 
 
