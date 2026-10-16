@@ -282,8 +282,24 @@ class CapitalEfficiencyResult:
         金额出成**定点字符串**（8 位小数，`Decimal(20,2)` / `Decimal(20,8)` 的既有口径），
         与 `session_stats.money()` 一致：这条链路上的金额从不经过二进制浮点。百分比是
         `float`——它们要与前端既有的阈值数字并列比较，而 8 位定点串对那个用途是多余的。
+
+        **`computed` / `reason` 进载荷**（spec D6）：它们是「整段判不了」这件事的**归因**，
+        而 D6 要求判不了的那一段自带原因码。载荷是消费方唯一会读的东西——把它留在对象
+        上，等于要求每一个消费方都记得手动补回来；少补一处，「判不了」就退化成「一堆
+        `None`」，事后无从区分「本金没设」与「这一段没有成交」（两者的补救动作完全不同，
+        见 `CapitalEfficiencyReason`）。载荷载的是**结论**，归因属于结论。
+
+        与 `capital_efficiency_keys()` 的关系：那六个是**指标**键，本函数另外带
+        `computed` / `reason` 与几个中间量。别把这里新增的两个塞进那个元组——它是跨侧
+        指标改名契约，塞进信封字段会让「改一个指标名」与「改一次信封形状」互相触发。
+
+        代价是判不了与算得出**不再同形**（算得出时 `reason` 是 `None`，键仍然在）。
+        「同形」在这里本来就是个假目标：那份载荷要能回答「为什么是 `None`」，
+        而一个形状相同、含义靠对象才能补齐的载荷做不到这件事。
         """
         return {
+            "computed": self.computed,
+            "reason": self.reason,
             "avg_capital_used": _money(self.avg_capital_used),
             "capital_utilization": self.capital_utilization,
             "idle_pct": self.idle_pct,

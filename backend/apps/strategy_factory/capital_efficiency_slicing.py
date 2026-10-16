@@ -110,6 +110,7 @@ from typing import Any, Iterable, Sequence
 
 from django.db import transaction
 
+from apps.common.time_utils import as_utc
 from apps.strategy_factory.capital_efficiency import (
     CAPITAL_EFFICIENCY_METRICS_KEY,
     CAPITAL_EFFICIENCY_VERSION,
@@ -142,22 +143,13 @@ _NOTIONAL_NOTES: tuple[str, ...] = (
 )
 
 
-def _as_utc(moment: datetime) -> datetime:
-    """把 DB 读回来的时刻归一成 UTC。
-
-    与 `slicing._as_utc` 逐字同一条纪律：`USE_TZ=True` 下 `DateTimeField` 读出来一定
-    是 aware 的，这里防的是「将来某处写进一个 naive datetime」——naive 交给
-    `astimezone()` 会按**进程 TZ** 解释，而进程 TZ 是 Django 加载 settings 时按
-    `TIME_ZONE` 覆写的产物。占用区间的时长直接由这两个时刻相减得出，口径挂在别人的
-    副作用上会让 `time_in_market_pct` 悄悄偏移。
-
-    naive → UTC 而不是抛出，是因为纯模块的 `OccupancyInterval.__post_init__` 已经在
-    构造处拒绝了 naive（那条 `ValueError` 说得更清楚）。两层都要：这一层负责**归一**，
-    那一层负责**拒绝**。
-    """
-    if moment.tzinfo is None:
-        return moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(timezone.utc)
+#: 时刻归一成 UTC 的实现住在 `apps/common/time_utils.py`（`as_utc`），本模块与
+#: `apps/regime/slicing.py` 共用它。原先两边各有一份**逐字相同**的私有拷贝——而本模块
+#: 的纯模块 docstring 恰好反复强调两个消费方必须调用同一个函数，理由是「口径不会在两处
+#: 分叉」；同一个论证逐字适用于这个助手，它干的本来就是一次口径归一（naive → UTC）。
+#: 本文件额外那两句说明（时长由两时刻相减得出、以及「归一 vs 拒绝」两层分工）已并入
+#: `as_utc` 的 docstring，所以这里只留别名，不留第二份实现。
+_as_utc = as_utc
 
 
 # --------------------------------------------------------------------------- #
@@ -295,9 +287,11 @@ def payload_from_result(
       陈旧判定会静默退化成「永远不陈旧」；
     * `notional_basis` + `attribution` —— 口径说明与三类行计数。
 
-    `reason` **不进载荷**（它在对象上，见纯模块 docstring）：载荷要能跟「算出来了」那一
-    份同形，前端不必为判不了单独写一条分支。判不了这件事由「六个指标键全是 `None`」
-    表达——而那与「键不存在」是两件事，正是本票要保证的。
+    `reason` / `computed` 现在由纯模块的 `as_payload()` 一并带出（spec D6 要求判不了的那
+    一段自带归因）。下面那两行因此**是冗余的**，保留它们与 `sample_threshold` 同理：
+    为了让「本载荷顶层必须有这两个键」这件事在本模块里可见——`is_stale` 与前端都按顶层
+    读，一旦哪天被挪进子字典，读方会静默退化成「永远不陈旧」/「永远读不出为什么」。
+    取值恒等于 `result.reason` / `result.computed`，不是第二份口径。
     """
     payload = dict(result.as_payload())
     payload["version"] = CAPITAL_EFFICIENCY_VERSION

@@ -23,6 +23,7 @@ from apps.strategy_factory.capital_efficiency import (
     OccupancyIntervalKind,
     capital_efficiency_keys,
 )
+from apps.strategy_factory.config import CONFIG, FactoryConfig
 from apps.trading.models import LiveSession, Order, Strategy
 from apps.trading.serializers import LiveSessionSerializer
 from apps.trading.session_stats import (
@@ -120,6 +121,39 @@ def test_the_sample_threshold_boundary(count, sufficient):
 
     assert stats["sample_sufficient"] is sufficient
     assert stats["sample_threshold"] == SAMPLE_THRESHOLD
+
+
+def test_the_sample_threshold_is_the_same_number_on_both_sides():
+    """会话侧的 `SAMPLE_THRESHOLD` 与工厂侧的 `FactoryConfig.min_trades` **必须是同一个数**。
+
+    这是 spec D10（「默认值只有一处」）与 D6 / 用户故事 22（两侧共享同一套口径）钉在一起
+    的那一处，而**没有任何东西**在运行时保证它：两个常量住在两个 app 里，各自被各自的
+    调用点读（`session_stats.compute_session_stats` 与
+    `capital_efficiency.compute_capital_efficiency` 的 `config.min_trades` 缺省）。
+
+    漂移的后果是**静默**的：把其中一个改成 20，同一批 25 笔的交易在会话详情里标成
+    「样本充足」、在回测载荷里标成「样本不足」，而两个数都叫 `sample_sufficient`——没有
+    异常、没有日志，只有同一个界面上两个互相矛盾的门槛结论。这正是本仓反复防的那类
+    「两处看起来都正常」的错误。
+
+    **为什么是钉死而不是合并**：不能把其中一个 import 进另一个。方向是
+    `trading → strategy_factory` 单向（`session_stats.py` 已经在模块作用域 import 纯模块，
+    这是既有事实与先例，见 `views.py` 的 `Q2` 延迟 import），反向 import 会成环；而把
+    `SAMPLE_THRESHOLD` 从 `strategy_factory` 里取，等于让「交易执行层」的门槛挂在「策略
+    工厂层」上——两个 app 的依赖方向会因此反过来。所以两份常量留在原地，由这个测试把它
+    们**铰在一起**：任何一侧改动而不动另一侧，这里立刻变红，改动者会看到「另一处也要
+    一起改」这个事实，而不是让口径悄悄分叉。
+
+    放在本文件（而不是 `test_config.py`）：`SAMPLE_THRESHOLD` 是**先有的那一个**（工厂
+    侧 docstring 自己写着「沿用仓库既有证据门槛」并引用了它），而 `trading` 已经 import
+    了 `strategy_factory`，两个常量在本文件里都能直接引用——放在 `test_config.py` 就得从
+    `trading` 反向 import，那正是上面说不能做的事。
+    """
+    assert SAMPLE_THRESHOLD == FactoryConfig.min_trades
+    # 与 import 级单例也一并钉住：真正被判定读到的是 `CONFIG`，而它不是 `FactoryConfig()`
+    # ——环境变量可以覆盖它（`STRATEGY_FACTORY_MIN_TRADES`）。会话侧没有对应的环境变量，
+    # 所以「两份默认值相等」与「运行期实际生效的值也相等」是两句话，都要成立。
+    assert SAMPLE_THRESHOLD == CONFIG.min_trades
 
 
 def test_the_caveats_ride_along_with_the_numbers():
