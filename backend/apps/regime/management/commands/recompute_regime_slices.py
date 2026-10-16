@@ -46,6 +46,29 @@ CONTEXT.md 要求切片「必须有全量重算入口」。这个命令就是它
 docstring）。`--dry-run` 更不会：上面那道门已经把它挡在池化之前了。
 
 **告警由本命令发**（`_notify_invalidated`），不由重放那一层发。
+
+## 资金效率重算并进同一条命令（spec #30 D8；子票 #35）
+
+存量回测的 `metrics["capital_efficiency"]` 也在这一条命令里刷新，**串行**排在切片同一个
+循环里（同 P2 池化重算先例：一个入口、一个进程、不另开命令）。它不改上面任何一段的
+顺序与语义：
+
+- **排在切片之后、池化之前**。理由与切片→池化同源：池化读的是切片载荷，而资金效率
+  不是它的输入，所以它插在中间既不提前也不推后任何依赖。放在循环里与切片并排跑，
+  是为了**共用同一次 `.defer()` 的扫描**——`HEAVY_COLUMNS` 那四列是同一个坑
+  （每行 600 KB，`--all` 4067 行 ≈ 2.4 GB），分成两趟扫就是把这个坑踩两遍。
+- **同一套 `.defer(*HEAVY_COLUMNS)` 与 `--limit` / `--result` / `--strategy` 收窄**：
+  范围参数对它是适用的（它逐结果算，与切片同粒度），与池化那段不同。
+- **失败互相独立**：切片失败与资金效率失败各自计数、各自进 stderr，任一条都不中断整批，
+  批末统一以非零退出码收场。一条口径坏了不该让另一条也停摆——它们读的是同一张表，
+  但算的是两个毫不相干的附加产物（用户故事 22 要求两套数字**能**分别修）。
+- **`--dry-run` 两段都不写**：资金效率那一段也只报「会重算什么」。
+- **陈旧判据是 `capital_efficiency_slicing.is_stale`**（版本 + 门槛 + 窗口），
+  **不比 `computed_at``**——理由与切片那一条逐字相同，见上面「全量」那一节。
+- `--force` 同时管两段：它说的是一句关于「写不写」的话，不是关于某一个载荷的话。
+
+**它为什么读本命令的 `--actor`**：不读。资金效率不落任何记录表（D9：零新增表/列），
+没有「谁让它重算的」这个问题可答；`--actor` 继续只作用于池化那一代。
 """
 
 from __future__ import annotations
@@ -59,6 +82,7 @@ from django.db.models import Q
 from apps.backtest.models import BacktestResult
 from apps.regime import pool_rebuild, replay, replay_run, slicing
 from apps.regime.models import ActorKind, ReviewVerdict
+from apps.strategy_factory import capital_efficiency_slicing
 from apps.trading import alerts
 
 #: 每多少条断一次旧连接。与 `run_grid_search_task` 的逐组合清理同一个意图。
@@ -78,7 +102,10 @@ HEAVY_COLUMNS = ("equity_curve", "drawdown_curve", "ohlcv_data", "indicator_data
 
 
 class Command(BaseCommand):
-    help = "重算存量回测的行情阶段切片（metrics.regime_slice）；幂等，按需重算"
+    help = (
+        "重算存量回测的行情阶段切片（metrics.regime_slice）与资金效率"
+        "（metrics.capital_efficiency），并重建池化表；幂等，按需重算"
+    )
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -145,6 +172,9 @@ class Command(BaseCommand):
         recomputed = 0
         fresh = 0
         failed: list[str] = []
+        eff_recomputed = 0
+        eff_fresh = 0
+        eff_failed: list[str] = []
 
         # 函数内导入，**不是**模块顶部（与 `apps/regime/tasks.py` 同一写法）：模块级
         # `from django.db import close_old_connections` 会把名字绑死在本模块上，此后
@@ -156,39 +186,76 @@ class Command(BaseCommand):
             if index % BATCH_SIZE == 0:
                 close_old_connections()
 
+            # -- 切片 -------------------------------------------------------- #
             if not force and not slicing.is_stale(result, tags):
                 fresh += 1
-                continue
-
-            if dry_run:
-                self.stdout.write(f"[dry-run] 会重算 {result.id} {self._label(result)}")
-                recomputed += 1
-                continue
-
-            try:
-                slicing.compute_slice(result, tags)
-                recomputed += 1
-            except Exception as e:
-                # 单条失败不中断整批：坏的那一条不该挡住其余几百条。批末以非零退出码结束。
-                failed.append(str(result.id))
-                self.stderr.write(
-                    self.style.ERROR(f"切片失败 {result.id} {self._label(result)}：{e}")
+            elif dry_run:
+                self.stdout.write(
+                    f"[dry-run] 会重算切片 {result.id} {self._label(result)}"
                 )
+                recomputed += 1
+            else:
+                try:
+                    slicing.compute_slice(result, tags)
+                    recomputed += 1
+                except Exception as e:
+                    # 单条失败不中断整批：坏的那一条不该挡住其余几百条。批末以非零退出码结束。
+                    failed.append(str(result.id))
+                    self.stderr.write(
+                        self.style.ERROR(
+                            f"切片失败 {result.id} {self._label(result)}：{e}"
+                        )
+                    )
+
+            # -- 资金效率（#35） --------------------------------------------- #
+            # 与切片并排而不是另起一圈：两段共用同一次 `.defer()` 扫描（见模块 docstring
+            # 「资金效率重算并进同一条命令」）。两条各自 try/except、各自计数——一条口径
+            # 坏了不该让另一条也停摆。
+            if not force and not capital_efficiency_slicing.is_stale(result):
+                eff_fresh += 1
+            elif dry_run:
+                self.stdout.write(
+                    f"[dry-run] 会重算资金效率 {result.id} {self._label(result)}"
+                )
+                eff_recomputed += 1
+            else:
+                try:
+                    capital_efficiency_slicing.compute_capital_efficiency_for(result)
+                    eff_recomputed += 1
+                except Exception as e:
+                    eff_failed.append(str(result.id))
+                    self.stderr.write(
+                        self.style.ERROR(
+                            f"资金效率失败 {result.id} {self._label(result)}：{e}"
+                        )
+                    )
 
         self.stdout.write(
             f"切片重算：{'待' if dry_run else ''}重算 {recomputed}，"
             f"跳过（不陈旧）{fresh}，失败 {len(failed)}"
         )
+        self.stdout.write(
+            f"资金效率重算：{'待' if dry_run else ''}重算 {eff_recomputed}，"
+            f"跳过（不陈旧）{eff_fresh}，失败 {len(eff_failed)}"
+        )
 
         self._rebuild_pool(options, failed)
 
-        if failed:
-            raise CommandError(f"{len(failed)} 条切片失败，详见上面的 stderr")
+        if failed or eff_failed:
+            # 一条退出码管两段：两段都是「这一轮该刷的没刷完」，而它们的补跑方式是同一条
+            # 命令。分开报在 stdout/stderr 上，退出码只有一个。
+            raise CommandError(
+                f"{len(failed)} 条切片失败、{len(eff_failed)} 条资金效率失败，详见上面的 stderr"
+            )
 
     # -- 池化那一段 ------------------------------------------------------ #
 
     def _rebuild_pool(self, options, failed: list[str]) -> None:
-        """切片跑完接着重建池化表。**同步**，与切片同一段连接纪律之外（一次查询 + 几批写入）。"""
+        """切片跑完接着重建池化表。**同步**，与切片同一段连接纪律之外（一次查询 + 几批写入）。
+
+        `failed` 只数**切片**那一档：池化读的是切片载荷，「这一代是按部分刷新的输入建的」
+        这句话说的只是切片。#35 的资金效率不是池化的输入，它的失败有自己的一行报告。
+        """
         if options["dry_run"]:
             self.stdout.write(
                 "[dry-run] 会全表重建池化表（范围参数只作用于切片那一段）"
@@ -350,6 +417,12 @@ class Command(BaseCommand):
 
         一律 defer 掉 `HEAVY_COLUMNS`（见那份常量的注释）：两条分支都要，所以加在
         `objects` 这一层，而不是各自补一次。
+
+        切片与资金效率**共用这一份查询集**（同一次扫描跑两段）。资金效率读
+        `start_date` / `end_date` / `initial_capital` 与另表的 `trades`——那四列一个都
+        不在 `HEAVY_COLUMNS` 里，所以它的加入不改变这一行的必要性。想往
+        `HEAVY_COLUMNS` 里加列之前先确认没人读它，想从扫描里**去掉**这几列之前先确认
+        这两段都不读它。
         """
         queryset = BacktestResult.objects.defer(*HEAVY_COLUMNS)
         if options["all"]:
