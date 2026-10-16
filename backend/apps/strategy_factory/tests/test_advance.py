@@ -35,6 +35,7 @@ from apps.strategy_factory.config import CONFIG, FactoryConfig
 from apps.strategy_factory.evaluate import (
     InSampleEvidence,
     OosEvidence,
+    PaperEvidence,
     ReasonCode,
 )
 from apps.strategy_factory.models import (
@@ -170,6 +171,8 @@ class FakePipeline:
         #: 默认「尚无结论」——模拟回测/分折还在跑。
         self.in_sample_evidence: InSampleEvidence | None = None
         self.oos_evidence: OosEvidence | None = None
+        #: L3 观察期的证据（#24）。默认 None = 尚无结论（停在观察中）。
+        self.paper_evidence: PaperEvidence | None = None
         self.resolved_contexts = 0
 
     # -- deps 成员 ---------------------------------------------------------- #
@@ -204,6 +207,15 @@ class FakePipeline:
     def read_oos(self, candidate):
         return self.oos_evidence
 
+    def read_paper(self, candidate=None, **kwargs):
+        """L3 观察期的证据（#24）。默认返回 `self.paper_evidence`（默认 None）。
+
+        给一个可替换的成员而不是省掉它：`AdvanceDeps` 的每个成员都是**一个**副作用，
+        接线用例只替换它关心的那一个，其余走真实实现——这是本文件开头的既有纪律。
+        想验「观察期判定真的接上了」的用例，注入 `PaperEvidence` 即可。
+        """
+        return self.paper_evidence
+
     def notify(self, candidate, message):
         self.notifications.append(message)
         return True
@@ -220,6 +232,7 @@ class FakePipeline:
             read_oos=self.read_oos,
             # 真实实现：只把余额读取 patch 掉（见 `_patch_balance`）。
             create_paper_session=effects.create_paper_session,
+            read_paper=self.read_paper,
             notify=self.notify,
             now=self.now,
             config=self.config,
@@ -1059,10 +1072,18 @@ class TestGatesAndWiring:
         assert LiveSession.objects.count() == 0
         assert _reload(candidate).status == "paper_pending"
 
-    def test_running_paper_layer_is_left_to_t5(
+    def test_running_paper_layer_without_evidence_stays_observing(
         self, django_capture_on_commit_callbacks, _patch_balance
     ):
-        """`paper_running` 的判定归 #24：本票只保证它不会被推去别处。"""
+        """`paper_running` 层现在**真的判定**（#24）；证据缺席时停在观察中。
+
+        #22 时代这条用例叫 `..._is_left_to_t5`，断言的是「传 None → 停在观察中」。
+        本票把那一层接上之后，同一个断言仍然成立，但理由变了：不再是「还没实现」，
+        而是「尚无结论」——采集侧返回 None（会话行不见了 / 还没采到）时的正常落点，
+        与另外两层 `read_*` 返回 None 的语义一致。
+
+        真正的判定行为在 `test_paper_observation.py` 里逐条钉；这里只验接线。
+        """
         strategy = _strategy("observing")
         candidate = _candidate(
             strategy, StrategyCandidateStatus.PAPER_RUNNING, name="observing"
@@ -1075,6 +1096,60 @@ class TestGatesAndWiring:
         assert out.from_status is out.to_status is StrategyCandidateStatus.PAPER_RUNNING
         assert out.reason_code is ReasonCode.PAPER_OBSERVING
         assert not out.changed
+
+    def test_running_paper_layer_passes_with_full_evidence(
+        self, django_capture_on_commit_callbacks, _patch_balance
+    ):
+        """**本票的接线验收**：注入一份「跑满观察期 + 盈亏达标」的证据 → 升到等人工卡点。
+
+        这一条是「#24 真的接上了」的证据：没有它，把 `read_paper` 换成恒返回 None 的
+        实现不会有任何用例变红，而候选会**永远停在观察中**——正是本票要消灭的那种
+        「看起来在跑、其实永远不出结论」。
+        """
+        strategy = _strategy("paper_pass")
+        candidate = _candidate(
+            strategy, StrategyCandidateStatus.PAPER_RUNNING, name="paper_pass"
+        )
+        fake = FakePipeline(strategy=strategy)
+        fake.paper_evidence = PaperEvidence(
+            wall_clock_days=20.0,
+            running_days=20.0,
+            closed_trades=40,
+            return_pct=5.0,
+            risk_hits=0,
+        )
+
+        with django_capture_on_commit_callbacks(execute=True):
+            out = advance(candidate, deps=fake.deps())
+
+        assert out.to_status is StrategyCandidateStatus.AWAITING_LIVE_APPROVAL
+        assert out.reason_code is ReasonCode.PAPER_PASSED
+        assert out.changed
+        assert _reload(candidate).status == "awaiting_live_approval"
+
+    def test_running_paper_layer_fails_on_risk_hits(
+        self, django_capture_on_commit_callbacks, _patch_balance
+    ):
+        """风控命中超标 → `paper_failed`（漏斗下限：不合格的候选不往前推）。"""
+        strategy = _strategy("paper_fail")
+        candidate = _candidate(
+            strategy, StrategyCandidateStatus.PAPER_RUNNING, name="paper_fail"
+        )
+        fake = FakePipeline(strategy=strategy)
+        fake.paper_evidence = PaperEvidence(
+            wall_clock_days=20.0,
+            running_days=20.0,
+            closed_trades=40,
+            return_pct=5.0,
+            risk_hits=1,
+        )
+
+        with django_capture_on_commit_callbacks(execute=True):
+            out = advance(candidate, deps=fake.deps())
+
+        assert out.to_status is StrategyCandidateStatus.PAPER_FAILED
+        assert out.reason_code is ReasonCode.PAPER_RISK_HITS_ABOVE_MAX
+        assert _reload(candidate).status == "paper_failed"
 
 
 # --------------------------------------------------------------------------- #

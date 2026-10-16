@@ -240,17 +240,32 @@ class RiskGuard:
         leverage_reason = await self._check_leverage(request)
         if leverage_reason:
             logger.warning(f"[RiskGuard] REJECTED: {leverage_reason}")
-            return await self._reject(user_id, leverage_reason, record_event=True)
+            return await self._reject(
+                user_id,
+                leverage_reason,
+                record_event=True,
+                live_session_id=request.live_session_id,
+            )
         # 3c 总名义敞口（本单成交后 Σ|value × leverage| / equity）
         exposure_reason = await self._check_total_notional_exposure(request, user_id)
         if exposure_reason:
             logger.warning(f"[RiskGuard] REJECTED: {exposure_reason}")
-            return await self._reject(user_id, exposure_reason, record_event=True)
+            return await self._reject(
+                user_id,
+                exposure_reason,
+                record_event=True,
+                live_session_id=request.live_session_id,
+            )
         position_ok, reason = await self._check_position_limit(request, user_id)
         logger.info(f"[RiskGuard] step 3 done: ok={position_ok}")
         if not position_ok:
             logger.warning(f"[RiskGuard] REJECTED: {reason}")
-            return await self._reject(user_id, reason, record_event=True)
+            return await self._reject(
+                user_id,
+                reason,
+                record_event=True,
+                live_session_id=request.live_session_id,
+            )
 
         # 4. 日内回撤
         logger.info("[RiskGuard] step 4: drawdown check")
@@ -286,6 +301,7 @@ class RiskGuard:
         reason: str,
         *,
         record_event: bool = False,
+        live_session_id: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """拒绝下单**并让用户看见**，然后返回 (False, reason)。
 
@@ -298,12 +314,21 @@ class RiskGuard:
         ``record_event=True``（Ticket 3：额度类新拒单——杠杆 / 单仓 / 总敞口）时
         另写一条 ``RiskEvent``（type=hard_limit，message 即带具体数字的 reason）。
         写入失败只记日志：档案缺一行不能变成二次拒单或放行。
+
+        ``live_session_id``（spec #19 D7，#24）：额度类命中归集到会话的唯一入口。
+        ``OrderRequest.live_session_id`` 在下单通路上现成有（第 0 步 halt 已经用它做
+        「会话 → 策略」换算），传下来即可。**浮亏预警不经这里**（它是账户级循环，
+        手里没有会话，行落 NULL——#24 已确认口径：risk_hits 只算 hard_limit）。
+        归集失败只记日志：档案缺一列归属不能变成二次拒单或放行，与上面同一条纪律。
         """
         from apps.trading.alerts import notify_user
 
         if record_event:
             await self._record_risk_event(
-                level="P0", event_type="hard_limit", message=reason
+                level="P0",
+                event_type="hard_limit",
+                message=reason,
+                live_session_id=live_session_id,
             )
 
         try:
@@ -713,6 +738,7 @@ class RiskGuard:
         level: str,
         event_type: str,
         message: str,
+        live_session_id: Optional[str] = None,
     ) -> None:
         """记录风控事件到数据库"""
         try:
@@ -720,10 +746,14 @@ class RiskGuard:
 
             @db_async
             def create():
+                # live_session_id 直接给外键列：uuid 校验交给数据库——非法 id 让写入
+                # 失败并走下面的 except 记日志，而不是在这里多一道「先查一次」的查询
+                # （那一道查询自己也可能挂，挂了同样要走 except，白绕一圈）。
                 return RiskEvent.objects.create(
                     level=level,
                     event_type=event_type,
                     message=message,
+                    live_session_id=live_session_id,
                 )
 
             await create()

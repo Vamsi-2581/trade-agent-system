@@ -1,6 +1,7 @@
 import uuid
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Order(models.Model):
@@ -251,3 +252,135 @@ class LiveSession(models.Model):
 
     def __str__(self):
         return f"LiveSession({self.mode}/{self.status}) - {self.strategy.name} {self.symbol}"
+
+
+class LiveSessionStatusChange(models.Model):
+    """会话状态变更时间线（spec #19 D8，子票 #24）。
+
+    ## 为什么要有这张表
+
+    D8 的观察期口径是「墙钟 ≥ N 天**且期间 `running` 时长 ≥ N 天**」——`paused` 是
+    「暂停止损/止盈」，**不计入观察**。但 `LiveSession` 上只有一个 `status` 标量
+    （**只有当前值，没有历史**）加 `started_at` / `stopped_at` 两个时刻，于是
+    「running 累计多少天」这个数**根本算不出来**：一条 7 天 running → 3 天 paused →
+    7 天 running 的会话，墙钟是 17 天，而其中 3 天不该算——库里没有任何东西记得那 3 天。
+
+    同一处的第二个坑：`live_session_start` 每次启动都无条件
+    `started_at = timezone.now()`，而 `live_session_resume` **完全不碰** `started_at`。
+    所以「跑 7 天 → 暂停 3 天 → 恢复 7 天」读到的墙钟是 17 天，**把 paused 算了进去**
+    ——误差方向恰好是**偏乐观**的那一侧，也就是 D8 明令禁止的那一侧。
+
+    补上这条时间线之后，`running` 时长才第一次成为**可复核的真值**：它由「进入
+    running 的时刻」与「离开 running 的时刻」逐段求和得出，与 `status` 当前是什么无关。
+
+    ## 落库纪律
+
+    * **每一次状态变更写一行**，四个入口（start / pause / resume / stop）各一处，
+      且与 `session.save()` 在**同一个事务**里——时间线与会话状态分家的话，
+      这张表就成了「另一种说法」，而算观察期时没人知道该信哪一个。
+    * `from_status` / `to_status` 都存字面值（不是外键、不复用 `STATUS_CHOICES` 的
+      元组对象）：这是一份**审计流水**，它记录的是当时发生的事实。将来 `STATUS_CHOICES`
+      增删一档，历史行必须保持它当时的原样，不能被新枚举重新解释。
+    * `changed_at` 由调用方给（不 `auto_now_add`）：测试要注入固定时刻来钉「恰 14 天」
+      边界，而 `auto_now_add` 会把注入的时刻悄悄丢掉。
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    live_session = models.ForeignKey(
+        LiveSession,
+        on_delete=models.CASCADE,
+        related_name="status_changes",
+        help_text="发生变更的会话；会话行没了，它的时间线也无从谈起",
+    )
+    from_status = models.CharField(
+        max_length=12, blank=True, default="", help_text="变更前状态；空串 = 会话刚建立"
+    )
+    to_status = models.CharField(max_length=12)
+    changed_at = models.DateTimeField(help_text="变更时刻（由调用方给，UTC aware）")
+
+    class Meta:
+        db_table = "live_session_status_changes"
+        ordering = ["changed_at", "id"]
+        indexes = [
+            # 算 running 时长时永远是「按会话取一段、按时间排序」，这是那条查询的形状。
+            models.Index(fields=["live_session", "changed_at"]),
+        ]
+
+    def __str__(self):
+        return (
+            f"LiveSessionStatusChange({self.from_status or '∅'} → {self.to_status}"
+            f" @ {self.changed_at:%Y-%m-%d %H:%M})"
+        )
+
+
+def running_duration(session, *, until):
+    """`session` 在 `until` 之前的 **running 累计时长**（`timedelta`）。
+
+    **这是全仓关于「running 时长」的唯一算法**（spec #19 D8 的口径）：
+
+    * 时间线按 `changed_at` 升序走一遍，维护「当前状态」与「这一段从什么时候开始」；
+    * 只有状态是 `running` 的段才累加；
+    * 最后一段若仍处于 `running`，累加到 `until` 为止。
+
+    ## 三条边界，每条都是刻意选的
+
+    1. **没有时间线 → 返回 `None`，不是 `0`。** 「算不出来」与「跑了 0 秒」是两件
+       不同的事：前者该判「证据不足」（不放行），后者是一个**看起来合规**的数字，
+       会让一条 `started_at` 有值但时间线缺失的会话被判成「还没跑满」并一直等下去。
+       返回 `None` 让调用方必须显式处理这个缺口。
+
+    2. **会话尚未进入过 `running` → 返回 `timedelta(0)`，不是 `None`。** 这与第 1 条
+       不矛盾：时间线存在、且**明确记录着**「它从来没跑过」，那是一种**已知**的零，
+       不是未知。它的判定后果与「跑了 0 天」一致（观察不满），而那是正确结论。
+
+    3. **`until` 早于某一段的起点时不计入该段**（`max(0)` 保证不出现负时长）。
+       注入一个早于会话启动的时刻会得到 0，而不是一个负数把总额吃掉。
+
+    ## 为什么是自由函数而不是 `session` 的方法
+
+    它是一个**纯查询 + 纯算术**，不读 `self.status`（第 1 条的口径恰恰是「不看当前
+    状态」——当前状态答不出历史）。挂成方法会让人以为它读会话自身的字段；这里显式
+    要求调用方把「截止到什么时候」传进来，因为那个时刻是**判定的一部分**（测试要钉
+    边界），不该由被查对象自己决定。
+    """
+    rows = list(
+        session.status_changes.order_by("changed_at", "id").values_list(
+            "to_status", "changed_at"
+        )
+    )
+    if not rows:
+        return None
+
+    total = timezone.timedelta(0)
+    current_status: str | None = None
+    segment_start = None
+
+    for to_status, changed_at in rows:
+        if segment_start is not None and current_status == "running":
+            total += max(changed_at - segment_start, timezone.timedelta(0))
+        current_status = to_status
+        segment_start = changed_at
+
+    if current_status == "running" and segment_start is not None:
+        total += max(until - segment_start, timezone.timedelta(0))
+
+    return total
+
+
+def record_status_change(session, *, to_status, changed_at) -> None:
+    """写一行时间线（四个入口共用；`session.save()` 由调用方负责）。
+
+    **调用方必须与 `session.save()` 包在同一个事务里**：时间线是「另一种说法」的
+    防线，分家之后没有人知道该信哪一个（见 `LiveSessionStatusChange` 的 docstring）。
+    本函数只管写行，不管事务——事务的边界属于发起状态变更的那个入口，它知道
+    自己的成功条件是什么。
+
+    `from_status` 从**传入的会话对象**读而不是从库里重读：调用方手里这一份就是
+    「变更前」的那一份（它马上要被 save 覆盖），再读一次库反而可能读到别人的写入。
+    """
+    LiveSessionStatusChange.objects.create(
+        live_session=session,
+        from_status=session.status or "",
+        to_status=to_status,
+        changed_at=changed_at,
+    )

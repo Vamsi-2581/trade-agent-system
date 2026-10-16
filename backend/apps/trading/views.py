@@ -7,7 +7,12 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
-from .models import Order, Strategy, LiveSession
+from .models import (
+    Order,
+    Strategy,
+    LiveSession,
+    record_status_change,
+)
 from .serializers import OrderSerializer, StrategySerializer, LiveSessionSerializer
 
 logger = logging.getLogger(__name__)
@@ -579,7 +584,14 @@ def live_session_start(request, pk):
     session.status = "running"
     session.started_at = timezone.now()
     session.stopped_at = None
-    session.save(update_fields=["status", "started_at", "stopped_at", "updated_at"])
+    # 时间线（#24，D8）：与 save 同一个事务（视图的原子块见下方 transaction.atomic）。
+    # 重启动也记一行：观察期只计 running，而重启动是「离开 running（stopped/error）
+    # 再回来」，不记的话第一段 running 的终点就丢了。
+    from django.db import transaction
+
+    with transaction.atomic():
+        record_status_change(session, to_status="running", changed_at=timezone.now())
+        session.save(update_fields=["status", "started_at", "stopped_at", "updated_at"])
 
     logger.info(
         "Live session %s started: strategy=%s symbol=%s timeframe=%s",
@@ -623,7 +635,13 @@ def live_session_pause(request, pk):
         )
 
     session.status = "paused"
-    session.save(update_fields=["status", "updated_at"])
+    # 时间线（#24，D8）：paused 不计入观察，但**这一段从什么时候开始**必须被记住，
+    # 否则恢复后无法从 running 段里把这段扣掉。
+    from django.db import transaction
+
+    with transaction.atomic():
+        record_status_change(session, to_status="paused", changed_at=timezone.now())
+        session.save(update_fields=["status", "updated_at"])
 
     # 真正停住 runner：只改 DB 状态的话（旧实现）runner 继续跑，且 Redis 兼容层键
     # 仍写着 running → 下次重启又被恢复（2026-09-21 实际踩到）。stop_strategy_runner
@@ -668,7 +686,12 @@ def live_session_resume(request, pk):
         return Response({"error": conflict}, status=400)
 
     session.status = "running"
-    session.save(update_fields=["status", "updated_at"])
+    # 时间线（#24，D8）：resume 是重新进入 running，新的一段从这里起算。
+    from django.db import transaction
+
+    with transaction.atomic():
+        record_status_change(session, to_status="running", changed_at=timezone.now())
+        session.save(update_fields=["status", "updated_at"])
 
     # 真正拉起 runner（并重建 Redis 兼容层键）。失败时 DB 已是 running，
     # 下次重启仍会被恢复，属可自愈状态，故只记录错误。
@@ -714,7 +737,12 @@ def live_session_stop(request, pk):
 
     session.status = "stopped"
     session.stopped_at = timezone.now()
-    session.save(update_fields=["status", "stopped_at", "updated_at"])
+    # 时间线（#24，D8）：离开 running 的时刻在这里落地——最后一段 running 的终点。
+    from django.db import transaction
+
+    with transaction.atomic():
+        record_status_change(session, to_status="stopped", changed_at=timezone.now())
+        session.save(update_fields=["status", "stopped_at", "updated_at"])
 
     # 停止当前 session 的策略运行器
     frame_manager = FrameManager.get_instance()
@@ -795,7 +823,14 @@ def live_session_promote(request, pk):
     # 停止当前 paper 会话
     session.status = "stopped"
     session.stopped_at = timezone.now()
-    session.save(update_fields=["status", "stopped_at", "updated_at"])
+    # 时间线（#24，D8）：promote 停掉 paper 会话也是一次「离开 running」，
+    # 它的最后一段 running 终点同样要落地——观察期判定在 promote 之前发生，
+    # 但判定要可复核，时间线就必须完整到 promote 这一刻。
+    from django.db import transaction
+
+    with transaction.atomic():
+        record_status_change(session, to_status="stopped", changed_at=timezone.now())
+        session.save(update_fields=["status", "stopped_at", "updated_at"])
 
     # 创建新的 live 会话
     live_session = LiveSession.objects.create(

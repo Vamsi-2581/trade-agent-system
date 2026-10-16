@@ -17,6 +17,17 @@ class RiskEvent(models.Model):
     event_type 枚举同时补上 ``floating_loss``：迁移前 guard 是唯一写入方，写的
     却是枚举外的值（ CharField choices 不约束 Level 之外的写入），迁移后写入值
     与枚举一致，混合来源的历史行也可按 choices 反解。
+
+    ``live_session``（spec #19 D7，子票 #24）：**命中是会话的属性**，候选只是间接
+    引用，所以这一跳钉在事件上、候选侧靠 ``StrategyCandidate.paper_session`` 反查。
+    可空是**刻意的**，有两个独立的理由：
+
+    1. **写而不读的那一侧还不全**：只有额度类拒单（``RiskGuard._reject``）手上真有
+       会话（``OrderRequest.live_session_id``）。浮亏预警走的是
+       ``RiskGuard._check_floating_pnl``，那是一个**账户级**循环，手里只有
+       ``target``（交易所#账户）与 ``pos``，够不着任何会话——它的行永远是 NULL。
+    2. **既有行与既有写入路径零回归**：加列不许把历史行或任何一条不传会话的写入路径
+       变成失败。
     """
 
     LEVEL_CHOICES = [("P0", "P0"), ("P1", "P1"), ("P2", "P2")]
@@ -32,6 +43,18 @@ class RiskEvent(models.Model):
     level = models.CharField(max_length=2, choices=LEVEL_CHOICES)
     event_type = models.CharField(max_length=32, choices=TYPE_CHOICES)
     message = models.TextField()
+    #: 这一条命中出自哪条实盘会话；``NULL`` = 归集不到会话（浮亏预警、历史行）。
+    #: ``SET_NULL`` 而不是 ``CASCADE``：**档案不该因为会话被删而消失**——「这条策略
+    #: 在 paper 期被风控拦过几次」是要事后答得出来的问题，删会话把事件一起抹掉，
+    #: 恰恰抹掉了要回答它的那份证据。
+    live_session = models.ForeignKey(
+        "trading.LiveSession",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="risk_events",
+        help_text="命中所属的实盘/模拟会话；为空表示归集不到具体会话",
+    )
     resolved = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     resolved_at = models.DateTimeField(null=True, blank=True)

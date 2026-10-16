@@ -54,6 +54,7 @@ from apps.strategy_factory.config import CONFIG, FactoryConfig
 from apps.strategy_factory.evaluate import (
     InSampleEvidence,
     OosEvidence,
+    PaperEvidence,
 )
 from apps.strategy_factory.models import StrategyCandidate
 from apps.strategy_factory.orchestrator import (
@@ -491,6 +492,147 @@ async def _fetch_usdt_balance(account: Any) -> Decimal:
 
 
 # --------------------------------------------------------------------------- #
+# L3：paper 观察期判定所需的证据（#24）
+# --------------------------------------------------------------------------- #
+
+#: 风控命中计数的口径说明。**必须随结论一起透出**（交付 7 的同一条纪律）：
+#: 它讲的是这个计数**覆盖了什么**，而这件事只在产生它的这一处知道。
+RISK_HIT_CAVEAT = (
+    "风控命中只计额度类拒单（RiskEvent.type=hard_limit，杠杆/单仓/总敞口）："
+    "浮亏预警是账户级循环、手里没有会话，归集不到候选，未纳入计数。"
+)
+
+#: 观察期口径说明：两个数都要够，且 paused 不计入。
+OBSERVATION_CAVEAT = (
+    "观察期要求墙钟与 running 时长**同时**达标；paused（暂停止损/止盈）不计入 running。"
+)
+
+#: 一天 = 这个秒数。天数换算只用它，不在两处各写一次 86400。
+_SECONDS_PER_DAY = 86400.0
+
+
+def _days(delta: Any) -> float | None:
+    """`timedelta` → 天数（float）；`None` 原样返回（「算不出来」不是 0）。"""
+    if delta is None:
+        return None
+    return delta.total_seconds() / _SECONDS_PER_DAY
+
+
+def read_paper(
+    candidate: StrategyCandidate, *, now: Any | None = None
+) -> PaperEvidence | None:
+    """采 L3 paper 那一层的证据（spec #19 D8，子票 #24 的核心）。
+
+    `None` 的语义与另外两层一致：**尚无结论**（还没建会话 / 会话行不见了），
+    判定层据此停在 `paper_running` 等下一轮——不是「判为不合格」。
+
+    ## 四个数的来源，每个都只有一处
+
+    | 数 | 来源 | 为什么是它 |
+    |---|---|---|
+    | `wall_clock_days` | `started_at → now` | D8 原文；`started_at` 为空则算不出来 |
+    | `running_days` | `LiveSessionStatusChange` 时间线逐段求和 | 见下 |
+    | `closed_trades` / `return_pct` | **复用** `compute_session_stats(pnls)` | D7 明令「不重写一份统计」 |
+    | `risk_hits` | `RiskEvent.objects.filter(live_session=..., type="hard_limit")` | D7 的可空外键 |
+
+    ## `running_days` 为什么必须走时间线
+
+    `LiveSession` 上只有一个 `status` 标量加两个时刻，**答不出「running 累计多久」**：
+    一条 7 天跑 → 3 天暂停 → 7 天跑的会话，墙钟 17 天而其中 3 天不该算，库里原本
+    没有任何东西记得那 3 天。时间线（#24 新建）让这个数第一次成为真值。它返回
+    `None` 表示「时间线缺失、算不出来」，判定层会判**证据不足**（不放行）——而不是
+    当成 0 天（那会让一条其实跑够了的会话永远等下去）。
+
+    ## `return_pct` 怎么从 `compute_session_stats` 出来
+
+    `compute_session_stats` 给的是**金额**（`realized_pnl_total`），而判定要的是
+    **百分比**（`paper_min_return_pct`）。分母取 `initial_capital`：那是这次 paper
+    观察的起点权益，也正是「这条策略这一段赚了百分之几」的分母。`initial_capital`
+    为 0 或空 → 百分比算不出来 → 返回 `None`（判「证据不足」），**不做除零**。
+
+    ## caveats 随结论一起走（交付 7）
+
+    `compute_session_stats` 自带的 `caveats`（不含未实现部分、不含熔断减仓）原样带出，
+    本层再加两条自己的（风控命中口径、观察期口径）。它们不参与判定，只随结论透出——
+    少一句，「不含未实现部分」的数字就会被读成完整盈亏。
+    """
+    from apps.riskguard.models import RiskEvent
+    from apps.trading.models import running_duration
+    from apps.trading.session_stats import compute_session_stats
+
+    session = candidate.paper_session
+    if session is None:
+        return None
+
+    # `now` 可注入（与 `AdvanceDeps.now` 同一条纪律）：观察期的两个数都是「相对现在」
+    # 的量，不给注入点就没法钉「恰 14 天」这条边界——用例只能靠把时间线造在真实的
+    # now 之前若干天，而那样的断言会随着运行时刻漂移。生产传 None，走真实时钟。
+    now = now if now is not None else timezone.now()
+
+    # --- 观察期：两个数都要 --- #
+    wall_clock_days = (
+        _days(now - session.started_at) if session.started_at is not None else None
+    )
+    running_days = _days(running_duration(session, until=now))
+
+    # --- 盈亏：复用既有纯函数（D7「不重写一份统计」） --- #
+    from apps.trading.models import Order
+
+    pnls = Order.objects.filter(
+        live_session=session, realized_pnl__isnull=False
+    ).values_list("realized_pnl", flat=True)
+    stats = compute_session_stats(pnls)
+
+    closed_trades = stats["closed_orders"]
+    capital = session.initial_capital
+    if capital:
+        return_pct = float(
+            Decimal(stats["realized_pnl_total"]) / Decimal(capital) * Decimal("100")
+        )
+    else:
+        # 分母不可用 → 百分比没有意义。给 None 让判定判「证据不足」，
+        # 而不是给一个 0.0（那是一条**看起来合规**的「没赚钱」，会直接把候选否掉）。
+        return_pct = None
+
+    # --- 风控命中：按 D7 的可空外键归集，只算额度类拒单 --- #
+    risk_hits = RiskEvent.objects.filter(
+        live_session=session, event_type="hard_limit"
+    ).count()
+
+    #: 会话是否已结束。`stopped` / `error` 都不再产生成交，停在观察里等它自己变好
+    #: 等于永远不判定——判定层靠这一位把「还在观察」与「没跑满就结束了」分开。
+    session_ended = session.status in ("stopped", "error")
+
+    evidence = PaperEvidence(
+        wall_clock_days=wall_clock_days,
+        running_days=running_days,
+        closed_trades=closed_trades,
+        return_pct=return_pct,
+        risk_hits=risk_hits,
+        session_ended=session_ended,
+    )
+    # caveats 不参与判定（PaperEvidence 是 frozen 且判定不读它），所以单独挂在
+    # 调用方能取到的地方：编排层把它们写进 evidence 与通知正文。
+    _PAPER_CAVEATS[id(candidate)] = list(stats.get("caveats", [])) + [
+        RISK_HIT_CAVEAT,
+        OBSERVATION_CAVEAT,
+    ]
+    return evidence
+
+
+#: 上一次 `read_paper` 采到的 caveats（按候选对象 id）。**进程内、一次性**：
+#: 它只是把「纯函数拿不到的说明文字」从采集点递到编排点的传手，不作为状态使用——
+#: 编排层读完即取走，不会跨请求留存。这样 `PaperEvidence` 不必为了携带说明文字而
+#: 长出一个判定不读的字段（那会让「判定输入」与「展示素材」混在一个结构里）。
+_PAPER_CAVEATS: dict[int, list[str]] = {}
+
+
+def take_paper_caveats(candidate: StrategyCandidate) -> list[str]:
+    """取走上一次为 `candidate` 采到的 caveats（取走即删，避免无界增长）。"""
+    return _PAPER_CAVEATS.pop(id(candidate), [])
+
+
+# --------------------------------------------------------------------------- #
 # 通知与时钟
 # --------------------------------------------------------------------------- #
 
@@ -527,6 +669,7 @@ def default_deps(config: FactoryConfig | None = None) -> AdvanceDeps:
         start_oos=start_oos,
         read_oos=read_oos,
         create_paper_session=create_paper_session,
+        read_paper=read_paper,
         notify=notify,
         now=now,
         config=config or CONFIG,

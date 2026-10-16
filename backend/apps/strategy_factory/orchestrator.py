@@ -210,6 +210,9 @@ class AdvanceDeps:
     read_oos: Callable[[StrategyCandidate], OosEvidence | None]
     #: 建 `mode="paper"` 会话（含余额、参数继承、不变式与冲突检查）。
     create_paper_session: Callable[[StrategyCandidate], Any]
+    #: 读 **paper 观察期**的证据（#24）：观察期的两个数、盈亏统计、风控命中。
+    #: None = 尚无会话 / 会话行不见了（停在观察中），与另外两层的 None 同义。
+    read_paper: Callable[[StrategyCandidate], PaperEvidence | None]
     #: 通知候选提出人；返回「是否投递到一个具体的人」。
     notify: Callable[[StrategyCandidate, str], Any]
     #: 现时刻（转移记录的 `at`、层记录的 `started_at` 都读它，测试可注入固定值）。
@@ -415,12 +418,7 @@ def _step(fresh: StrategyCandidate, deps: AdvanceDeps) -> _Step:
         return _paper_pending_step(fresh, deps)
 
     if status is StrategyCandidateStatus.PAPER_RUNNING:
-        # paper 观察期的判定（观察期满 + 盈亏 + 风控命中）**归 #24**：这里的证据由
-        # 它来补，本票只保证这一步不会把候选推到别处去（传 None → 停在观察中）。
-        return _Step(
-            StrategyCandidateLayer.PAPER,
-            evaluate_candidate(CandidateEvidence(status=status, thresholds=cfg)),
-        )
+        return _paper_running_step(fresh, deps)
 
     # registration_failed / in_sample_failed / oos_failed / paper_failed /
     # awaiting_live_approval：都不采证据，判定层各自给出「等谁动」的结论。
@@ -647,6 +645,62 @@ def _paper_pending_step(fresh: StrategyCandidate, deps: AdvanceDeps) -> _Step:
             "mode": "paper",
         }
     return step
+
+
+def _paper_running_step(fresh: StrategyCandidate, deps: AdvanceDeps) -> _Step:
+    """L3 观察期那一步：采证据 → 判定（#24，spec D8）。
+
+    与另外两层同形：证据由 `deps.read_paper` 采（默认实现读时间线 / 订单 / 风控事件），
+    交判定纯函数，结论落状态。`None` 表示**尚无结论**（会话行不见了），判定层据此
+    停在 `paper_running`。
+
+    ## 为什么 caveats 要单独递一次
+
+    `PaperEvidence` 是判定的**输入**，而 caveats 是给人读的**说明文字**（判定一个字都
+    不读它）。把说明文字塞进判定输入，会让「判定依赖什么」与「结论展示什么」混在同一个
+    结构里，将来有人照着 `PaperEvidence` 加字段时说不清该加在哪一侧。所以采集侧把它
+    暂存、这里取走并放进 `extra_detail`（转移记录与通知正文都读它）。
+
+    取了就删（`take_paper_caveats` 是 pop）：它是「从采集点到编排点」的一次性传手，
+    不是状态。
+
+    ## 时钟只有一个
+
+    `deps.now()` 既喂给这里采证据、也喂给 `advance` 写转移记录的 `at`。两处各读一次
+    `timezone.now()` 也能跑，但那样「结论说 13.99 天」与「记录写在这一刻」可能差一个
+    毫秒级的不同时刻，而边界用例正是要钉这两者的一致性。默认实现接得住这个参数；
+    注入的 `read_paper` 若只接受一个位置参数，撤回老签名也不会炸——见下面的 `TypeError`
+    兜底。
+    """
+    try:
+        evidence = deps.read_paper(fresh, now=deps.now())
+    except TypeError:
+        # 注入的假实现可能只接受 `(candidate)`。退化成不传时钟——判定照样跑，
+        # 只是那个假实现自己决定怎么算时长（它本来就是假的，不该被签名卡住）。
+        evidence = deps.read_paper(fresh)
+    caveats = _take_paper_caveats(fresh)
+    extra: dict[str, Any] = {}
+    if caveats:
+        # 交付 7：口径边界必须随结论透出，不得被读成完整盈亏。
+        extra["caveats"] = caveats
+    return _Step(
+        StrategyCandidateLayer.PAPER,
+        evaluate_candidate(
+            CandidateEvidence(
+                status=StrategyCandidateStatus.PAPER_RUNNING,
+                paper=evidence,
+                thresholds=deps.config,
+            )
+        ),
+        extra_detail=extra,
+    )
+
+
+def _take_paper_caveats(fresh: StrategyCandidate) -> list[str]:
+    """取走采集侧为这个候选暂存的 caveats（默认实现才有；注入的 `read_paper` 不必提供）。"""
+    from apps.strategy_factory.effects import take_paper_caveats
+
+    return take_paper_caveats(fresh)
 
 
 def _paper_account_problem(account: Any) -> str | None:
@@ -923,6 +977,11 @@ _NEXT_STEP = {
     ReasonCode.OOS_BACKTEST_FAILED: "分折失败：先看依据里的 error，修好后再重跑。",
     ReasonCode.PAPER_ACCOUNT_MISSING: "**需要你**：给这条候选指定一个 testnet 账户，下一轮会自动前进。",
     ReasonCode.PAPER_QUEUED: "同账户同品种已有活跃会话，排队中：那条会话结束后下一轮会自动前进。",
+    ReasonCode.PAPER_OBSERVING: "观察期未满（墙钟与 running 两个数都要求达标），下一轮自动重判，无需你操作。",
+    ReasonCode.PAPER_OBSERVATION_INCOMPLETE: "paper 会话在观察期满前结束了：这条候选判未过。要再试就重新观察（paper_failed → paper_running）。",
+    ReasonCode.PAPER_RETURN_BELOW_MIN: "paper 期盈亏不达标：改参数后重新走漏斗。",
+    ReasonCode.PAPER_RISK_HITS_ABOVE_MAX: "paper 期风控命中超过上限：这条策略在模拟期被风控拦过，改参数后重新走漏斗。",
+    ReasonCode.PAPER_PASSED: "**需要你**：这条候选跑满观察期且判定通过，等你确认是否升实盘（人工卡点）。",
     ReasonCode.INSUFFICIENT_EVIDENCE: "证据不足，判不了（不放行）：补数据或改窗口后重新推进。",
 }
 
@@ -954,6 +1013,12 @@ def _message(
         )
     elif verdict.reason_code in _NEXT_STEP:
         lines.append(f"下一步：{_NEXT_STEP[verdict.reason_code]}")
+    # 口径边界随结论一起透出（交付 7）：这里的数字**不是**完整盈亏，少这一句它就会被
+    # 当成完整盈亏读。只在真有 caveats 时列（样本内那几层没有）。
+    caveats = facts.get("caveats")
+    if isinstance(caveats, list) and caveats:
+        lines.append("口径说明：")
+        lines.extend(f"- {c}" for c in caveats)
     return "\n".join(lines)
 
 
