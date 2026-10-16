@@ -17,6 +17,7 @@ import {
   type StrategyParamSpec,
 } from "@/lib/api";
 import { resampleOHLCV, computeIndicators, timeframeToMinutes } from "@/lib/resample";
+import { capitalEfficiencyCards } from "@/lib/format";
 import TView from "@/components/backtest/TView";
 import EquityChart from "@/components/backtest/EquityChart";
 import DrawdownChart from "@/components/backtest/DrawdownChart";
@@ -570,6 +571,64 @@ export default function BacktestDetailPage() {
             ))}
         </div>
       )}
+
+      {/* 资金效率（spec #30 用户故事 12，子票 #35 写 / #36 展示）
+        *
+        * 三段降级，缺一不可：
+        * ① `detail.metrics` 整个没有 / 是空的 → 外层的 `Object.keys(...).length > 0` 挡住；
+        * ② `metrics` 有别的键但**没有** `capital_efficiency`（**存量回测就是这样**，
+        *    键压根不存在，不是 null 也不是 `{}`）→ 下面这层的 `ce` 守卫挡住，
+        *    此时整块不渲染，与改动前的页面完全一致；
+        * ③ 有这一段但数值是 `null`（`invalid_capital` / `empty_window` / `no_trades`）
+        *    → 逐项渲染成「—」。金额是 8 位定点**字符串**、百分比是 float 的**百分点**，
+        *    两种类型分开格式化。
+        *
+        * `notes`（口径边界：notional 取的是哪个本金口径、以及"它不是什么"）**必须显示**。
+        * 藏起来会让这个数读起来比它本身更大——那是本仓 `caveats` 纪律专门要防的一类误读
+        * （见 `session_stats._CAVEATS` 的注释：口径写在前端，将来谁改了取数没有一个地方会变红）。 */}
+      {detail.metrics && Object.keys(detail.metrics).length > 0 && (() => {
+        const ce = detail.metrics.capital_efficiency;
+        if (!ce) return null;
+        // 格式化与降级判定都在 `capitalEfficiencyCards`（纯函数，有用例）：金额是 8 位
+        // 定点字符串、百分比是**百分点** float，两种口径不能混。这里只管渲染。
+        const cards = capitalEfficiencyCards(ce);
+        return (
+          <div className="mb-4">
+            {cards.length > 0 && (
+              <div className="grid grid-cols-6 gap-3">
+                {cards.map((m, i) => (
+                  <div
+                    key={i}
+                    className="bg-bg1 border border-[rgba(255,255,255,0.07)] rounded-xl px-4 py-3"
+                  >
+                    <div className="text-[10px] text-text3 uppercase tracking-wider mb-1">
+                      {m.label}
+                    </div>
+                    <div className={`text-sm font-mono font-bold ${m.cls}`}>
+                      {m.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* 六个指标可能整段判不了（都是 null，上面被 filter 掉），那时至少要说清原因。 */}
+            {ce.computed === false && (
+              <p className="text-[10px] text-text3 mt-2">
+                资金效率判不了{ce.reason ? `（${ce.reason}）` : ""}，不是「占用为 0」。
+              </p>
+            )}
+            {ce.notes && ce.notes.length > 0 && (
+              <ul className="mt-2 space-y-0.5">
+                {ce.notes.map((n: string) => (
+                  <li key={n} className="text-[10px] text-text3 leading-relaxed">
+                    · {n}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Review & Deploy Section */}
       {detail && (

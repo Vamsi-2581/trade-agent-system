@@ -412,6 +412,44 @@ export const loggingApi = {
 
 // ── Live Session API ──
 
+/**
+ * 会话侧的**资金效率子载荷**（spec #30 D6/D9，子票 #38）。
+ *
+ * 与回测侧的 `CapitalEfficiency`（`metrics.capital_efficiency`）是**同一组契约键、逐字同名**
+ * （spec 用户故事 22：口径不在两处分叉），但两处必须分开读，因为这个子载荷里多了一组
+ * **只有会话侧才有**的键，它们说明「这一侧为什么是粗口径」：
+ *
+ * - `occupied_seconds` 恒为 0、`window_seconds` 是**墙钟**（`started_at → stopped_at/now`），
+ *   不是「在仓时长」。会话侧的 `Order` 没有成对的开平仓时刻，只能喂**点观测**
+ *   （每个平仓时刻一项，零时长、时间权重 0、仍计一笔）。
+ * - 后果是确定的、也是必须标出来的：`avg_capital_used` 是 `0.00000000`、
+ *   `time_in_market_pct` 是 `0.0`、`return_per_capital_used_pct` 是 `None`。
+ *   **这三个数不是「这条会话没用钱」，而是「这一侧量不了持仓时长」**。当成效率数字读，
+ *   会把「重仓短打」读成「几乎没用资金」——恰好把高风险读成高效率。
+ *
+ * 所以展示层**必须**连 `capital_efficiency_metrics_available` 与
+ * `capital_efficiency_notes` 一起读，不能只看摊平到顶层的数字。
+ */
+export interface SessionCapitalEfficiency {
+  /** 与 `capital_efficiency_metrics_available` 同源；子载荷里再带一份供单独调试。 */
+  computed?: boolean;
+  /** 判不了时的原因码（`invalid_capital` / `empty_window` / `no_trades`）。 */
+  reason?: string | null;
+  /** 中间量：校验「为什么 avg_capital_used 是 0」必须看到（点观测下恒为 0）。 */
+  trade_count?: number;
+  occupied_seconds?: number;
+  window_seconds?: number;
+  sample_threshold?: number;
+  pnl_total?: string | null;
+  avg_capital_used?: string | null;
+  capital_utilization?: number | null;
+  idle_pct?: number | null;
+  time_in_market_pct?: number | null;
+  return_per_capital_used_pct?: number | null;
+  sample_sufficient?: boolean;
+  notes?: string[];
+}
+
 export interface LiveSession {
   id: string;
   strategy: string;
@@ -430,6 +468,32 @@ export interface LiveSession {
    * **null 表示「没有这个数」（未注解），不是 0**——卡片对 null 显示「—」，
    * 绝不退回 `current_equity - initial_capital` 自己算一个。 */
   realized_pnl: string | null;
+  /** 会话侧资金效率子载荷（见 `SessionCapitalEfficiency`）。 */
+  capital_efficiency?: SessionCapitalEfficiency;
+  /**
+   * **展示这些数字之前必须先看它**（spec #30 用户故事 12 的会话侧）。
+   *
+   * `false` 时摊平的那六个键一律 `null`——而 `null` 会被 `Number(null)` 读成 `0`，
+   * 于是「量不了」在界面上变成「完全没用钱」。所以为 `false` 时展示层只出「—」与
+   * `capital_efficiency_notes`，**不渲染任何一个效率数字**。
+   */
+  capital_efficiency_metrics_available?: boolean;
+  /**
+   * 「为什么只是粗口径 / 为什么整段没有」。**算得出时也非空**——会话侧没有一次计算
+   * 是等价于回测侧的，所以总得有一句说清楚。空列表会被读成「没有任何保留意见」，
+   * 而那正是这条链路上最贵的一种误读，因此展示层原样带出。
+   */
+  capital_efficiency_notes?: string[];
+  /** 金额：8 位定点字符串；`available` 为假时是 `null`。 */
+  avg_capital_used?: string | null;
+  /** 百分比：float 的**百分点**；`available` 为假时是 `null`（不是 0）。 */
+  capital_utilization?: number | null;
+  idle_pct?: number | null;
+  time_in_market_pct?: number | null;
+  return_per_capital_used_pct?: number | null;
+  /** 订单笔数口径的「样本够不够」。**与子载荷里同名的那个（区间笔数）不是一回事**，
+   * 所以后端给了这个不同名的出口——前端用这个，不要用子载荷里的。 */
+  sample_sufficient_orders?: boolean;
   config: Record<string, unknown>;
   started_at: string | null;
   stopped_at: string | null;
@@ -438,7 +502,12 @@ export interface LiveSession {
 }
 
 /** 会话收益统计。由后端算好，前端只显示——**门槛与口径都在后端**
- * （`sample_sufficient` 由后端按 `sample_threshold` 判定，前端不许自己比大小）。 */
+ * （`sample_sufficient` 由后端按 `sample_threshold` 判定，前端不许自己比大小）。
+ *
+ * 尾部那几个 `capital_efficiency_*` 键来自子票 #38：详情视图把 `session_stats_for()` 的
+ * 返回字典整个放在 `stats` 里，所以那一段在这里**自动出现**。它们与 `LiveSession` 顶层
+ * 的同名键是**同一处汇总、同一个数**（有测试钉着两条取数路径不冲突），展示层只需要读一处
+ * ——但读之前同样要先看 `capital_efficiency_metrics_available`。 */
 export interface LiveSessionStats {
   realized_pnl_total: string;
   closed_orders: number;
@@ -452,6 +521,18 @@ export interface LiveSessionStats {
   worst_pnl: string | null;
   /** 「这个数没覆盖什么」的边界文案，由后端随数字一起给，前端原样显示。 */
   caveats: string[];
+  /** **展示效率数字之前必须先看它**——见 `LiveSession.capital_efficiency_metrics_available`。 */
+  capital_efficiency_metrics_available?: boolean;
+  /** 会话侧为粗口径的说明，算得出时也非空。 */
+  capital_efficiency_notes?: string[];
+  capital_efficiency?: SessionCapitalEfficiency;
+  avg_capital_used?: string | null;
+  capital_utilization?: number | null;
+  idle_pct?: number | null;
+  time_in_market_pct?: number | null;
+  return_per_capital_used_pct?: number | null;
+  /** 订单笔数口径的「样本够不够」（顶层 `sample_sufficient` 的别名，见后端注释）。 */
+  sample_sufficient_orders?: boolean;
 }
 
 /** 一行生效参数：策略声明了什么 / 本会话覆盖了什么 / 实际传下去的是什么。 */
@@ -544,6 +625,51 @@ export const liveSessionApi = {
 
 // ── Backtest API ──
 
+/**
+ * 回测 `metrics.capital_efficiency` 那一段（spec #30 用户故事 12，子票 #35 写 / #36 展示）。
+ *
+ * **每一个字段都可能不出现**：`metrics` 是整份 JSON 原样透出的裸字段，而**存量回测
+ * 里压根没有这个键**（不是 null、不是 `{}`）——见 `apps/backtest/serializers.py`。所以
+ * 消费方拿到的类型是 `CapitalEfficiency | undefined`，且这里的每个键都标成可选：
+ * 类型上说"一定有"，前端就会写出一个在真实数据上崩的读法。
+ *
+ * **两种数不能混着读**：金额（`avg_capital_used` / `pnl_total`）是 8 位定点**字符串**
+ * （这条链路上的钱从不经过二进制浮点），而百分比（`capital_utilization` / `idle_pct` /
+ * `time_in_market_pct` / `return_per_capital_used_pct`）是 **float 的百分点**
+ * （`100.0` 就是 100%）。格式化分支靠的就是这个区别。
+ *
+ * **判不了的那几个是 `null`，不是 0**（`invalid_capital` / `empty_window` /
+ * `no_trades` 三种）：`0%` 会被读成"完全没占用资金"，而真相是"这一段没有资金效率
+ * 证据"。显示层必须把 `null` 渲染成「—」。
+ */
+export interface CapitalEfficiency {
+  /** 载荷形状 / 口径的版本号。跟着口径走，用来判断老行是不是按旧口径算的。 */
+  version?: number;
+  computed?: boolean;
+  /** 判不了时的原因码（`invalid_capital` / `empty_window` / `no_trades`）。 */
+  reason?: string | null;
+  /** 口径快照：`sample_sufficient` 是拿这个门槛比的。 */
+  sample_threshold?: number;
+  /** 金额：8 位定点字符串，**不是数字**（见上）。 */
+  avg_capital_used?: string | null;
+  /** 百分比：float 的**百分点**（25.0 就是 25%）。判不了时是 null。 */
+  capital_utilization?: number | null;
+  idle_pct?: number | null;
+  time_in_market_pct?: number | null;
+  return_per_capital_used_pct?: number | null;
+  sample_sufficient?: boolean;
+  pnl_total?: string | null;
+  trade_count?: number;
+  occupied_seconds?: number;
+  window_seconds?: number;
+  /**
+   * 口径边界（`notional` 取的是哪一个本金口径、以及"它不是什么"）。**必须显示**：
+   * 这是唯一一处说明"这个数覆盖了什么"的地方，藏起来会让数字读起来比它本身更大。
+   * 回测侧由后端保证非空。
+   */
+  notes?: string[];
+}
+
 export interface BacktestResult {
   id: string;
   strategy: number;
@@ -561,6 +687,7 @@ export interface BacktestResult {
   total_trades: number;
   git_commit_hash: string;
   parameters: Record<string, unknown>;
+  /** 整份 metrics 原样透出（后端无 allowlist）。`capital_efficiency` 这一段可能整个缺失。 */
   metrics?: Record<string, any>;
   review_status: "pending" | "approved" | "rejected";
   review_notes: string;

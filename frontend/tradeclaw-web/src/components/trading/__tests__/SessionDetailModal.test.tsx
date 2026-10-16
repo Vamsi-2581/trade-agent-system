@@ -488,3 +488,171 @@ describe("取数失败与关闭", () => {
     expect(getDetail).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── ②b 资金效率：展示降级（spec #30 用户故事 12 / 18，子票 #36） ──
+
+/**
+ * 这一组的全部风险是**把「量不了」显示成「没占用」**。
+ *
+ * 会话侧的效率指标是点观测口径：`Order` 没有成对的开平仓时刻，所以
+ * `avg_capital_used` / `time_in_market_pct` 恒为 0、`return_per_capital_used_pct`
+ * 恒为 null。后端为此并列了一个 `capital_efficiency_metrics_available` 标志——
+ * 它存在的唯一理由就是让消费方**不要**把那些 0 当效率数字读。
+ *
+ * 所以下面的用例各自钉住一条：
+ *   1. 标志为假 → 一个效率数字都不许出现（尤其不许是 `0.00%`）；
+ *   2. 标志为真 → 数字照原样显示（后端给的是百分点 float，不是比值）；
+ *   3. `notes` 必须显示（口径边界只在载荷里，不在前端）；
+ *   4. 老响应压根没有这些键 → 不崩、显示「—」。
+ */
+describe("资金效率的展示降级", () => {
+  /** 后端「算得出」时的典型载荷：`capital_utilization` 是 **0** 而 available 为真。 */
+  const measurable = {
+    ...detail,
+    capital_efficiency_metrics_available: true,
+    capital_efficiency_notes: [
+      "本侧只给点观测（每个平仓时刻一项，零时长、时间权重 0、仍计一笔）：" +
+        "avg_capital_used / time_in_market_pct 恒为 0、return_per_capital_used_pct 恒为 " +
+        "None——那是「这一侧量不了持仓时长」，不是「这条会话没占用资金」。",
+    ],
+    capital_efficiency: {
+      computed: true,
+      reason: null,
+      trade_count: 3,
+      occupied_seconds: 0,
+      window_seconds: 86400,
+      sample_threshold: 30,
+      pnl_total: "12.50000000",
+      avg_capital_used: "0.00000000",
+      capital_utilization: 0.0,
+      idle_pct: 100.0,
+      time_in_market_pct: 0.0,
+      return_per_capital_used_pct: null,
+      sample_sufficient: false,
+    },
+    avg_capital_used: "0.00000000",
+    capital_utilization: 0.0,
+    idle_pct: 100.0,
+    time_in_market_pct: 0.0,
+    return_per_capital_used_pct: null,
+  };
+
+  /** 后端「判不了」时：六个键一律 **null**（不是 0），available 为假。 */
+  const unmeasurable = {
+    ...detail,
+    capital_efficiency_metrics_available: false,
+    capital_efficiency_notes: [
+      "整段判不了：invalid_capital",
+      "会话本金不可用（未设或 ≤0）：利用率的分母不成立，整段判不了——不是「占用为 0」。",
+    ],
+    capital_efficiency: {
+      computed: false,
+      reason: "invalid_capital",
+      trade_count: 0,
+      occupied_seconds: 0,
+      window_seconds: 0,
+      sample_threshold: 30,
+      pnl_total: null,
+      // 后端刻意给 null：0 会被读成「完全没用钱」
+      avg_capital_used: null,
+      capital_utilization: null,
+      idle_pct: null,
+      time_in_market_pct: null,
+      return_per_capital_used_pct: null,
+      sample_sufficient: null,
+    },
+    avg_capital_used: null,
+    capital_utilization: null,
+    idle_pct: null,
+    time_in_market_pct: null,
+    return_per_capital_used_pct: null,
+  };
+
+  it("判不了时不显示任何效率数字——尤其不显示 0.00%", async () => {
+    getDetail.mockResolvedValue(unmeasurable);
+    renderModal();
+
+    const block = within(await screen.findByTestId("session-efficiency"));
+
+    // 六个格子都在，但**一个效率数字都不许出现**。后端给的是 null，而 `null` 一旦被
+    // `?? 0` / `Number()` 兜一下，这里就会出现 `0.00%`——那正是「量不了」被显示成
+    // 「没占用」的那一刻，也是这组用例存在的全部理由。
+    expect(block.queryByText("0.00%")).toBeNull();
+    expect(block.queryByText("100.00%")).toBeNull();
+    expect(block.queryByText("$0.00")).toBeNull();
+    expect(block.queryByText(/\d+\.\d\d%/)).toBeNull();
+    // 六个格子 + 效率样本 = 六处「—」（效率样本也判不了）
+    expect(block.getAllByText("—").length).toBe(6);
+    // 原因码要说清（没有原因码的「判不了」事后无法归因）。它在两处出现——
+    // 展示层自己那一行，以及后端 notes 里的那一句——所以按行断言。
+    expect(block.getAllByText(/invalid_capital/).length).toBeGreaterThanOrEqual(1);
+    expect(block.getByText(/这一段判不了/)).toBeTruthy();
+  });
+
+  it("判不了时把后端给的原因与说明原样带出来", async () => {
+    getDetail.mockResolvedValue(unmeasurable);
+    renderModal();
+
+    const block = within(await screen.findByTestId("session-efficiency"));
+    // notes 逐字来自后端（口径边界只在载荷里，不在前端写死）
+    expect(block.getByText(/整段判不了：invalid_capital/)).toBeTruthy();
+    expect(block.getAllByText(/不是「占用为 0」/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("算得出时按百分点显示，并带上「这是粗口径」的说明", async () => {
+    getDetail.mockResolvedValue(measurable);
+    renderModal();
+
+    const block = within(await screen.findByTestId("session-efficiency"));
+
+    // `capital_utilization` 后端给的是**百分点** float（0.0 就是 0%），不是比值。
+    // 若前端误当比值再乘 100，这里会看到 0.00% 之外的值——夹具选了 0 与 100 两端。
+    expect(block.getByText("100.00%")).toBeTruthy(); // idle_pct
+    // available 为真时数字照出（0 是真数，只是含义是「量不了时长」）：
+    // 资金利用率与在仓时间占比两项都是 0.00%
+    expect(block.getAllByText("0.00%").length).toBe(2);
+    // 那个 0 必须有个注解在旁边，否则它读起来就是「没占用资金」
+    expect(block.getByText("点观测口径")).toBeTruthy();
+    // 口径边界必须显示：藏起来数字会读起来比本身更大
+    expect(block.getByText(/量不了持仓时长/)).toBeTruthy();
+  });
+
+  it("老响应没有这些键时不崩、显示「—」", async () => {
+    // 详情接口在 #38 之前的形状：`stats`/会话顶层都没有效率键。
+    // 用解构剔除而不是 `delete`：`LiveSessionDetail` 没有索引签名，`delete` 需要
+    // 先断言成 `Record<string, unknown>`，那是一次没必要的类型谎（而且 `delete`
+    // 在 TS 里对非可选属性本来就不该被允许）。
+    const {
+      capital_efficiency_metrics_available: _a,
+      capital_efficiency_notes: _n,
+      capital_efficiency: _ce,
+      ...legacyFields
+    } = detail;
+    getDetail.mockResolvedValue(legacyFields as LiveSessionDetail);
+
+    renderModal();
+
+    const block = within(await screen.findByTestId("session-efficiency"));
+    // 缺标志 = 不可用：「先看标志再读数字」这条纪律自然覆盖了老响应
+    expect(block.queryByText(/%/)).toBeNull();
+    expect(block.getByText(/这一段判不了/)).toBeTruthy();
+  });
+
+  it("单项 null 与整段不可用分开处理：只有那一项出「—」", async () => {
+    getDetail.mockResolvedValue(measurable);
+    renderModal();
+
+    const block = within(await screen.findByTestId("session-efficiency"));
+
+    // `return_per_capital_used_pct` 在点观测口径下**恒为 null**（纯模块口径：pnl 未知
+    // 或 avg_capital_used 为 0）。它是**单独一项**的 null，与「整段 available 为假」
+    // 是两种不同的降级——前者只有一个格子出「—」，后者六个格子全出「—」。
+    // 展示层若把两者混成一件事，就会在这一项上错出 `0.00%`。
+    const blockText = (await screen.findByTestId("session-efficiency")).textContent ?? "";
+    expect(blockText).toContain("占用资金回报—");
+    // 恰好一处「—」（那一项），其余五项是真数
+    expect(block.getAllByText("—").length).toBe(1);
+    // 数字照出，不因为一项 null 就把整段藏起来
+    expect(block.getAllByText("0.00%").length).toBe(2);
+  });
+});

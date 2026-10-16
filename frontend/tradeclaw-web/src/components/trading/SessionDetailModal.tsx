@@ -199,6 +199,110 @@ function StatsBlock({ stats }: { stats: LiveSessionDetail["stats"] }) {
   );
 }
 
+/**
+ * 会话侧的资金效率（spec #30 用户故事 12 / 18，子票 #38 出数、#36 展示）。
+ *
+ * ## 为什么必须**先看 `capital_efficiency_metrics_available` 再碰数字**
+ *
+ * 后端把六个契约键摊平到顶层（与回测侧逐字同名），但在会话侧它们**恒为粗口径**：这一侧
+ * 的 `Order` 没有成对的开平仓时刻，只能喂点观测，于是 `avg_capital_used` 是 `0`、
+ * `time_in_market_pct` 是 `0.0`、`return_per_capital_used_pct` 是 `None`。那**不是**
+ * 「这条会话没用钱」，而是「这一侧量不了持仓时长」；当效率数字读就会把「重仓短打」读成
+ * 「几乎没占用资金」——恰好把高风险读成高效率，方向正是最危险的那一侧。
+ *
+ * `available` 为假时后端把六个键全给成 `null`（不是 0），而 `null` 一旦被 `?? 0` 或
+ * `Number()` 兜一下就在界面上变成 `0%`——**那就是这条口径防线失效的地方**。所以本组件
+ * 在 `available` 为假时**一个效率数字都不渲染**，只出「—」与后端给的 `notes`。
+ *
+ * ## `notes` 为什么必须显示
+ *
+ * 它是唯一一处说明「这个数覆盖了什么」的地方（点观测口径 + 窗口是墙钟而不是在仓时长）。
+ * 后端保证它**算得出时也非空**；写死在前端的话，将来谁改了取数口径，这里不会变红。
+ */
+function EfficiencyBlock({ s }: { s: LiveSession }) {
+  const available = s.capital_efficiency_metrics_available === true;
+  const notes = s.capital_efficiency_notes ?? [];
+  const ce = s.capital_efficiency;
+
+  // 百分比：后端给的是**百分点** float（25.0 = 25%）。null（量不了）与 undefined（老响应）
+  // 都渲染「—」。**绝不 `?? 0`**。
+  const pct = (v: number | null | undefined) =>
+    v == null ? "—" : `${v.toFixed(2)}%`;
+  // 金额：8 位定点字符串。null → 「—」，不是 0.00。
+  const money = (v: string | null | undefined) =>
+    v == null
+      ? "—"
+      : `$${Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  return (
+    <div className="bg-bg1 border border-[rgba(255,255,255,0.07)] rounded-lg pb-2.5">
+      <BlockHeader>资金效率 · 会话侧粗口径</BlockHeader>
+      <div data-testid="session-efficiency" className="px-3">
+        <div className="grid grid-cols-3 gap-2">
+          <StatCell label="平均占用资金">
+            {/* available 为假时不读数字：后端给的是 null，任何"兜底成 0"的写法都会
+                把「量不了」显示成「没占用」。 */}
+            <span className="font-mono text-sm font-bold text-text">
+              {available ? money(s.avg_capital_used) : "—"}
+            </span>
+          </StatCell>
+          <StatCell label="资金利用率">
+            <span className="font-mono text-sm font-bold text-text">
+              {available ? pct(s.capital_utilization) : "—"}
+            </span>
+          </StatCell>
+          <StatCell label="在仓时间占比">
+            <span className="font-mono text-sm font-bold text-text">
+              {available ? pct(s.time_in_market_pct) : "—"}
+            </span>
+            {available && (
+              <span className="ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-dim text-amber">
+                点观测口径
+              </span>
+            )}
+          </StatCell>
+          <StatCell label="闲置比例">
+            <span className="font-mono text-sm font-bold text-text">
+              {available ? pct(s.idle_pct) : "—"}
+            </span>
+          </StatCell>
+          <StatCell label="占用资金回报">
+            <span className="font-mono text-sm font-bold text-text">
+              {available ? pct(s.return_per_capital_used_pct) : "—"}
+            </span>
+          </StatCell>
+          <StatCell label="效率样本">
+            <span className="font-mono text-sm font-bold text-text">
+              {!available
+                ? "—"
+                : ce?.sample_sufficient
+                  ? "充足"
+                  : "不足"}
+            </span>
+          </StatCell>
+        </div>
+        {/* 判不了时至少要说清原因码：没有原因码的「判不了」在事后无法归因。 */}
+        {!available && (
+          <div className="mt-2 text-[10px] text-text3 leading-relaxed">
+            这一段判不了
+            {ce?.reason ? `（${ce.reason}）` : ""}
+            ，不是「占用为 0」。
+          </div>
+        )}
+        {notes.length > 0 && (
+          <ul className="mt-2 space-y-0.5">
+            {notes.map((n) => (
+              <li key={n} className="text-[10px] text-text3 leading-relaxed">
+                · {n}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ParamsBlock({ params }: { params: LiveSessionDetail["params"] }) {
   return (
     <div className="bg-bg1 border border-[rgba(255,255,255,0.07)] rounded-lg pb-2">
@@ -429,6 +533,11 @@ export default function SessionDetailModal({
               </div>
             )
           )}
+
+          {/* ②b 资金效率：会话侧粗口径，**以 availability 标志为准**
+              （见 `EfficiencyBlock` 的 docstring）。挂在详情之后：它比收益统计多一层
+              保留意见，上面那块先给出「这条会话赚了多少」的确定答案。 */}
+          {detail && <EfficiencyBlock s={detail} />}
 
           {/* ③ 运行参数 */}
           {detail && <ParamsBlock params={detail.params} />}
