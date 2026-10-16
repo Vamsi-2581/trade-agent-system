@@ -31,14 +31,21 @@
    `decay=-inf` 会静默通过 `decay >= 上限`。`config.py` 里已经为「阈值取 0 会让判据
    恒假」立过规矩，NaN 是同一类失效（判据不成立，闸门却在放行），所以在**取值**这一
    端堵：不是有限数就是没有数。
+
+5. **证据的形状与「拿到证据」是两件事**（#34 的 `RegimeEvidence`）。本模块只定义判定
+   **读什么**（纯值：str / bool / datetime / dict），一行 Django 都不 import；证据从库里
+   怎么取、取不到该给什么形状，在 `effects.read_regime`。判定层拿不到适用性结论时收到的
+   是 `None`（「拿不到」），不是一份合成的「中性」——把「没覆盖」写成「中性」等于让闸门
+   在证据缺失处自己编一个结论，而这正是 fail-closed 要防的那件事。
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Mapping
 
 from apps.strategy_factory.config import CONFIG, FactoryConfig
 from apps.strategy_factory.status import (
@@ -208,6 +215,98 @@ class PaperEvidence:
     account_ready: bool = False
     queued_behind_active_session: bool = False
     session_ended: bool = False
+
+
+@dataclass(frozen=True)
+class RegimePoolCellEvidence:
+    """池化表里**一格**（策略 × 阶段）的结论摘录（#34）。
+
+    名字刻意叫「格子的结论摘录」而不是「格子」：它不是 `apps.regime.models.RegimePoolCell`
+    （那是一个 Django 模型，本模块一行 Django 都不 import），只是它上面那五个与判定有关
+    的取值的**原样副本**。判定要的是「这一格说了什么」，不是「这一行在哪张表里」。
+
+    四态一档的取值（`fit` / `unfit` / `neutral` / `unknown` / `blanket`）是**落库契约**，
+    定义在 `apps.regime.slice`。这里不重新枚举它们：抄一份词表就等于给「新加一个状态却
+    忘了改其中一处」留了门。所以字段类型是 `str`，取值由采集侧（`effects.read_regime`）
+    原样递过来。
+
+    `needs_review` 与 `state` 是**两件事**（CONTEXT.md 与模型 docstring 都钉过）：冲突格子
+    照样有结论，只是那格不产生停用建议。所以它是一个独立的布尔，不是第六种 `state`——
+    并进 `state` 等于宣称「这格没有结论」，而它明明有。
+    """
+
+    #: 这一格的结论（`apps.regime.slice.STATE_*` 的取值）。
+    state: str
+    #: 为什么落到这个状态（`slice.REASON_*` 的取值；空串表示没有原因要说明）。
+    reason: str = ""
+    #: 结论来源：`strategy`（这条策略自己的切片）/ `archetype`（原型兜底）。
+    source: str = ""
+    #: 冲突格子（不产生停用建议，但结论照常成立）。
+    needs_review: bool = False
+
+
+@dataclass(frozen=True)
+class RegimeEvidence:
+    """**跨层**行情证据：当前生效阶段 + 那一代池化表里这一格的结论 + 在期豁免（#34）。
+
+    与另外三层证据的区别是它**不挂在某一层的状态下**：行情是漏斗的横切条件——样本外
+    通过要问一次、paper 期满也要问一次，而它每次都来自同一处（当代池化表 + 当前生效
+    判定 + 在期豁免）。所以它不进 `CandidateEvidence` 的层字段（那一处是「这一层的判定
+    输入」），而由判定层按需向调用方索取。
+
+    两个取值**必须同代**，这是本结构存在的第一理由：
+
+    * `regime` 来自 `deactivation_run.current_regime_state`——与停机链**同源**（内部走
+      `judgement.current_judgement`）。闸门**绝不**自己读行情判定表（D3）：另开一个读口
+      就会与停机链对「现在是什么阶段」给出两个答案，而那种分叉在两边各自看都是自洽的。
+    * `cell` 来自 `pool_rebuild.current_cells`，且必须与 `current_generation()` 在同一次
+      读里配对。分两次读会落成「依据写的是第 N 代、引用的却是第 N+1 代那一格」——而
+      `current_cells` 自己的 docstring 说的就是这件事。
+
+    冷启动两段各自有各自的形状，且**都必须是「说不清」而不是「没风险」**（本仓库的
+    fail-closed 纪律）：
+
+    - `regime is None`：当前没有生效的行情判定（从没判出来过 / 判定链还没开始跑）。
+      这不是「箱体震荡」。
+    - `cell is None`：**当前阶段在这一代池化表里没有这一格的结论**——多品种 / 窗口未
+      覆盖。按 spec 用户故事 10，那是「中性」，**不是**「放行」，也不是「没有证据」。
+      做成 `None` 而不是合成一个 `state="neutral"` 的假格子：合成之后「确实覆盖到了、
+      结论就是中性」与「压根没这一格」在结构上再也分不开，而这两件事在依据栏里必须能
+      分开读。
+
+    `exemptions` 只列**当前阶段**上的在期人工豁免（键是 `(策略 id, 阶段)`）。它单独一个
+    字段而不是并进 `cell`：豁免是人的动作，池化结论是机制算出来的，混在一起会让
+    「这一格算出来是不适用」与「有人把它豁免了」变成同一句话。
+    """
+
+    #: 当前**生效**的行情阶段（`apps.regime.quant.BaseRegime` 的取值）；
+    #: `None` = 冷启动，当前没有生效判定。
+    regime: str | None = None
+    #: 当前生效判定的生效时刻。与 `regime` 一起从停机链同一个读口出来，不另查。
+    effective_at: datetime | None = None
+    #: 当代池化表里这一格（本策略 × `regime`）的结论摘录；
+    #: `None` = 当代没有这一格（未覆盖），**不是**「结论是中性」。
+    cell: RegimePoolCellEvidence | None = None
+    #: 在期人工豁免：`{(策略 id, 阶段): 豁免 id}`，形状照 `in_force_exemptions` 的返回。
+    exemptions: Mapping[tuple[Any, str], Any] = field(default_factory=dict)
+
+    @property
+    def cold(self) -> bool:
+        """当前没有生效的行情判定（冷启动）。
+
+        单独一个属性而不是让调用方写 `regime is None`：这两件事在语义上是同一句话，
+        而「说不清现在什么阶段」与「阶段是箱体震荡」必须能一眼分开。
+        """
+        return self.regime is None
+
+    @property
+    def covered(self) -> bool:
+        """当代池化表里有没有这一格的结论。
+
+        与 `cold` 分得开是刻意的：**阶段说得清、格子没有**（未覆盖）既不是冷启动、
+        也不是中性结论，是第三种状态，spec 用户故事 10 要的正是把它认出来。
+        """
+        return self.cell is not None
 
 
 @dataclass(frozen=True)

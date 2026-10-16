@@ -59,6 +59,7 @@ from apps.strategy_factory.evaluate import (
     OosEvidence,
     PaperEvidence,
     ReasonCode,
+    RegimeEvidence,
     Verdict,
     evaluate_candidate,
 )
@@ -213,6 +214,13 @@ class AdvanceDeps:
     #: 读 **paper 观察期**的证据（#24）：观察期的两个数、盈亏统计、风控命中。
     #: None = 尚无会话 / 会话行不见了（停在观察中），与另外两层的 None 同义。
     read_paper: Callable[[StrategyCandidate], PaperEvidence | None]
+    #: 采**当前生效行情阶段**上的适用性证据（#34，spec #30 D2）。三个读口都在
+    #: `effects.read_regime` 里：当代池化表一格 + `deactivation_run.current_regime_state`
+    #: （与停机链同源，D3）+ 在期豁免（D5）。
+    #: None = **拿不到适用性结论**（冷启动：没有当代池化表、或当前没有生效阶段）。
+    #: 它与「结论是中性」是两件事，所以调用方拿到 None 时判 `regime_no_evidence`
+    #: 并 Hold，不判放行——与闸门同一个 fail-closed 朝向。
+    read_regime: Callable[[StrategyCandidate], RegimeEvidence | None]
     #: 通知候选提出人；返回「是否投递到一个具体的人」。
     notify: Callable[[StrategyCandidate, str], Any]
     #: 现时刻（转移记录的 `at`、层记录的 `started_at` 都读它，测试可注入固定值）。
@@ -585,12 +593,25 @@ def _oos_verdict(
     cfg: FactoryConfig,
     record: Mapping[str, Any],
 ) -> Verdict:
+    """读 L2 结论并判定。
+
+    **行情证据也在这里取一次**（#34 的接线，spec #30 的「行情判定在证据通过后、推进前」）。
+    本票只把它**如实记进依据栏**——判定一字不改，那件事是 #37 的 `regime_verdict`。这样
+    两个推进点（此处与 `_paper_running_step`）共用同一条读法（`_read_regime_evidence`），
+    而闸门那条规则仍然只有一份。
+    """
     evidence = deps.read_oos(fresh)
-    return evaluate_candidate(
+    verdict = evaluate_candidate(
         CandidateEvidence(
             status=StrategyCandidateStatus.OOS_RUNNING, oos=evidence, thresholds=cfg
         )
     )
+    regime = _regime_detail(_read_regime_evidence(fresh, deps))
+    if regime is not None:
+        # **平铺**进判定依据（不套一层 `regime` 子字典）：`_message` 按 `_DETAIL_ORDER`
+        # 挑平铺的 `k=v` 渲染通知正文，套一层会让这一栏整段从「依据」里消失。
+        verdict = replace(verdict, detail={**verdict.detail, **regime})
+    return verdict
 
 
 def _paper_pending_step(fresh: StrategyCandidate, deps: AdvanceDeps) -> _Step:
@@ -701,6 +722,70 @@ def _take_paper_caveats(fresh: StrategyCandidate) -> list[str]:
     from apps.strategy_factory.effects import take_paper_caveats
 
     return take_paper_caveats(fresh)
+
+
+def _read_regime_evidence(
+    fresh: StrategyCandidate, deps: AdvanceDeps
+) -> RegimeEvidence | None:
+    """取**当前生效行情阶段**上的适用性证据（#34 的注入点消费）。
+
+    本函数是「行情闸门」这条横切读法的**唯一出口**：两个推进点（样本外通过后、paper
+    期满后）都从这里取，于是「既有的层证据先判、行情判定在证据通过后、推进前」这条次序
+    只有一处实现（spec 用户故事 23 要的「同一份规则只有一份」）。
+
+    ## 返回 `None` 意味着什么
+
+    两层含义都落在 `None` 上，且**都不是「放行」**：采集侧本身拿不到结论（冷启动、没有
+    当代池化表、当前没有生效阶段），以及注入的替身压根没接这个成员。前者按 D2 的口径
+    判 `regime_no_evidence` 并 Hold；后者是接线没做完——#37 落地闸门判定时必须显式处置，
+    不能因为「拿不到」就当「没有行情这回事」。
+
+    ## 时钟只传一次，且允许假实现不收
+
+    与 `read_paper` 同一条纪律：`deps.now()` 喂给采集侧钉「在期豁免」的边界，与
+    `advance` 写转移记录的 `at` 是同一个时刻。默认实现收得住 `now=`；注入的假实现若
+    只接受 `(candidate)`，撤回老签名也不该让它炸在签名上——所以退化成不传时钟。
+    """
+    try:
+        return deps.read_regime(fresh, now=deps.now())
+    except TypeError:
+        # 注入的假实现可能只接受 `(candidate)`。退化成不传时钟——判定照样跑，
+        # 只是那个假实现自己决定怎么算「在期」（它本来就是假的，不该被签名卡住）。
+        return deps.read_regime(fresh)
+
+
+def _regime_detail(evidence: RegimeEvidence | None) -> dict[str, Any] | None:
+    """把行情证据压成**依据栏里的一小段纯值**（#34；#37 的 `regime_verdict` 读同一份）。
+
+    与 `_public_payload` / `_public_layer` 同一条纪律：落进 `evidence` JSONField 的只能是
+    数字与短标识。这里挑的四个键正好回答「这一栏在说什么」：当前什么阶段、那一格的结论、
+    有没有待复核、有没有人在期豁免。**没有豁免就不写那个键**——写一个空列表会让「查过、
+    确实没有」与「压根没查」在记录里长得一样。
+
+    返回 `None` 表示**拿不到适用性结论**（采集侧自己给了 `None`，冷启动）。那种情形下
+    依据栏里什么都不加：不是「没有行情这回事」，是「问不出来」，而两者在记录上必须分得开。
+    """
+    if evidence is None:
+        return None
+    detail: dict[str, Any] = {"regime": evidence.regime}
+    if evidence.effective_at is not None:
+        detail["regime_effective_at"] = evidence.effective_at.isoformat()
+    if evidence.cell is not None:
+        detail["cell_state"] = evidence.cell.state
+        if evidence.cell.reason:
+            detail["cell_reason"] = evidence.cell.reason
+        if evidence.cell.source:
+            detail["cell_source"] = evidence.cell.source
+        if evidence.cell.needs_review:
+            detail["cell_needs_review"] = True
+    if evidence.exemptions:
+        # 键是 (策略 id, 阶段) 的元组，JSONField 里要落成**可读**的字符串对，否则
+        # 事后审计只能靠翻 Python repr 反推当初豁免了谁。
+        detail["exempt"] = [
+            {"strategy_id": str(strategy_id), "regime": regime}
+            for strategy_id, regime in evidence.exemptions
+        ]
+    return detail
 
 
 def _paper_account_problem(account: Any) -> str | None:
@@ -961,6 +1046,13 @@ _DETAIL_ORDER = (
     "error",
     "account_problem",
     "conflict",
+    # 行情那一段（#34）。放在最后：它是**旁证**（现在什么阶段、那一格怎么说），
+    # 不是这一步的结论依据。`regime_effective_at` / `cell_source` / `exempt` 刻意不进
+    # 这张表——通知正文只要看得懂的那几个，完整留痕在 `evidence` 与转移记录里。
+    "regime",
+    "cell_state",
+    "cell_reason",
+    "cell_needs_review",
 )
 
 #: 结论 → 「下一步谁做什么」。写在这里而不是让提出人自己猜，是 D20 对可见性的要求：

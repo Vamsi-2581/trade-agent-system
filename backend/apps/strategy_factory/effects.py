@@ -1,7 +1,7 @@
 """漏斗的生产接线（spec #19 D14 的 `deps` 默认实现，子票 #22）。
 
-`orchestrator.advance()` 只认 `AdvanceDeps` 里那八个成员，本模块把它们接到**既有的缝**
-上——不新增第二个投递机制、不新增第二个回测入口、不新增第二种会话创建方式：
+`orchestrator.advance()` 只认 `AdvanceDeps` 里那九个成员，本模块把它们接到**既有的缝**
+上——不新增第二个投递机制、不新增第二个回测入口、不新增第三种会话创建方式：
 
 | 成员 | 接到 |
 |---|---|
@@ -11,6 +11,8 @@
 | `start_oos` | `walk_forward_runner.run_walk_forward`（#29 的既有入口） |
 | `read_oos` | 同一行的 `metrics["walk_forward"]` 载荷 |
 | `create_paper_session` | `LiveSession.objects.create` + `conflicting_active_session` + 账户余额 |
+| `read_paper` | 时间线（`running` 时长）/ 订单盈亏 / 风控事件（#24） |
+| `read_regime` | 当代池化表一格（策略 × 阶段）+ 当前生效阶段 + 在期豁免（#34） |
 | `notify` | `apps.trading.alerts.notify_user`（本仓库唯一的用户通知口） |
 
 ## 三条纪律
@@ -55,6 +57,8 @@ from apps.strategy_factory.evaluate import (
     InSampleEvidence,
     OosEvidence,
     PaperEvidence,
+    RegimeEvidence,
+    RegimePoolCellEvidence,
 )
 from apps.strategy_factory.models import StrategyCandidate
 from apps.strategy_factory.orchestrator import (
@@ -381,6 +385,89 @@ def read_oos(candidate: StrategyCandidate) -> OosEvidence | None:
 
 
 # --------------------------------------------------------------------------- #
+# 跨层：行情证据（#34，spec #30 D2 / D3 / D5）
+# --------------------------------------------------------------------------- #
+
+
+def read_regime(
+    candidate: StrategyCandidate, *, now: Any | None = None
+) -> RegimeEvidence | None:
+    """采**当前生效行情阶段**上的适用性证据（spec #30 D2 / D3 / D5，子票 #34）。
+
+    三个读口，每一个都是**它自己那件事的唯一出处**——本函数一行判定都不做，只做适配
+    （把 Django 模型的取值转成 `evaluate.RegimeEvidence` 的纯值）：
+
+    1. `pool_rebuild.current_generation()` → `pool_rebuild.current_cells(generation)`：
+       当代池化表是（策略 × 阶段）适用性结论的唯一读口。
+    2. `deactivation_run.current_regime_state(...)`：**当前生效阶段**的唯一读口。它内部
+       走 `judgement.current_judgement`——与停机链**同源**（D3）。闸门绝不自己读行情
+       判定表：另开一个读口就会与停机链对「现在是什么阶段」给出两个答案，而那种分叉
+       在两边各自看都是自洽的。
+    3. `deactivation_run.in_force_exemptions(now=...)`：在期人工豁免（D5）。
+
+    ## 配对读取：一次 `current_generation`，一次 `current_cells(generation)`
+
+    这条是本函数最容易写错、也最贵的一处。`current_cells()` 在**不传参**时会自己再问
+    一次当前代，于是「手里的代」与「拿到的格子」可能来自两代——落进决策就是「依据写的
+    是第 N 代，引用的却是第 N+1 代那一格」。`current_cells` 自己的 docstring 点名了这
+    件事，所以这里**先取代、再把代传进去**，两边在同一个函数体里配对，中间没有任何
+    别的 DB 读取能插进来翻代。
+
+    ## 为什么冷启动返回 `None` 而不是一份合成的证据
+
+    「拿不到适用性结论」与「结论是中性」是两件事。合成一份 `regime=None, cell=None`
+    的 `RegimeEvidence` 也能跑，但那样调用方再也分不开「机制压根没算过池化表」与
+    「算了、这一格是中性」——而闸门对这两件事的处置是相反的（前者必须 Hold，后者照常
+    判）。所以按 D2 的口径给 `None`，让「拿不到」在类型上就看得见。
+
+    `now` 可注入（与 `read_paper` 同一条纪律）：豁免的「在期」是相对现在的量，不给注入
+    点就没法钉「恰在到期那一刻」这条边界。生产传 `None`，走真实时钟。
+    """
+    from apps.regime import deactivation_run, pool_rebuild
+
+    # --- 1. 当代池化表：先取代，再把代传给 current_cells（配对读取，见上） --- #
+    generation = pool_rebuild.current_generation()
+    cells = pool_rebuild.current_cells(generation)
+
+    # --- 2. 当前生效阶段（与停机链同源） --- #
+    state = deactivation_run.current_regime_state(now=now)
+
+    # --- 3. 在期人工豁免 --- #
+    exemptions = deactivation_run.in_force_exemptions(now=now)
+
+    # 冷启动：当前代是空的（从没重算过）。这不是「没有格子」，是**没有一代表**——
+    # 「当前阶段适用不适用」这个问题现在压根问不出来。
+    if generation is None:
+        return None
+
+    # 当前阶段为空（冷启动 / 没有生效判定）：格子无从查。与「当代空表」同样处置——
+    # 「说不清现在什么阶段」下任何适用性结论都是编的。
+    #
+    # 判在取格子**之前**：先问「现在什么阶段」再查「那格说什么」。次序反了会拿一个空
+    # 阶段去查表、恒得到 None，而那个 None 会被读成「没覆盖」——它是「没阶段」。
+    if state.regime is None:
+        return None
+
+    cell = cells.get((candidate.strategy_id, state.regime))
+
+    return RegimeEvidence(
+        regime=state.regime,
+        effective_at=state.effective_at,
+        cell=(
+            None
+            if cell is None
+            else RegimePoolCellEvidence(
+                state=cell["state"],
+                reason=cell.get("reason", ""),
+                source=cell.get("source", ""),
+                needs_review=bool(cell.get("needs_review", False)),
+            )
+        ),
+        exemptions=dict(exemptions),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # L3：自动建 paper 会话
 # --------------------------------------------------------------------------- #
 
@@ -670,6 +757,7 @@ def default_deps(config: FactoryConfig | None = None) -> AdvanceDeps:
         read_oos=read_oos,
         create_paper_session=create_paper_session,
         read_paper=read_paper,
+        read_regime=read_regime,
         notify=notify,
         now=now,
         config=config or CONFIG,
