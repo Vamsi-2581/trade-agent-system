@@ -275,9 +275,13 @@ SESSION_DETAIL_ORDERS = 50
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def live_session_list(request):
-    from .session_stats import annotate_realized_pnl
+    from .session_stats import annotate_efficiency_input
 
-    sessions = annotate_realized_pnl(
+    # `annotate_efficiency_input` 里已经含 `annotate_realized_pnl`（前者是后者的加料版），
+    # 一次查询带出 `realized_pnl` 与资金效率段要的那几个标量——**不是**逐行去调
+    # `session_stats_for`（那会是 50 次查询，正是 `live_session_detail` 的 docstring
+    # 否掉的那条路）。spec 用户故事 18「指标在列表的统计接口里同样可得」就落在这里。
+    sessions = annotate_efficiency_input(
         LiveSession.objects.filter(user=request.user)
     ).order_by("-created_at")[:50]
     return Response(LiveSessionSerializer(sessions, many=True).data)

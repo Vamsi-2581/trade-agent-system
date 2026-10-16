@@ -645,7 +645,10 @@ def read_paper(
     """
     from apps.riskguard.models import RiskEvent
     from apps.trading.models import running_duration
-    from apps.trading.session_stats import compute_session_stats
+    from apps.trading.session_stats import (
+        compute_session_stats,
+        session_efficiency_input,
+    )
 
     session = candidate.paper_session
     if session is None:
@@ -665,10 +668,26 @@ def read_paper(
     # --- 盈亏：复用既有纯函数（D7「不重写一份统计」） --- #
     from apps.trading.models import Order
 
-    pnls = Order.objects.filter(
-        live_session=session, realized_pnl__isnull=False
-    ).values_list("realized_pnl", flat=True)
-    stats = compute_session_stats(pnls)
+    # 一次取「盈亏 + 它的时刻」两列。**这两列必须来自同一行**：分两次 `values_list`
+    # 取会得到一个按 PK 排、一个按成交时刻排的两串，配对出来的是两个不相干的行。
+    # 时刻只服务 `session_stats_for` 同一条资金效率换算（spec 用户故事 18：漏斗这一层
+    # 与列表 / 详情读同一套键），本层自己用的仍然只有 `closed_orders` 与
+    # `realized_pnl_total` 两个数——判定不读效率段（那一段在会话侧是点观测口径，
+    # 比回测侧粗，不能拿来当钱闸门的输入）。
+    rows = list(
+        Order.objects.filter(live_session=session, realized_pnl__isnull=False)
+        .order_by("created_at")
+        .values_list("realized_pnl", "created_at")
+    )
+    intervals, window, total_capital = session_efficiency_input(
+        session, rows, now=lambda: now
+    )
+    stats = compute_session_stats(
+        (pnl for pnl, _ in rows),
+        intervals=intervals,
+        window=window,
+        total_capital=total_capital,
+    )
 
     closed_trades = stats["closed_orders"]
     capital = session.initial_capital
