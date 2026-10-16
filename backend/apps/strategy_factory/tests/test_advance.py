@@ -177,7 +177,15 @@ class FakePipeline:
         self.paper_evidence: PaperEvidence | None = None
         #: 行情证据（#34）。默认 None = **拿不到适用性结论**（冷启动 / 没有当代池化表），
         #: 与其它层的 None 同义。想验「闸门判定接上了」的用例注入一份 `RegimeEvidence` 即可。
-        self.regime_evidence: RegimeEvidence | None = None
+        #:
+        #: **注意 #37 之后 None 的含义变了**：闸门接上了，而 `None`（以及 `neutral` /
+        #: `unknown` / 没有格子 / 没有当前阶段）一律 fail-closed 成
+        #: `regime_hold` + `regime_no_evidence`。所以「这一轮要照原路径前进」的用例
+        #: 必须注入一份**格子是 `fit`** 的证据——那一支闸门不发表意见（返回 None），
+        #: 调用方照原有结论走。这正是「适用阶段时既有判定行为零变化」那条验收的形态。
+        self.regime_evidence: RegimeEvidence | None = RegimeEvidence(
+            regime="range", cell=RegimePoolCellEvidence(state="fit")
+        )
         #: 这个假实现收不收 `now=`：默认收（照默认实现的签名）。置 False 时它只接受一个
         #: 位置参数，用来钉编排层的 `TypeError` 兜底（#34 的签名兼容纪律）。
         self.regime_accepts_clock = True
@@ -1368,9 +1376,10 @@ class TestRegimeInjection:
        `RegimeEvidence` 进去，值原样流到判定侧）。这是 D2 要的可测性本身。
     2. **替身只接受一个位置参数也不炸**（签名兼容纪律）：编排层先试 `now=`，吃一个
        `TypeError` 就退化成不传时钟——与 `read_paper` 既有那条兜底同源。
-    3. **证据如实进依据栏**，而判定一字不改（闸门那条规则是 #37 的 `regime_verdict`）。
+    3. **证据如实进依据栏**，而 #32 / #37 落地之后闸门结论也在这里显形。
 
-    注意这一份**不**断言任何闸门结论：那需要 #32 的 `regime_hold` 状态与 #37 的判定。
+    #34 那一版这一份刻意**不**断言闸门结论（那两个票还没落地）。现在落地了，所以
+    `unfit` 的输入会停进 `regime_hold`、采集侧给 `None` 会 Hold——两条都在这里。
     """
 
     @pytest.fixture
@@ -1406,7 +1415,16 @@ class TestRegimeInjection:
         )
 
     def test_injected_double_flows_through(self, _oos_candidate):
-        """一份注入的 `RegimeEvidence` 原样流到编排侧（值不被改写、不被丢）。"""
+        """一份注入的 `RegimeEvidence` 原样流到编排侧（值不被改写、不被丢）。
+
+        #34 那一版这条断言「判定一字不改」。**#37 之后那一条改了**：样本外通过 + 格子
+        是 `unfit` → 停进 `regime_hold`。这里同时钉两件事——值仍原样流到依据栏
+        （`regime` / `regime_effective_at` / `cell_state` / `cell_reason` 一个不少），
+        以及闸门**接上了**（结论从 `paper_pending` 变成 `regime_hold`）。
+
+        留着同一份 `unfit` 输入是有意的：它是两个升档点上唯一会真拦人的取值，所以
+        两个断言必须共用它。
+        """
         expected = RegimeEvidence(
             regime="downtrend",
             effective_at=FIXED_NOW,
@@ -1418,14 +1436,16 @@ class TestRegimeInjection:
 
         out = advance(_oos_candidate, deps=deps)
 
-        # 判定一字不改（样本外通过 → paper_pending）：行情闸门是 #37 的事。
-        assert out.to_status is StrategyCandidateStatus.PAPER_PENDING
-        assert out.reason_code is ReasonCode.OOS_PASSED
+        assert out.to_status is StrategyCandidateStatus.REGIME_HOLD
+        assert out.reason_code is ReasonCode.REGIME_UNFIT
+        assert out.changed, "升 paper 前被行情拦下，是一次真的状态移动"
         # 证据如实进依据栏（转移记录 / 通知正文都读它）。
         assert out.detail["regime"] == "downtrend"
         assert out.detail["regime_effective_at"] == FIXED_NOW.isoformat()
         assert out.detail["cell_state"] == "unfit"
         assert out.detail["cell_reason"] == "direction_conflict"
+        # 既有那一层的判定数字也在：闸门**换结论**，不改依据。
+        assert out.detail["decay_pct"] == 5.0
 
     def test_exemptions_land_in_the_detail_as_readable_pairs(self, _oos_candidate):
         """豁免的键是 (策略 id, 阶段)，落进 JSONField 前换成可读的字符串对。
@@ -1481,11 +1501,16 @@ class TestRegimeInjection:
         assert out.detail["regime"] == "range"
         assert out.detail["cell_state"] == "fit"
 
-    def test_no_evidence_adds_nothing_to_the_detail(self, _oos_candidate):
-        """采集侧给 `None`（拿不到适用性结论）→ 依据栏里什么都不加。
+    def test_no_evidence_holds_instead_of_walking_on(self, _oos_candidate):
+        """采集侧给 `None`（拿不到适用性结论）→ **Hold**，而不是照原路径前进。
 
-        不是「没有行情这回事」，是「问不出来」——两者在记录上必须分得开，而
-        #37 的闸门判定要能指着这里说「没有证据所以 Hold」。
+        这是 fail-closed 的落点（spec #30 D1 / Further Notes）：「没证据」与「适用」
+        不是同一件事，而漏斗的下行必须是「什么都不发生」。**适用阶段时既有判定行为
+        零变化**那条验收针对的是「格子说 `fit`」——格子是 `fit` 时闸门不发表意见，
+        结论与 #37 之前逐字相同；这里这一支（压根没有格子结论）从来就不在「零变化」
+        的范围里。
+
+        依据栏里 `regime` 仍然是空：不是「没有行情这回事」，是「问不出来」。
         """
         fake = FakePipeline(strategy=_oos_candidate.strategy)
         fake.regime_evidence = None
@@ -1493,9 +1518,18 @@ class TestRegimeInjection:
 
         out = advance(_oos_candidate, deps=fake.deps())
 
-        assert "regime" not in out.detail
+        assert out.to_status is StrategyCandidateStatus.REGIME_HOLD
+        assert out.reason_code is ReasonCode.REGIME_NO_EVIDENCE
+        assert out.to_status is not StrategyCandidateStatus.OOS_FAILED, (
+            "判不了 ≠ 不合格：它不许落 `*_failed`"
+        )
+        # `regime` 键在、值是 `None`——闸门说话了（所以有键），但它说不出阶段（所以是
+        # 空）。这与「采集侧给 None 时依据栏里什么都不加」（#34 的 `_regime_detail`
+        # 返回 None）不冲突：那一侧管的是**旁证**，这一侧是**结论**的旁证。
+        assert out.detail["regime"] is None
+        assert out.detail["regime_hold_reason"] == "no_usable_conclusion"
+        assert "cell_state" not in out.detail, "没有格子就没有格子结论"
         assert "exempt" not in out.detail
-        assert out.to_status is StrategyCandidateStatus.PAPER_PENDING
 
     def test_blanket_cell_is_carried_not_reinterpreted(self, _oos_candidate):
         """`blanket`（保命档）原样进依据栏，采集与编排都不把它读成 `unfit`。
@@ -1517,3 +1551,220 @@ class TestRegimeInjection:
         assert out.detail["regime"] == "high_vol"
         assert out.detail["cell_state"] == "blanket"
         assert out.detail["cell_reason"] == "high_vol_blanket_halt"
+
+
+class TestTheSecondPromotionPointIsAlsoGated:
+    """**升实盘那一道闸门也必须真的接上**（spec 用户故事 7 的后半句）。
+
+    为什么单独一个类：另一个升档点（样本外 → paper）的闸门用例在
+    `TestRegimeInjection` 里，而这里要钉的是一件**只在 paper 层发生**的事——
+    「观察期满 + 盈亏达标」这条结论本身是好的，行情闸门是**在它通过之后**才把它拦下的。
+
+    没有这一份用例时，把 `_paper_running_step` 里的 `_apply_regime_gate(...)` 整段删掉
+    不会有任何用例变红（实测：探针全绿），而后果是一条在下行趋势里判为「不适用」的策略
+    照样升实盘——正是 spec 的问题陈述里那句话。两个升档点各测一次，才叫「不会漂移」。
+    """
+
+    def _paper_deps(self, *, regime) -> AdvanceDeps:
+        """一份能让 paper 层凭自身证据走完的 deps（其余成员都不参与这一步）。"""
+        return AdvanceDeps(
+            resolve_run_context=lambda candidate: _ctx(),
+            start_in_sample=lambda candidate, ctx, plan: {},
+            read_in_sample=lambda candidate: None,
+            start_oos=lambda candidate, ctx, plan, rid: {},
+            read_oos=lambda candidate: None,
+            create_paper_session=lambda candidate: None,
+            read_paper=lambda candidate: PaperEvidence(
+                wall_clock_days=20.0,
+                running_days=20.0,
+                closed_trades=40,
+                return_pct=5.0,
+                risk_hits=0,
+            ),
+            read_regime=regime,
+            notify=lambda candidate, message: True,
+            now=lambda: FIXED_NOW,
+        )
+
+    @pytest.fixture
+    def _paper_candidate(self):
+        strategy = _strategy("regime_paper")
+        return _candidate(
+            strategy, StrategyCandidateStatus.PAPER_RUNNING, name="regime_paper"
+        )
+
+    def test_unfit_cell_holds_the_promotion_to_live(self, _paper_candidate):
+        """paper 期满判定**通过**了，但当前阶段判「不适用」→ 停在 `regime_hold`。
+
+        两件事同时断言：既有结论确实是「通过」（否则这条用例证明不了闸门起了作用），
+        以及闸门把它换成了持有。
+        """
+        deps = self._paper_deps(
+            regime=lambda candidate: RegimeEvidence(
+                regime="downtrend",
+                cell=RegimePoolCellEvidence(state="unfit", reason="direction_conflict"),
+            )
+        )
+
+        out = advance(_paper_candidate, deps=deps)
+
+        assert out.to_status is StrategyCandidateStatus.REGIME_HOLD
+        assert out.reason_code is ReasonCode.REGIME_UNFIT
+        # 依据栏要能回答「当时是什么行情、那一格判了什么」——被拦在等人工卡点这一步
+        # 的门口（`cell_state=unfit`），而「本来要去哪」由 `_came_from_layer` 从转移
+        # 记录回答（`regime_hold_from`），不另存一份。
+        assert out.detail["regime"] == "downtrend"
+        assert out.detail["cell_state"] == "unfit"
+        _paper_candidate.refresh_from_db()
+        assert _paper_candidate.status == "regime_hold"
+
+    def test_fit_cell_lets_the_promotion_through_unchanged(self, _paper_candidate):
+        """适用阶段：判定与今天**完全一样**（spec 用户故事 6：零新增拦截）。"""
+        deps = self._paper_deps(
+            regime=lambda candidate: RegimeEvidence(
+                regime="range", cell=RegimePoolCellEvidence(state="fit")
+            )
+        )
+
+        out = advance(_paper_candidate, deps=deps)
+
+        assert out.to_status is StrategyCandidateStatus.AWAITING_LIVE_APPROVAL
+        assert out.reason_code is ReasonCode.PAPER_PASSED
+
+    def test_in_force_exemption_releases_the_live_promotion(self, _paper_candidate):
+        """在期豁免让这条候选照常升实盘，并留痕（spec 用户故事 7）。"""
+        strategy_id = _paper_candidate.strategy_id
+        deps = self._paper_deps(
+            regime=lambda candidate: RegimeEvidence(
+                regime="downtrend",
+                cell=RegimePoolCellEvidence(state="unfit"),
+                exemptions={(strategy_id, "downtrend"): 7},
+            )
+        )
+
+        out = advance(_paper_candidate, deps=deps)
+
+        assert out.to_status is StrategyCandidateStatus.AWAITING_LIVE_APPROVAL
+        assert out.reason_code is ReasonCode.REGIME_EXEMPT
+        # 留痕落在依据栏那一对上（T2 的 `_regime_detail` 把它压成可读的字符串对），
+        # 于是审计面答得出「这条是被人放过去的，放的是策略×阶段的哪一格」。
+        assert out.detail["exempt"] == [
+            {"strategy_id": str(strategy_id), "regime": "downtrend"}
+        ]
+
+
+class TestTheHoldReleasesWhenTheRegimeFlips:
+    """阶段翻面之后候选要**自己走回来**（spec 用户故事 4；ticket 验收第 3 条）。
+
+    这一类钉的是「持有不是一个终点」：一段被拦下的候选停在 `regime_hold`，5 分钟扫描
+    每轮推它一次（所以 `ADVANCEABLE_STATUSES` 必须有它），行情翻面后它原路退回进来的
+    那一层。没有这一类用例时，`_came_from_layer` 恒返回 `None`（候选永远停在
+    `regime_hold`、判到死也不动）不会有任何用例变红——实测探针全绿，而后果是用户故事 4
+    整条失效，且表现与「行情还没翻」一模一样。
+    """
+
+    def _deps(self, *, regime, oos=None, paper=None) -> AdvanceDeps:
+        return AdvanceDeps(
+            resolve_run_context=lambda candidate: _ctx(),
+            start_in_sample=lambda candidate, ctx, plan: {},
+            read_in_sample=lambda candidate: None,
+            start_oos=lambda candidate, ctx, plan, rid: {},
+            read_oos=lambda candidate: oos,
+            create_paper_session=lambda candidate: None,
+            read_paper=lambda candidate: paper,
+            read_regime=regime,
+            notify=lambda candidate, message: True,
+            now=lambda: FIXED_NOW,
+        )
+
+    def _held_candidate(self, *, from_status, layer):
+        """一条**已经在 `regime_hold` 里**的候选，带一条真实的「从 X 进来」转移记录。
+
+        `_came_from_layer` 读的就是这条记录（它不猜、不看 `evidence`），所以夹具必须
+        把那次转移真的落库——否则用例验的是另一条路径。
+        """
+        strategy = _strategy(f"regime_release_{from_status.value}")
+        candidate = _candidate(
+            strategy,
+            StrategyCandidateStatus.REGIME_HOLD,
+            name=f"rel_{from_status.value}",
+        )
+        StrategyCandidateTransition.objects.create(
+            candidate=candidate,
+            layer=layer,
+            from_status=from_status.value,
+            to_status=StrategyCandidateStatus.REGIME_HOLD.value,
+            reason_code=ReasonCode.REGIME_UNFIT.value,
+            detail={},
+            at=FIXED_NOW,
+        )
+        return candidate
+
+    def test_a_flip_to_fit_returns_the_candidate_to_the_oos_layer(self):
+        """行情翻回适用：从 `oos_running` 进来的候选退回 `oos_running` 重新判。
+
+        退回的是**那一层**（而不是直接升档）：那一层还要照它自己的尺再量一次，
+        闸门放行不等于那一层过了。
+        """
+        candidate = self._held_candidate(
+            from_status=StrategyCandidateStatus.OOS_RUNNING, layer="oos"
+        )
+        deps = self._deps(
+            regime=lambda c: RegimeEvidence(
+                regime="range", cell=RegimePoolCellEvidence(state="fit")
+            ),
+            oos=OosEvidence(decay_pct=5.0, fold_count=5),
+        )
+
+        out = advance(candidate, deps=deps)
+
+        assert out.to_status is StrategyCandidateStatus.OOS_RUNNING, out.reason_code
+        candidate.refresh_from_db()
+        assert candidate.status == "oos_running"
+
+    def test_a_flip_to_fit_returns_the_candidate_to_the_paper_layer(self):
+        """同一件事在 paper 那一侧：退回 `paper_running`（来处由记录决定，不是猜的）。"""
+        candidate = self._held_candidate(
+            from_status=StrategyCandidateStatus.PAPER_RUNNING, layer="paper"
+        )
+        deps = self._deps(
+            regime=lambda c: RegimeEvidence(
+                regime="range", cell=RegimePoolCellEvidence(state="fit")
+            ),
+            paper=PaperEvidence(
+                wall_clock_days=20.0,
+                running_days=20.0,
+                closed_trades=40,
+                return_pct=5.0,
+                risk_hits=0,
+            ),
+        )
+
+        out = advance(candidate, deps=deps)
+
+        assert out.to_status is StrategyCandidateStatus.PAPER_RUNNING, out.reason_code
+
+    def test_still_unfit_keeps_it_parked_with_no_side_effects(self):
+        """行情还没翻：继续停，且**这一轮不产生任何副作用**（幂等推进）。
+
+        「没有副作用」在这里是可断言的：状态没动、`changed` 为假、没有新建 paper 会话、
+        没有起跑任何一层。持有轮必须是安静的——否则每 5 分钟一轮会给审计面灌噪音记录。
+        """
+        candidate = self._held_candidate(
+            from_status=StrategyCandidateStatus.OOS_RUNNING, layer="oos"
+        )
+        deps = self._deps(
+            regime=lambda c: RegimeEvidence(
+                regime="downtrend", cell=RegimePoolCellEvidence(state="unfit")
+            ),
+            oos=OosEvidence(decay_pct=5.0, fold_count=5),
+        )
+
+        out = advance(candidate, deps=deps)
+
+        assert out.to_status is StrategyCandidateStatus.REGIME_HOLD
+        assert out.changed is False
+        assert out.created_paper_session is False
+        assert out.started_run is False
+        candidate.refresh_from_db()
+        assert candidate.status == "regime_hold"
