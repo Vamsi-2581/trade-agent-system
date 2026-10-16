@@ -96,6 +96,25 @@ class ReasonCode(str, Enum):
     #: 数据不够/样本不够，**判不了**（≠ 判为不合格）。任何一层都能给出它。
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
+    # -- 行情闸门（spec #30 D1，跨 L2/L3 两个升档点） ---------------------- #
+    #: 三个码都来自同一次行情判定，但**结论的落点不同**，所以必须分成三个而不是
+    #: 一个带参数的 `regime_*`：
+    #:
+    #: - `REGIME_UNFIT` → 停进 `regime_hold`。行情状态明确判为「不适用」，这是
+    #:   唯一一个**拦人**的码。
+    #: - `REGIME_NO_EVIDENCE` → 也停进 `regime_hold`，但原因是「行情切片算不出来 /
+    #:   没有数据」，即**判不了**而不是「判了不行」。与 `INSUFFICIENT_EVIDENCE`
+    #:   分属两端却同一条纪律：证据不足永远读成「不放行」，绝不能读成「放行」。
+    #:   合成一个码的后果是通知里写着「行情不适用」，而真实情况是行情还没算出来。
+    #: - `REGIME_EXEMPT` → **不拦人**：人工豁免在期，候选照常放行。它是纯留痕码
+    #:   （spec #30 D5），存在的唯一理由是让审计面能回答「这条当时是怎么过去的」。
+    #:   刻意**不**做成 `REGIME_UNFIT` 的反义（如 `regime_fit`）：豁免放行与「行情
+    #:   本来就适用」是两件不同的事，合并之后「有多少候选是靠豁免过去的」就统计不
+    #:   出来了。所以它的 `next_status` 与被豁免的那一步的正常升档目标一致。
+    REGIME_UNFIT = "regime_unfit"
+    REGIME_NO_EVIDENCE = "regime_no_evidence"
+    REGIME_EXEMPT = "regime_exempt"
+
     @property
     def display(self) -> str:
         return _REASON_DISPLAY[self]
@@ -127,6 +146,11 @@ _REASON_DISPLAY = {
     ReasonCode.INSUFFICIENT_EVIDENCE: "证据不足，判不了（不放行）",
     ReasonCode.HUMAN_REJECTED: "人工否决",
     ReasonCode.HUMAN_CANCELLED: "人工取消",
+    ReasonCode.REGIME_UNFIT: "当前行情不适用，暂缓推进",
+    ReasonCode.REGIME_NO_EVIDENCE: "行情核对不了（切片缺数据），暂缓推进",
+    #: 放行口径的展示名也一样要说清是「豁免放行」而不是「行情本来就适用」：
+    #: 读记录的人要能看出这一条是被人工开关放过去的。
+    ReasonCode.REGIME_EXEMPT: "人工豁免在期，按放行处理（留痕）",
 }
 
 

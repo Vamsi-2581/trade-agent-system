@@ -16,7 +16,12 @@ Django 的模型图拉进来。
 
 3. **自环不算合法边**。`can_transition(x, x)` 为假：判定结论里的「停在本状态」
    不是一次转移，而是「不转移」。这样「合法边」与「判定结果」是两个互不包含的
-   集合，穷举测试（169 对）才能既无歧义又无遗漏。
+   集合，穷举测试（196 对）才能既无歧义又无遗漏。
+
+4. **终态是派生的，不是手列的**。`is_terminal()` 读转移表（没有出边就是终态），
+   所以「给一个非终态状态配一张空出边表」会让它安静地变成终态——`_self_check()`
+   查得出「漏了状态」，查不出「漏了出边」。这条对 `regime_hold` 尤其致命：它
+   看上去只是暂停了一下，写成空出边就再也没有人把它放出来。
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ from enum import Enum
 
 
 class StrategyCandidateStatus(str, Enum):
-    """候选策略的 13 态（D3）。
+    """候选策略的 14 态（D3 + spec #30 D1 的行情闸门）。
 
     ascii slug 落库（`CharField` + `choices`），中文展示名走 `display`——与
     `apps/regime` 的 `BaseRegime` / `Escalation` 同一约定：库里存的是稳定的
@@ -42,6 +47,22 @@ class StrategyCandidateStatus(str, Enum):
     PAPER_RUNNING = "paper_running"
     PAPER_FAILED = "paper_failed"
     AWAITING_LIVE_APPROVAL = "awaiting_live_approval"
+    #: **非终态中间态**：候选撞上行情闸门（当前 `apps/regime` 的 cell 状态判为
+    #: 不适用）时停在这里，等闸门结论翻回「适用」再被放回它进来的那一层（spec #30
+    #: D1 / 用户故事 3）。三件事必须一起成立，缺一件这个状态就不再是「暂停」：
+    #:
+    #: 1. **不是失败、不是否决、不是取消**。它不进 `*_failed` 那三个终态方向的
+    #:    结论——候选没被判定为不合格，只是「现在这片行情不宜打钱」。
+    #: 2. **必须有出边**。`is_terminal()` 是派生的（没有出边即终态），所以给这张
+    #:    表配空出边会让它**安静地变成终态**：候选停在这里，而 nobody 再推它——
+    #:    表现与「还没轮到它」一模一样，只能靠人肉翻库发现。
+    #: 3. **保留人工收手的两条边**（`cancelled` / `rejected`）。「等行情过去」不
+    #:    能剥夺「我现在就想停掉它」的权利——用户故事 3 原文的后半句是「且我随时
+    #:    能取消它」。
+    #:
+    #: 名字不用 `RegimeGate` / 裸 `Efficiency`（spec #30 D12 的词汇避让表）：前者
+    #: 与 `apps/regime.gate` 同名不同义，后者没有主词、读不出「谁停在这里」。
+    REGIME_HOLD = "regime_hold"
     LIVE = "live"
     REJECTED = "rejected"
     CANCELLED = "cancelled"
@@ -67,6 +88,9 @@ _STATUS_DISPLAY = {
     StrategyCandidateStatus.PAPER_RUNNING: "paper 观察中",
     StrategyCandidateStatus.PAPER_FAILED: "paper 未过",
     StrategyCandidateStatus.AWAITING_LIVE_APPROVAL: "等人工卡点",
+    #: 「行情闸门结论是暂缓」而不是「不适用所以作废」——这条状态在语义上是一次暂停，
+    #: 文案必须让它读起来能自己恢复（对比 `oos_failed` 的「样本外未过」）。
+    StrategyCandidateStatus.REGIME_HOLD: "等行情闸门结论",
     StrategyCandidateStatus.LIVE: "已上实盘",
     StrategyCandidateStatus.REJECTED: "人工否决",
     StrategyCandidateStatus.CANCELLED: "人工取消",
@@ -161,12 +185,17 @@ class InvalidTransitionError(ValueError):
 #: - `registration_failed` → 修好代码后重试回到 `registered`。
 #: - `in_sample_running` → 样本内过了去分折，没过落 `in_sample_failed`。
 #: - `in_sample_failed` → 改参数重跑（回到 `in_sample_running`），或人工收尾。
-#: - `oos_running` → 样本外过了等 paper 账户/排队；没过落 `oos_failed`。
+#: - `oos_running` → 样本外过了等 paper 账户/排队；没过落 `oos_failed`；
+#:   撞上行情闸门时暂停进 `regime_hold`（spec #30 D1，**不是不合格**）。
 #: - `oos_failed` → 改分折配置重跑，或人工收尾。
 #: - `paper_pending` → 账户就绪且不排队就开始观察，或人工收尾。
-#: - `paper_running` → 观察期满判定：过 → 等人工卡点；没过 → `paper_failed`。
+#: - `paper_running` → 观察期满判定：过 → 等人工卡点；没过 → `paper_failed`；
+#:   升实盘前再撞一次行情闸门，同样暂停进 `regime_hold`。
 #: - `paper_failed` → 重新观察，或人工收尾。
 #: - `awaiting_live_approval` → 人工确认升实盘，否决，或取消。
+#: - `regime_hold` → 闸门结论翻回「适用」时**原路退回**它进来的那一层
+#:   （`oos_running` / `paper_running`，由编排层的 5 分钟扫描释放），
+#:   或人工随时收手。它**没有**去 `*_failed` 的边：暂停不是判定。
 #: - `live` / `rejected` / `cancelled` → 终态。**退役不走这里**，走 `Strategy.is_active`
 #:   （D2：候选生命周期与人工总开关是两根互不干扰的轴）。
 ALLOWED_TRANSITIONS: dict[
@@ -204,6 +233,9 @@ ALLOWED_TRANSITIONS: dict[
         {
             StrategyCandidateStatus.PAPER_PENDING,
             StrategyCandidateStatus.OOS_FAILED,
+            # 升 paper 之前的行情闸门。放在这里而不是替换 `paper_pending`：闸门结论
+            # 会翻回来，而「排队等账户」翻回来也是回到这一层，两者共用同一个回边。
+            StrategyCandidateStatus.REGIME_HOLD,
         }
     ),
     StrategyCandidateStatus.OOS_FAILED: frozenset(
@@ -224,6 +256,9 @@ ALLOWED_TRANSITIONS: dict[
         {
             StrategyCandidateStatus.AWAITING_LIVE_APPROVAL,
             StrategyCandidateStatus.PAPER_FAILED,
+            # 升实盘前的第二道行情闸门。与 `oos_running` 那侧对称：同一份判决，
+            # 同一个暂存处，同一个回边。
+            StrategyCandidateStatus.REGIME_HOLD,
         }
     ),
     StrategyCandidateStatus.PAPER_FAILED: frozenset(
@@ -236,6 +271,23 @@ ALLOWED_TRANSITIONS: dict[
     StrategyCandidateStatus.AWAITING_LIVE_APPROVAL: frozenset(
         {
             StrategyCandidateStatus.LIVE,
+            StrategyCandidateStatus.CANCELLED,
+            StrategyCandidateStatus.REJECTED,
+        }
+    ),
+    #: **非终态**：回边两条 + 人工收手两条，共 4 条出边。
+    #:
+    #: 回边是「原路退回」而不是「重头再来」：候选从 `oos_running` 停进来的，翻回
+    #: 去还是 `oos_running`（该层的证据与起跑记录都还在，重判一次即可）；从
+    #: `paper_running` 停进来的同理。走一条新的「regime_released」态会丢掉「我在
+    #: 等哪一层」这个信息，而调用方只能再猜一次。
+    #:
+    #: `cancelled` / `rejected` 必须在这里：用户故事 3 的后半句「且我随时能取消它」
+    #: 是一句验收，不是一句愿望。
+    StrategyCandidateStatus.REGIME_HOLD: frozenset(
+        {
+            StrategyCandidateStatus.OOS_RUNNING,
+            StrategyCandidateStatus.PAPER_RUNNING,
             StrategyCandidateStatus.CANCELLED,
             StrategyCandidateStatus.REJECTED,
         }

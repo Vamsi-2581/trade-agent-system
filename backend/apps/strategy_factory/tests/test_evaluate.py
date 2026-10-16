@@ -707,6 +707,52 @@ def test_nonsense_sharpe_values_are_insufficient_evidence():
 
 
 # --------------------------------------------------------------------------- #
+# 原因码词表：加一个成员就必须有展示名（spec #30 D1，票 #32）
+#
+# `_REASON_DISPLAY` 是**裸字典下标**（`display` 属性就是 `_REASON_DISPLAY[self]`），
+# 仓库刻意不用 `.get(默认值)`——「加了一个原因码却忘了给它展示名」必须在 KeyError 上
+# 立刻响，而不是在通知文案里显示一个 ascii slug。这一节把那条纪律钉成一条用例。
+# --------------------------------------------------------------------------- #
+
+REGIME_REASON_CODES = (
+    ReasonCode.REGIME_UNFIT,
+    ReasonCode.REGIME_NO_EVIDENCE,
+    ReasonCode.REGIME_EXEMPT,
+)
+
+
+@pytest.mark.parametrize("code", REGIME_REASON_CODES, ids=lambda c: c.value)
+def test_every_regime_reason_code_has_a_display_name(code):
+    """三个新码都要有非空展示名，且必须走裸下标（缺键会 KeyError，不静默回退）。"""
+    assert isinstance(code.display, str)
+    assert code.display.strip(), f"{code.value} 的展示名是空串"
+    # 展示名是中文、落库值是 ascii：两个方向都要对，否则「ascii 落库」这条纪律就破了。
+    assert code.value.isascii()
+    assert not code.display.isascii()
+
+
+def test_the_reason_display_table_covers_the_whole_enum():
+    """词表与枚举互为穷举——多一个成员、少一个条目都会在这里红。
+
+    不写成「挑三个已知码」：那只能证明这三个码有名字，而漏掉第四个正是本用例要拦的事。
+    """
+    from apps.strategy_factory.evaluate import _REASON_DISPLAY
+
+    assert set(_REASON_DISPLAY) == set(ReasonCode)
+    assert len(_REASON_DISPLAY) == len(list(ReasonCode))
+
+
+def test_regime_exempt_reads_as_a_pass_through_in_its_display_name():
+    """豁免码的展示名必须说清「放行 + 留痕」，不能读起来像被拦下了（spec #30 D5）。
+
+    它是**纯留痕**码：记的是「在期的人工豁免把这条放过去了」，不是「行情不适用」。
+    展示名是唯一能把这两件事对读记录的人讲清的地方，所以单独钉一条。
+    """
+    assert "豁免" in ReasonCode.REGIME_EXEMPT.display
+    assert "放行" in ReasonCode.REGIME_EXEMPT.display
+
+
+# --------------------------------------------------------------------------- #
 # 判定与转移表的一致性（对抗式）
 # --------------------------------------------------------------------------- #
 
