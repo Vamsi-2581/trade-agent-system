@@ -684,6 +684,10 @@ _STATE_UNFIT = "unfit"
 #: 见 `regime_verdict` 第 1 条。
 _STATE_BLANKET = "blanket"
 
+#: 保命档的**阶段** slug（`quant.BaseRegime.HIGH_VOL`，与 `deactivation.is_blanket`
+#: 同一个判据）。见 `regime_verdict` 第 1 条为什么要按阶段而不只按格子判。
+_REGIME_HIGH_VOL = "high_vol"
+
 #: 适用（`slice.STATE_FIT`）。显式列出来而不是落进 fail-closed 那一支：这两件事在
 #: 别处是同义词（都不拦人），但在这里必须分开写——**漏了这个分支的后果是
 #: 「适用」被判成「判不了」**，于是整条漏斗在行情最好的时候集体停摆，而通知写的
@@ -729,12 +733,19 @@ def regime_verdict(
 
     ## 检查顺序（D1 原文的口径，一处不许多、一处不许少）
 
-    1. **`blanket` → `None`**。高波动档下全场停用由保命档那一层负责，本机制不重复
-       产出建议——这是 `apps.regime.deactivation` 早就成立的结构性事实（高波动档的
-       格子恒为 `blanket`，而 `blanket` 不是 `TARGET`）。若把它当成 `unfit`，候选
-       会在保命档期间**一个都出不去**：闸门这一侧不会因为行情恢复而自己翻回来
-       （`regime_hold` 的回边要靠格子回到 `fit`），而保命档会自己解除。两条解除
-       路径撞在一起，表现就是「波动早没了，候选还停着」。
+    1. **保命档 → `None`**，判据是**阶段 `high_vol` 或格子 `blanket`，二者其一**。
+       高波动档下全场停用由保命档那一层负责，本机制不重复产出建议——这是
+       `apps.regime.deactivation` 早就成立的结构性事实（高波动档的格子恒为
+       `blanket`，而 `blanket` 不是 `TARGET`）。若把它当成 `unfit`，候选会在保命档
+       期间**一个都出不去**：闸门这一侧不会因为行情恢复而自己翻回来（`regime_hold`
+       的回边要靠格子回到 `fit`），而保命档会自己解除。两条解除路径撞在一起，表现就是
+       「波动早没了，候选还停着」。
+
+       **为什么阶段那一条不能省**：阶段是高波动而池化窗口内无高波日时，`slice._cell`
+       先判 `regime_days == 0`，格子落 `unknown` 而不是 `blanket`。只看格子会漏掉这个
+       角落，把一次「保命档」读成「判不了」并因此拦下候选——而停机链那侧按阶段判，
+       同一片行情于是两个结论。判据与 `deactivation.is_blanket` 对齐后两处一致。
+
     2. **在期豁免 → 放行 + 留痕**（D5）。豁免是**人的动作**：有人看过这一格并决定
        放它过去，那判定就该照办——哪怕格子本身是 `unfit`。所以它排在格子之前判：
        次序反了会让一个明确的人工决定输给机制算出来的结论，而豁免这个动作在结构上
@@ -778,6 +789,21 @@ def regime_verdict(
     `awaiting_live_approval` 那种要人点头的地方。
     """
     # --- 1. 保命档：不发表意见（它有自己的停机链，不重复产出建议） ---------- #
+    #
+    # **按阶段判，不只按格子判**（2026-10-17 定）。两个依据缺一不可：
+    #
+    # 1. 停机链那侧的判据就是阶段（`gate.py` → `deactivation.is_blanket(regime)`）；
+    #    本闸门若只看格子，同一片行情在两个消费者眼里会得出不同结论。
+    # 2. **高波动阶段不一定产出 `blanket` 格子**：`slice._cell` 先判 `regime_days == 0`
+    #    （那个阶段在本窗口内一天都没出现过），再判 `HIGH_VOL`。所以「当前是保命档、
+    #    但池化窗口里一个高波日都没有」时，格子是 `unknown` 而不是 `blanket`——只看格子
+    #    会把它当「判不了」拦下，而保命档**会自己解除**（闸门这侧不会），于是候选在
+    #    保命档期间原地长死，等阶段落回去也没人推它。
+    #
+    # 顺序上排在豁免之前：保命档期间不该有「放行」这回事，豁免也穿透不了它
+    # （`deactivation_run.exemption_standing` 已明写「人工恢复豁免不穿透保命档」）。
+    if regime_state == _REGIME_HIGH_VOL:
+        return None
     if cell is not None and cell.state == _STATE_BLANKET:
         return None
 

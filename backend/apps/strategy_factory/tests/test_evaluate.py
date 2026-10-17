@@ -891,7 +891,7 @@ def test_fit_cell_is_a_genuine_no_opinion_not_a_pass():
 
 
 def test_blanket_lifts_itself_so_the_gate_must_not_park_on_it():
-    """`blanket` 必须不发表意见——**保命档会自己解除，而这个闸门不会**。
+    """保命档必须不发表意见——**保命档会自己解除，而这个闸门不会**。
 
     这是本节最贵的一条：把 `blanket` 当 `unfit` 会让候选在保命档期间一个都出不去
     （闸门这一侧不会因为行情恢复而翻回来，等格子回 `fit` 才行，而保命档一解除格子
@@ -901,9 +901,14 @@ def test_blanket_lifts_itself_so_the_gate_must_not_park_on_it():
         "s", "high_vol", RegimePoolCellEvidence(state="blanket"), {}
     )
     assert verdict is None
-    # 与 `unfit` 的对照：同一个 `high_vol`，不同的格子结论，结论必须相反。
+    # 「`unfit` 要拦」那条对照挪到非保命档上（2026-10-17 改语义）：保命档按**阶段**判，
+    # 同一个 `high_vol` 下格子是 `unfit` 也必须放行——格子说了什么都不该让保命档拦人。
     assert (
         regime_verdict("s", "high_vol", RegimePoolCellEvidence(state="unfit"), {})
+        is None
+    )
+    assert (
+        regime_verdict("s", "range", RegimePoolCellEvidence(state="unfit"), {})
         is not None
     )
 
@@ -933,13 +938,19 @@ def test_hold_is_never_a_failure():
         assert verdict.next_status not in (S.OOS_RUNNING, S.PAPER_RUNNING)
 
 
-@pytest.mark.parametrize("regime_state", [None, "range", "high_vol"], ids=str)
+@pytest.mark.parametrize(
+    "regime_state", [None, "range", "downtrend", "uptrend"], ids=str
+)
 def test_no_current_generation_holds_and_never_releases(regime_state):
     """冷启动两段（没有格子 / 没有当前阶段）都 Hold，都**不**放行。
 
     刻意把 `regime_state=None` 也并进表里：`RegimeEvidence.cold` 与 `covered` 是
     #34 的两个独立属性，而它们在判定侧的落点是**同一个** fail-closed 结论。写成
     两个分支只会让「加了第三种『拿不到』」时漏改一处。
+
+    **`high_vol` 不在这张表里**（2026-10-17 改语义）：保命档按阶段判，它不消费格子，
+    所以「高波动阶段 + 没有格子」不是「判不了」而是「闸门不发表意见」——那条由
+    `test_a_high_vol_phase_is_blanket_even_when_the_cell_says_unknown` 钉住。
     """
     verdict = regime_verdict("s", regime_state, None, {})
     assert verdict is not None
@@ -947,7 +958,7 @@ def test_no_current_generation_holds_and_never_releases(regime_state):
     assert verdict.reason_code is ReasonCode.REGIME_NO_EVIDENCE
     assert verdict.detail["regime"] == regime_state
     assert verdict.detail["regime_hold_reason"] == "no_usable_conclusion"
-    # 依据栏要说清是「判不了」而不是「判了不行」——两个展示名分得开才有得讲。
+    # 依据栏要说清是「判不了」而不是「判了不行」——两个显示名分得开才有得讲。
     assert ReasonCode.REGIME_NO_EVIDENCE.display != ReasonCode.REGIME_UNFIT.display
 
 
@@ -1168,3 +1179,48 @@ def test_regime_verdict_never_invents_a_state_outside_the_transition_table():
                         source,
                         verdict.next_status,
                     )
+
+
+def test_a_high_vol_phase_is_blanket_even_when_the_cell_says_unknown():
+    """保命档按**阶段**判，不只按格子判——`unknown` 格子不能遮住保命档。
+
+    这个角落真实存在，而且只看格子会判错：`slice._cell` 先判 `regime_days == 0`
+    （该阶段在本池化窗口内一天都没出现过），再判 `HIGH_VOL`。所以「当前阶段是高波动、
+    但窗口里一个高波日都没有」时，格子是 `unknown` 而不是 `blanket`。
+
+    只看格子的后果是把一次「保命档」读成「判不了」并因此拦下候选——而保命档会自己
+    解除（闸门这侧不会，它的回边要靠格子回到 `fit`），于是候选在保命档期间原地长死。
+    停机链那侧（`gate.py` → `deactivation.is_blanket(regime)`）本来就是按阶段判的，
+    两处对齐之后同一片行情只有一个结论。
+
+    与 `test_blanket_lifts_itself_so_the_gate_must_not_park_on_it` 互为补集：那条钉
+    「格子是 `blanket`」，这条钉「阶段是高波动」——两个依据各有一条用例。
+    """
+    for cell in (
+        RegimePoolCellEvidence(state="unknown", reason="no_regime_days"),
+        RegimePoolCellEvidence(state="neutral"),
+        RegimePoolCellEvidence(state="unfit"),
+        None,
+    ):
+        assert regime_verdict("s", "high_vol", cell, {}) is None, cell
+
+    # 对照：非高波动阶段 + 同一个 `unknown` 格子，必须拦下（不是保命档就照常判不了）。
+    assert (
+        regime_verdict("s", "range", RegimePoolCellEvidence(state="unknown"), {})
+        is not None
+    )
+
+
+def test_a_blanket_phase_is_not_opened_by_an_exemption():
+    """保命档期间豁免也穿透不了它（与本仓既有口径一致）。
+
+    `deactivation_run.exemption_standing` 已明写「人工恢复豁免不穿透保命档」，本闸门
+    把保命档判在豁免之前，于是同一句话在两处成立。
+    """
+    verdict = regime_verdict(
+        "s",
+        "high_vol",
+        RegimePoolCellEvidence(state="unfit"),
+        {("s", "high_vol"): 1},
+    )
+    assert verdict is None
