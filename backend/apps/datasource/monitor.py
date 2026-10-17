@@ -43,6 +43,17 @@ class QualityReport:
     issues: List[str] = field(default_factory=list)
 
 
+def _as_utc(moment: datetime) -> datetime:
+    """把时刻归一成 aware-UTC；naive 一律视为 UTC。
+
+    与 ``apps/common/time_utils.as_utc`` 同一口径，但本模块刻意不依赖
+    ``apps.common``：数据源热路径应保持零 Django/业务层依赖（同 ``store.py``）。
+    """
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
 class DataQualityMonitor:
     """
     数据质量监控器 - 单例模式
@@ -141,9 +152,15 @@ class DataQualityMonitor:
             data_timestamp: 数据时间戳
             receive_time: 接收时间（默认当前时间）
         """
-        receive_time = receive_time or datetime.now()
+        receive_time = receive_time or datetime.now(tz=timezone.utc)
 
-        # 计算延迟（毫秒）
+        # 计算延迟（毫秒）。naive 与 aware 时间戳相减会抛 TypeError，而
+        # record_data 跑在 WS 接收热路径上——异常会被接收循环的宽泛 except
+        # 吞成"WS receive error"，看起来像连接故障，实际只是时间戳口径不一致
+        # （生产事故 2026-10-17：naive receive_time 撞 aware 数据时间戳）。
+        # 这里统一按"naive 即 UTC"归一，比让单条数据连带整条消息处理链中断
+        # 更安全；上游仍应产出 aware 时间戳。
+        data_timestamp = _as_utc(data_timestamp)
         latency = (receive_time - data_timestamp).total_seconds() * 1000
 
         with self._lock:
@@ -299,7 +316,7 @@ class DataQualityMonitor:
             ts = data.get("timestamp")
             if ts:
                 if isinstance(ts, datetime):
-                    timestamps.append(ts)
+                    timestamps.append(_as_utc(ts))
                 elif isinstance(ts, (int, float)):
                     timestamps.append(datetime.fromtimestamp(ts, tz=timezone.utc))
 

@@ -32,7 +32,7 @@ import os
 import threading
 import time
 from concurrent.futures import Future
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Coroutine, List, Optional, TypeVar
 
 from apps.datasource.base import DataType, MarketType
@@ -137,16 +137,26 @@ def _feed_data_age(
 
     存储键可能是 Binance 原始符号（``BTCUSDT``）或斜杠形式（``BTC/USDT``），
     两种都查。取各符号中最新一条的 timestamp。
+
+    ``now`` 必须是 aware-UTC：store 里的 timestamp 由数据源写为 aware-UTC，
+    裸 ``datetime.now()`` 与之相减会抛 "can't subtract offset-naive and
+    offset-aware datetimes"，而本函数在看门狗的 while 循环里调用——异常会
+    让循环退出、**静默关掉断流重连**。
     """
-    now = datetime.now()
+    now = datetime.now(tz=timezone.utc)
     latest: Optional[datetime] = None
     for sym in symbols:
         for key in (sym, sym.replace("/", "")):
             entries = store.get_latest(data_type.value, key, 1)
             if entries:
                 ts = entries[0].get("timestamp")
-                if isinstance(ts, datetime) and (latest is None or ts > latest):
-                    latest = ts
+                if isinstance(ts, datetime):
+                    # 历史数据/其他数据源可能写入 naive 时间戳，归一为 UTC 再比较
+                    ts = (
+                        ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+                    )
+                    if latest is None or ts > latest:
+                        latest = ts
                 break
     if latest is None:
         return None

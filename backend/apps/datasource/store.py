@@ -160,7 +160,9 @@ class MemoryDataStore:
         )
         # 生成键
         if key is None:
-            timestamp = data.get("timestamp", datetime.now())
+            # aware-UTC 兜底：与 normalize_* 产出的 aware 时间戳同口径，
+            # 避免同一 data_type 下混入不带时区的键。
+            timestamp = data.get("timestamp") or datetime.now(tz=timezone.utc)
             if isinstance(timestamp, datetime):
                 ts_str = timestamp.strftime("%Y%m%d%H%M%S%f")
             else:

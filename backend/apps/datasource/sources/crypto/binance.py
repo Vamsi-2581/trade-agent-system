@@ -506,9 +506,22 @@ class BinanceDataSource(BaseDataSource):
             try:
                 msg = await self._ws_spot.receive()
                 if msg.type == aiohttp.WSMsgType.TEXT:
-                    await self._handle_websocket_message(
-                        json.loads(msg.data), MarketType.SPOT
-                    )
+                    try:
+                        await self._handle_websocket_message(
+                            json.loads(msg.data), MarketType.SPOT
+                        )
+                    except Exception as e:
+                        # 消息处理异常（时区口径、字段缺失、归一化 bug 等）与
+                        # 连接层无关。此前它与收包异常共用 "WS receive
+                        # error" 日志，把时间戳缺陷伪装成连接故障
+                        # （生产事故 2026-10-17：每条 K 线报错一次）。分开记，
+                        # 且不 sleep——避免每条坏消息都拖慢整条流。
+                        logger.error(
+                            "[Binance] spot WS message handling failed: %s: %s",
+                            type(e).__name__,
+                            e,
+                            exc_info=True,
+                        )
                 elif msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
@@ -549,9 +562,18 @@ class BinanceDataSource(BaseDataSource):
             try:
                 msg = await self._ws_futures.receive()
                 if msg.type == aiohttp.WSMsgType.TEXT:
-                    await self._handle_websocket_message(
-                        json.loads(msg.data), MarketType.FUTURES
-                    )
+                    try:
+                        await self._handle_websocket_message(
+                            json.loads(msg.data), MarketType.FUTURES
+                        )
+                    except Exception as e:
+                        # 同上：消息处理异常不应记成连接层 "WS receive error"
+                        logger.error(
+                            "[Binance] futures WS message handling failed: %s: %s",
+                            type(e).__name__,
+                            e,
+                            exc_info=True,
+                        )
                 elif msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
@@ -587,8 +609,13 @@ class BinanceDataSource(BaseDataSource):
         self, msg: Dict, market_type: MarketType
     ) -> None:
         """处理 WebSocket 消息"""
-        # 记录接收时间
-        receive_time = datetime.now()
+        # 记录接收时间：必须 aware-UTC。normalize_* 产出的 timestamp 是
+        # aware-UTC，而 DataQualityMonitor.record_data 会做
+        # ``receive_time - data_timestamp``；naive 与 aware 相减直接抛
+        # TypeError（生产事故 2026-10-17 09:10:07 "spot WS receive error"），
+        # 该异常被接收循环的宽泛 except 吞掉，表现为每条 K 线报错一次、
+        # W 线数据全部丢弃。不要退回裸 datetime.now()。
+        receive_time = datetime.now(tz=timezone.utc)
         self._last_data_time = time.time()
 
         # 解析消息类型
@@ -1165,7 +1192,10 @@ class BinanceDataSource(BaseDataSource):
             "turnover_24h": float(raw_data.get("q", 0)),
             "change_24h": float(raw_data.get("p", 0)),
             "change_pct_24h": float(raw_data.get("P", 0)),
-            "timestamp": datetime.now(),
+            # aware-UTC，与 kline/trade 口径一致：WS payload 无本地时间字段，
+            # 用接收时刻兜底（Django TIME_ZONE=UTC，裸 datetime.now() 是 naive，
+            # 下游做时间相减时会与 aware 时间戳混算出 TypeError）。
+            "timestamp": datetime.now(tz=timezone.utc),
             "source": self.name,
         }
 
