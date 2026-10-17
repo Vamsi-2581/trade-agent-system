@@ -31,14 +31,21 @@
    `decay=-inf` 会静默通过 `decay >= 上限`。`config.py` 里已经为「阈值取 0 会让判据
    恒假」立过规矩，NaN 是同一类失效（判据不成立，闸门却在放行），所以在**取值**这一
    端堵：不是有限数就是没有数。
+
+5. **证据的形状与「拿到证据」是两件事**（#34 的 `RegimeEvidence`）。本模块只定义判定
+   **读什么**（纯值：str / bool / datetime / dict），一行 Django 都不 import；证据从库里
+   怎么取、取不到该给什么形状，在 `effects.read_regime`。判定层拿不到适用性结论时收到的
+   是 `None`（「拿不到」），不是一份合成的「中性」——把「没覆盖」写成「中性」等于让闸门
+   在证据缺失处自己编一个结论，而这正是 fail-closed 要防的那件事。
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Mapping
 
 from apps.strategy_factory.config import CONFIG, FactoryConfig
 from apps.strategy_factory.status import (
@@ -96,6 +103,25 @@ class ReasonCode(str, Enum):
     #: 数据不够/样本不够，**判不了**（≠ 判为不合格）。任何一层都能给出它。
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
+    # -- 行情闸门（spec #30 D1，跨 L2/L3 两个升档点） ---------------------- #
+    #: 三个码都来自同一次行情判定，但**结论的落点不同**，所以必须分成三个而不是
+    #: 一个带参数的 `regime_*`：
+    #:
+    #: - `REGIME_UNFIT` → 停进 `regime_hold`。行情状态明确判为「不适用」，这是
+    #:   唯一一个**拦人**的码。
+    #: - `REGIME_NO_EVIDENCE` → 也停进 `regime_hold`，但原因是「行情切片算不出来 /
+    #:   没有数据」，即**判不了**而不是「判了不行」。与 `INSUFFICIENT_EVIDENCE`
+    #:   分属两端却同一条纪律：证据不足永远读成「不放行」，绝不能读成「放行」。
+    #:   合成一个码的后果是通知里写着「行情不适用」，而真实情况是行情还没算出来。
+    #: - `REGIME_EXEMPT` → **不拦人**：人工豁免在期，候选照常放行。它是纯留痕码
+    #:   （spec #30 D5），存在的唯一理由是让审计面能回答「这条当时是怎么过去的」。
+    #:   刻意**不**做成 `REGIME_UNFIT` 的反义（如 `regime_fit`）：豁免放行与「行情
+    #:   本来就适用」是两件不同的事，合并之后「有多少候选是靠豁免过去的」就统计不
+    #:   出来了。所以它的 `next_status` 与被豁免的那一步的正常升档目标一致。
+    REGIME_UNFIT = "regime_unfit"
+    REGIME_NO_EVIDENCE = "regime_no_evidence"
+    REGIME_EXEMPT = "regime_exempt"
+
     @property
     def display(self) -> str:
         return _REASON_DISPLAY[self]
@@ -127,6 +153,11 @@ _REASON_DISPLAY = {
     ReasonCode.INSUFFICIENT_EVIDENCE: "证据不足，判不了（不放行）",
     ReasonCode.HUMAN_REJECTED: "人工否决",
     ReasonCode.HUMAN_CANCELLED: "人工取消",
+    ReasonCode.REGIME_UNFIT: "当前行情不适用，暂缓推进",
+    ReasonCode.REGIME_NO_EVIDENCE: "行情核对不了（切片缺数据），暂缓推进",
+    #: 放行口径的展示名也一样要说清是「豁免放行」而不是「行情本来就适用」：
+    #: 读记录的人要能看出这一条是被人工开关放过去的。
+    ReasonCode.REGIME_EXEMPT: "人工豁免在期，按放行处理（留痕）",
 }
 
 
@@ -184,6 +215,98 @@ class PaperEvidence:
     account_ready: bool = False
     queued_behind_active_session: bool = False
     session_ended: bool = False
+
+
+@dataclass(frozen=True)
+class RegimePoolCellEvidence:
+    """池化表里**一格**（策略 × 阶段）的结论摘录（#34）。
+
+    名字刻意叫「格子的结论摘录」而不是「格子」：它不是 `apps.regime.models.RegimePoolCell`
+    （那是一个 Django 模型，本模块一行 Django 都不 import），只是它上面那五个与判定有关
+    的取值的**原样副本**。判定要的是「这一格说了什么」，不是「这一行在哪张表里」。
+
+    四态一档的取值（`fit` / `unfit` / `neutral` / `unknown` / `blanket`）是**落库契约**，
+    定义在 `apps.regime.slice`。这里不重新枚举它们：抄一份词表就等于给「新加一个状态却
+    忘了改其中一处」留了门。所以字段类型是 `str`，取值由采集侧（`effects.read_regime`）
+    原样递过来。
+
+    `needs_review` 与 `state` 是**两件事**（CONTEXT.md 与模型 docstring 都钉过）：冲突格子
+    照样有结论，只是那格不产生停用建议。所以它是一个独立的布尔，不是第六种 `state`——
+    并进 `state` 等于宣称「这格没有结论」，而它明明有。
+    """
+
+    #: 这一格的结论（`apps.regime.slice.STATE_*` 的取值）。
+    state: str
+    #: 为什么落到这个状态（`slice.REASON_*` 的取值；空串表示没有原因要说明）。
+    reason: str = ""
+    #: 结论来源：`strategy`（这条策略自己的切片）/ `archetype`（原型兜底）。
+    source: str = ""
+    #: 冲突格子（不产生停用建议，但结论照常成立）。
+    needs_review: bool = False
+
+
+@dataclass(frozen=True)
+class RegimeEvidence:
+    """**跨层**行情证据：当前生效阶段 + 那一代池化表里这一格的结论 + 在期豁免（#34）。
+
+    与另外三层证据的区别是它**不挂在某一层的状态下**：行情是漏斗的横切条件——样本外
+    通过要问一次、paper 期满也要问一次，而它每次都来自同一处（当代池化表 + 当前生效
+    判定 + 在期豁免）。所以它不进 `CandidateEvidence` 的层字段（那一处是「这一层的判定
+    输入」），而由判定层按需向调用方索取。
+
+    两个取值**必须同代**，这是本结构存在的第一理由：
+
+    * `regime` 来自 `deactivation_run.current_regime_state`——与停机链**同源**（内部走
+      `judgement.current_judgement`）。闸门**绝不**自己读行情判定表（D3）：另开一个读口
+      就会与停机链对「现在是什么阶段」给出两个答案，而那种分叉在两边各自看都是自洽的。
+    * `cell` 来自 `pool_rebuild.current_cells`，且必须与 `current_generation()` 在同一次
+      读里配对。分两次读会落成「依据写的是第 N 代、引用的却是第 N+1 代那一格」——而
+      `current_cells` 自己的 docstring 说的就是这件事。
+
+    冷启动两段各自有各自的形状，且**都必须是「说不清」而不是「没风险」**（本仓库的
+    fail-closed 纪律）：
+
+    - `regime is None`：当前没有生效的行情判定（从没判出来过 / 判定链还没开始跑）。
+      这不是「箱体震荡」。
+    - `cell is None`：**当前阶段在这一代池化表里没有这一格的结论**——多品种 / 窗口未
+      覆盖。按 spec 用户故事 10，那是「中性」，**不是**「放行」，也不是「没有证据」。
+      做成 `None` 而不是合成一个 `state="neutral"` 的假格子：合成之后「确实覆盖到了、
+      结论就是中性」与「压根没这一格」在结构上再也分不开，而这两件事在依据栏里必须能
+      分开读。
+
+    `exemptions` 只列**当前阶段**上的在期人工豁免（键是 `(策略 id, 阶段)`）。它单独一个
+    字段而不是并进 `cell`：豁免是人的动作，池化结论是机制算出来的，混在一起会让
+    「这一格算出来是不适用」与「有人把它豁免了」变成同一句话。
+    """
+
+    #: 当前**生效**的行情阶段（`apps.regime.quant.BaseRegime` 的取值）；
+    #: `None` = 冷启动，当前没有生效判定。
+    regime: str | None = None
+    #: 当前生效判定的生效时刻。与 `regime` 一起从停机链同一个读口出来，不另查。
+    effective_at: datetime | None = None
+    #: 当代池化表里这一格（本策略 × `regime`）的结论摘录；
+    #: `None` = 当代没有这一格（未覆盖），**不是**「结论是中性」。
+    cell: RegimePoolCellEvidence | None = None
+    #: 在期人工豁免：`{(策略 id, 阶段): 豁免 id}`，形状照 `in_force_exemptions` 的返回。
+    exemptions: Mapping[tuple[Any, str], Any] = field(default_factory=dict)
+
+    @property
+    def cold(self) -> bool:
+        """当前没有生效的行情判定（冷启动）。
+
+        单独一个属性而不是让调用方写 `regime is None`：这两件事在语义上是同一句话，
+        而「说不清现在什么阶段」与「阶段是箱体震荡」必须能一眼分开。
+        """
+        return self.regime is None
+
+    @property
+    def covered(self) -> bool:
+        """当代池化表里有没有这一格的结论。
+
+        与 `cold` 分得开是刻意的：**阶段说得清、格子没有**（未覆盖）既不是冷启动、
+        也不是中性结论，是第三种状态，spec 用户故事 10 要的正是把它认出来。
+        """
+        return self.cell is not None
 
 
 @dataclass(frozen=True)
@@ -536,3 +659,248 @@ def _evaluate_paper_running(ev: PaperEvidence | None, cfg: FactoryConfig) -> Ver
         return_pct=ev.return_pct,
         risk_hits=ev.risk_hits,
     )
+
+
+# --------------------------------------------------------------------------- #
+# 行情闸门（spec #30 D1 / D2 / D4，子票 #37）
+#
+# 单独一节、单独一个纯函数，而不是塞进 `_oos_verdict` 与 `_paper_running_step`
+# 各有半份：这条规则横切两个升档点（样本外通过后、paper 期满后），而「同一个意思
+# 写两遍」的结局一定是两边对不上——某天只改了一处，另一个升档点就悄悄放行了。
+# spec 用户故事 23 要的正是「两个放行点不会漂移」，而唯一的实现方式就是规则只有
+# 一份。
+# --------------------------------------------------------------------------- #
+
+#: 唯一「拦人」的格子结论（`apps.regime.slice.STATE_UNFIT`）。
+#: 这里**不 import `apps.regime.slice`**：那个模块会 via `strategy_engine` 拉起
+#: Django 模型图，而本文件的纯度纪律是一行 Django 都不 import。抄一个字符串、
+#: 在注释里钉住出处，比让判定缝依赖 regime 应用轻。
+#: 其余四个取值（`fit` / `neutral` / `unknown` / `blanket`）刻意不在这里形成
+#: 常量：判定只与「不适用」比（见 `regime_verdict` 的顺序），其余全走
+#: fail-closed 那一支，多一份词表就多一处「加了新状态忘了同步」的门。
+_STATE_UNFIT = "unfit"
+
+#: 保命档的格子结论（同上，`slice.STATE_BLANKET`）。它是**不发表意见**的那一个，
+#: 见 `regime_verdict` 第 1 条。
+_STATE_BLANKET = "blanket"
+
+#: 保命档的**阶段** slug（`quant.BaseRegime.HIGH_VOL`，与 `deactivation.is_blanket`
+#: 同一个判据）。见 `regime_verdict` 第 1 条为什么要按阶段而不只按格子判。
+_REGIME_HIGH_VOL = "high_vol"
+
+#: 适用（`slice.STATE_FIT`）。显式列出来而不是落进 fail-closed 那一支：这两件事在
+#: 别处是同义词（都不拦人），但在这里必须分开写——**漏了这个分支的后果是
+#: 「适用」被判成「判不了」**，于是整条漏斗在行情最好的时候集体停摆，而通知写的
+#: 是「切片缺数据」，把排查方向引到完全无关的地方去。
+_STATE_FIT = "fit"
+
+
+def regime_verdict(
+    candidate_id: Any,
+    regime_state: str | None,
+    cell: RegimePoolCellEvidence | None,
+    exemptions: Mapping[tuple[Any, str], Any],
+    resume: StrategyCandidateStatus = StrategyCandidateStatus.PAPER_PENDING,
+) -> Verdict | None:
+    """行情闸门：这条候选现在能不能往前推一步（spec #30 D1 / D4）。
+
+    ## 签名为什么长这样
+
+    四个参数全是纯值，调用方（`orchestrator._read_regime_evidence` → `effects.
+    read_regime` 那条读法）已经把它们从库里取好了：`regime_state` 是当前生效阶段、
+    `cell` 是当代池化表里这一格的结论摘录、`exemptions` 是在期人工豁免的
+    `{(策略 id, 阶段): 豁免 id}`。**刻意不让本函数自己接一个 `RegimeEvidence`**：
+    那样它就能直接读 `evidence.regime`，于是「行情证据是怎么采来的」会被悄悄塞进
+    判定函数的签名里——而判定层必须只看见纯数据（D14）。
+
+    ## 没有时钟
+
+    「在期」豁免的边界由采集侧按 `deps.now()` 判完，判定层只看见「已经在期」这个
+    结论。把时钟带进来会让这条规则变成「不看时钟就没法测」的东西，而表驱动穷举
+    （本文件的全部用例）就散了。
+
+    ## 返回 `None` 与返回一个 `Verdict` 分别意味着什么
+
+    `None` = **行情闸门不发表意见**，调用方照原有那条路径前进。它出现在
+    `blanket`（保命档，见第 1 条）与 `fit`（适用，本来就没有拦人的理由）两处。
+    注意「不发表意见」与「放行」在字面上都表现为往前走，但语义不同：`None` 走的是
+    调用方**原有**的结论（`oos_passed` / `paper_passed`），而不是闸门自己合成一个
+    「通过」——合成会让通知里出现一个来历不明的 reason code，而审计面再也分不清
+    「这一步是谁放的行」。
+
+    一个 `Verdict` = 闸门说话了：`next_status` 是 `regime_hold`，原因码是
+    `REGIME_UNFIT`（明确判为不适用）或 `REGIME_NO_EVIDENCE`（判不了）。
+
+    ## 检查顺序（D1 原文的口径，一处不许多、一处不许少）
+
+    1. **保命档 → `None`**，判据是**阶段 `high_vol` 或格子 `blanket`，二者其一**。
+       高波动档下全场停用由保命档那一层负责，本机制不重复产出建议——这是
+       `apps.regime.deactivation` 早就成立的结构性事实（高波动档的格子恒为
+       `blanket`，而 `blanket` 不是 `TARGET`）。若把它当成 `unfit`，候选会在保命档
+       期间**一个都出不去**：闸门这一侧不会因为行情恢复而自己翻回来（`regime_hold`
+       的回边要靠格子回到 `fit`），而保命档会自己解除。两条解除路径撞在一起，表现就是
+       「波动早没了，候选还停着」。
+
+       **为什么阶段那一条不能省**：阶段是高波动而池化窗口内无高波日时，`slice._cell`
+       先判 `regime_days == 0`，格子落 `unknown` 而不是 `blanket`。只看格子会漏掉这个
+       角落，把一次「保命档」读成「判不了」并因此拦下候选——而停机链那侧按阶段判，
+       同一片行情于是两个结论。判据与 `deactivation.is_blanket` 对齐后两处一致。
+
+    2. **在期豁免 → 放行 + 留痕**（D5）。豁免是**人的动作**：有人看过这一格并决定
+       放它过去，那判定就该照办——哪怕格子本身是 `unfit`。所以它排在格子之前判：
+       次序反了会让一个明确的人工决定输给机制算出来的结论，而豁免这个动作在结构上
+       就是用来覆盖它的。它是**纯留痕**：`next_status` 等于被豁免的那一步的正常
+       升档目标（`oos_running → paper_pending`、`paper_running →
+       awaiting_live_approval`），原因码走 `regime_exempt`。刻意**不**做成「豁免也
+       算一种适用」：合并之后「有多少候选是靠人放过去的」就统计不出来了。
+       豁免的键是「策略 × 阶段」，所以拿候选的 `strategy_id` 去撞（`trading.
+       Strategy` 是 UUID 主键）；候选没有绑上策略行（登记失败，FK 为空）时**没有
+       任何东西可豁免**——那不是错误，照常放行。
+    3. **`fit` → 不发表意见**（`None`），调用方照原有结论前进。
+    4. **`unfit` → 拦**。唯一一个「行情明确说了不行」的取值，停进 `regime_hold`，
+       原因码 `regime_unfit`。
+    5. **其余一切 → 拦，但原因是「判不了」**。`neutral`（证据不足 / 样本噪声）、
+       `unknown`（这个阶段在本窗口内没出现过）、**没有格子**（当代池化表没这一格：
+       多品种 / 窗口未覆盖）、**没有当前阶段**（`regime_state is None`，冷启动）——
+       四种情形落在同一个 fail-closed 结论上：`regime_hold` + `regime_no_evidence`。
+       spec 的 Further Notes 点名过这件事——「没证据」与「适用」不是同一件事；而
+       漏斗的下行必须是「什么都不发生」，不是「放它过去」。
+
+    ## 「拦」不是「否」
+
+    停进 `regime_hold` 的候选**没有被判定为不合格**：它不去任何 `*_failed`，转移表
+    里也没有通向那里的边。它只是「现在这片行情不宜打钱」，等闸门翻回 `fit` 就由
+    5 分钟扫描原路退回它进来的那一层（`oos_running` / `paper_running`，按编排层
+    记得的来处）。
+
+    ## `candidate_id` 不是候选主键
+
+    `RegimePoolCell.strategy` 指向 `trading.Strategy`（UUID 主键），所以这里要的是
+    **策略行 id**，调用方传进来的是 `candidate.strategy_id`。参数名带 `candidate`
+    是为了让调用点读起来是「这条候选」；`None`（候选没绑策略行）照样跑，见第 2 条。
+
+    ## `resume`：只有豁免放行那一支用得到
+
+    闸门的两个 Hold 结论都落在 `regime_hold`（一个固定的暂停位），只有**放行**需要
+    一个目标状态——而「放行走哪」=「那一层的正常升档目标」，也就是「我是从哪一层
+    走进来的」。那件事调用方知道、闸门不知道，所以由调用方传。默认值
+    `paper_pending` 是**最短的那一条**（`oos_running` 那一侧）：一个忘了传的调用点
+    会忘在最容易看出来的地方——候选停在 `regime_hold` 却不放行，而不是被送去
+    `awaiting_live_approval` 那种要人点头的地方。
+    """
+    # --- 1. 保命档：不发表意见（它有自己的停机链，不重复产出建议） ---------- #
+    #
+    # **按阶段判，不只按格子判**（2026-10-17 定）。两个依据缺一不可：
+    #
+    # 1. 停机链那侧的判据就是阶段（`gate.py` → `deactivation.is_blanket(regime)`）；
+    #    本闸门若只看格子，同一片行情在两个消费者眼里会得出不同结论。
+    # 2. **高波动阶段不一定产出 `blanket` 格子**：`slice._cell` 先判 `regime_days == 0`
+    #    （那个阶段在本窗口内一天都没出现过），再判 `HIGH_VOL`。所以「当前是保命档、
+    #    但池化窗口里一个高波日都没有」时，格子是 `unknown` 而不是 `blanket`——只看格子
+    #    会把它当「判不了」拦下，而保命档**会自己解除**（闸门这侧不会），于是候选在
+    #    保命档期间原地长死，等阶段落回去也没人推它。
+    #
+    # 顺序上排在豁免之前：保命档期间不该有「放行」这回事，豁免也穿透不了它
+    # （`deactivation_run.exemption_standing` 已明写「人工恢复豁免不穿透保命档」）。
+    if regime_state == _REGIME_HIGH_VOL:
+        return None
+    if cell is not None and cell.state == _STATE_BLANKET:
+        return None
+
+    # --- 2. 在期人工豁免：放行 + 留痕（D5） -------------------------------- #
+    # 刻意逐个比而不是先 `dict(exemptions)`：入参是一个 `Mapping`，而它的键是元组——
+    # 直接 `exemptions.get((candidate_id, regime_state))` 也行，但那样豁免 id 会被
+    # 拿来做一次「有没有」的判断后丢掉。这里要留痕（把命中的那一对写进依据栏），
+    # 所以走一遍、把命中的挑出来，命中与否是同一趟的结果。
+    exempted = [
+        (strategy_id, regime)
+        for strategy_id, regime in exemptions
+        if strategy_id == candidate_id and regime == regime_state
+    ]
+    if regime_state is not None and candidate_id is not None and exempted:
+        return _regime_exempt_verdict(resume, regime_state, cell, exempted)
+
+    # --- 3. 适用：不发表意见，照原路径前进 --------------------------------- #
+    # 显式的一个分支，不是「掉到后面那支」的反面。见 `_STATE_FIT` 的说明。
+    if cell is not None and cell.state == _STATE_FIT:
+        return None
+
+    # --- 4. 行情明确判为不适用 --------------------------------------------- #
+    if cell is not None and cell.state == _STATE_UNFIT:
+        return _regime_hold_verdict(
+            ReasonCode.REGIME_UNFIT, regime_state, cell, "cell_state=unfit"
+        )
+
+    # --- 4. 判不了（fail-closed） ------------------------------------------- #
+    # neutral / unknown / 没有格子 / 没有当前阶段。原因码必须说清是「判不了」而不是
+    # 「判了不行」——与 `INSUFFICIENT_EVIDENCE` 分居两端却同一条纪律：证据不足永远
+    # 读成「不放行」，绝不能读成「放行」。
+    return _regime_hold_verdict(
+        ReasonCode.REGIME_NO_EVIDENCE, regime_state, cell, "no_usable_conclusion"
+    )
+
+
+def _regime_exempt_verdict(
+    resume: StrategyCandidateStatus,
+    regime_state: str,
+    cell: RegimePoolCellEvidence | None,
+    exempted: list[tuple[Any, str]],
+) -> Verdict:
+    """在期豁免命中时的放行结论（D5）：**纯留痕**。
+
+    为什么要合成一个 Verdict 而不是在 `regime_verdict` 里 `return None`：豁免是一条
+    **有据可查的放行**，它得在转移记录与通知里留下「这一条是靠人放过去的」这个
+    事实。留痕的落点是原因码（`regime_exempt`）与依据栏里命中的那一对
+    `(策略 id, 阶段)`。
+
+    `next_status` 由调用方给的 `resume` 决定，而不是闸门自己挑：**「我在等哪一层」
+    这件事只有调用方知道**（它是从哪一层走进来的），而闸门是横切两个升档点的一条
+    规则，让它自己猜就等于在判定层里藏一个状态推断——那份推断迟早与转移表分家，
+    而 `transition_to` 只会在非法边上 Fail Loud，「猜错但合法」的那一类会安静地
+    把候选送去另一层。所以那一个词由调用方传，本函数只负责把它与原因码、依据拼成
+    一个 Verdict。
+
+    `resume` 的取值与 `evaluate_candidate` 对这一层的通行结论一致
+    （`oos_running → paper_pending`、`paper_running → awaiting_live_approval`）：
+    豁免改变的是**能不能走**，不是**走去哪**。调用方仍会校验这条边，所以两张表
+    若改分家，那一声会响在 `transition_to` 上，而不是让候选落进一个谁也不认识的
+    组合里。
+    """
+    detail: dict[str, Any] = {
+        "regime": regime_state,
+        # 命中的那一对单独点出来（不是把整个在期集合抄一遍）：读记录的人要能一眼
+        # 看出「谁被豁免了」；而整个集合里可能有别的策略在别的阶段上的豁免。
+        "exempt": [
+            {"strategy_id": str(strategy_id), "regime": regime}
+            for strategy_id, regime in exempted
+        ],
+    }
+    if cell is not None:
+        # 格子照抄：豁免覆盖的是**结论**，不是事实。依据栏里两个数都要能读到。
+        detail["cell_state"] = cell.state
+        if cell.reason:
+            detail["cell_reason"] = cell.reason
+    return _verdict(resume, ReasonCode.REGIME_EXEMPT, **detail)
+
+
+def _regime_hold_verdict(
+    reason_code: ReasonCode,
+    regime_state: str | None,
+    cell: RegimePoolCellEvidence | None,
+    note: str,
+) -> Verdict:
+    """「现在这片行情不宜打钱」的统一落点（spec #30 D1）。
+
+    `next_status` 恒为 `regime_hold`：**不是失败、不是否决、不是取消**。它也**不是**
+    调用方的原状态——否则调用方会以为「什么都没发生」，而它其实被拦下来了。
+
+    `detail` 里那三个键（阶段 / 格子结论 / 格子原因）是依据栏的**旁证**：通知正文
+    按 `orchestrator._DETAIL_ORDER` 挑平铺的 `k=v` 渲染，所以这里必须平铺，不能套
+    一层 `regime` 子字典（套了这一段会整段从「依据」里消失）。
+    """
+    detail: dict[str, Any] = {"regime": regime_state, "regime_hold_reason": note}
+    if cell is not None:
+        detail["cell_state"] = cell.state
+        if cell.reason:
+            detail["cell_reason"] = cell.reason
+    return _verdict(StrategyCandidateStatus.REGIME_HOLD, reason_code, **detail)

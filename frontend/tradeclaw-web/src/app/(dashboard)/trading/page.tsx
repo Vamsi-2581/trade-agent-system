@@ -339,6 +339,20 @@ function SessionMiniCard({
   // 一次写库失败（`_bump_session_equity` 吞异常只记 warning）就会与订单汇总分家，
   // 同屏两个「盈亏」都看着正常、却不一样。字段为 null 时显示「—」，不退回现算。
   const pnl = session.realized_pnl !== null ? formatPnl(session.realized_pnl) : null;
+  // 资金效率（spec #30 用户故事 18：指标在会话列表的统计接口里同样可得）。
+  //
+  // **先看 `capital_efficiency_metrics_available`，再看数字。** 后端把六个契约键摊平到
+  // 列表项顶层（与回测侧逐字同名），而会话侧那组数是点观测口径：`capital_utilization`
+  // 会是 `0`，但那个 0 的意思是「这一侧量不了持仓时长」，不是「没占用资金」。把它当回测
+  // 指标读，就是把重仓短打读成「几乎没用钱」——方向正好是危险的那一侧。
+  //
+  // available 为假时后端给的是 `null`（不是 0）；这里连 `null` 都不去格式化成 `0.00%`，
+  // 只出「—」。**不许 `?? 0`**：那一步会把这条口径防线整条抹掉。
+  const efficiencyAvailable = session.capital_efficiency_metrics_available === true;
+  const utilization =
+    efficiencyAvailable && session.capital_utilization != null
+      ? `${session.capital_utilization.toFixed(2)}%`
+      : "—";
 
   return (
     <div className="bg-bg1 border border-[rgba(255,255,255,0.07)] rounded-xl overflow-hidden">
@@ -388,6 +402,24 @@ function SessionMiniCard({
             </div>
           </div>
         </div>
+        {/* 资金效率一行：**只在标志为真、且确实有数时出现**。
+            判不了 / 老响应 / 未启动的会话一律整行不渲染——列表卡片不是解释口径的地方，
+            为此加一行「判不了（invalid_capital）」只会让卡片变吵；详细的说明与
+            `capital_efficiency_notes` 在详情弹窗里（`EfficiencyBlock`）。 */}
+        {efficiencyAvailable && utilization !== "—" && (
+          <div
+            data-testid="session-efficiency-card"
+            className="flex items-center gap-3 mb-2.5 text-[9px] text-text3"
+          >
+            <span>
+              资金利用率
+              <span className="font-mono font-bold text-text2 ml-1">{utilization}</span>
+            </span>
+            <span className="text-amber" title="会话侧只有点观测，时间权重恒为 0">
+              点观测口径
+            </span>
+          </div>
+        )}
         {session.status === "running" && (
           <div className="flex gap-1.5">
             <button onClick={onPause} disabled={actionLoading} className="px-2 py-1 rounded text-[9px] font-semibold bg-amber-dim/50 text-amber hover:bg-amber-dim disabled:opacity-40 disabled:cursor-not-allowed">

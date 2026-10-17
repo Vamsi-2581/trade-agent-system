@@ -59,8 +59,10 @@ from apps.strategy_factory.evaluate import (
     OosEvidence,
     PaperEvidence,
     ReasonCode,
+    RegimeEvidence,
     Verdict,
     evaluate_candidate,
+    regime_verdict,
 )
 from apps.strategy_factory.models import (
     StrategyCandidate,
@@ -69,6 +71,7 @@ from apps.strategy_factory.models import (
 from apps.strategy_factory.status import (
     StrategyCandidateLayer,
     StrategyCandidateStatus,
+    coerce_status,
     is_terminal,
 )
 from apps.strategy_factory.walk_forward import FoldPlan, plan_folds
@@ -213,6 +216,13 @@ class AdvanceDeps:
     #: 读 **paper 观察期**的证据（#24）：观察期的两个数、盈亏统计、风控命中。
     #: None = 尚无会话 / 会话行不见了（停在观察中），与另外两层的 None 同义。
     read_paper: Callable[[StrategyCandidate], PaperEvidence | None]
+    #: 采**当前生效行情阶段**上的适用性证据（#34，spec #30 D2）。三个读口都在
+    #: `effects.read_regime` 里：当代池化表一格 + `deactivation_run.current_regime_state`
+    #: （与停机链同源，D3）+ 在期豁免（D5）。
+    #: None = **拿不到适用性结论**（冷启动：没有当代池化表、或当前没有生效阶段）。
+    #: 它与「结论是中性」是两件事，所以调用方拿到 None 时判 `regime_no_evidence`
+    #: 并 Hold，不判放行——与闸门同一个 fail-closed 朝向。
+    read_regime: Callable[[StrategyCandidate], RegimeEvidence | None]
     #: 通知候选提出人；返回「是否投递到一个具体的人」。
     notify: Callable[[StrategyCandidate, str], Any]
     #: 现时刻（转移记录的 `at`、层记录的 `started_at` 都读它，测试可注入固定值）。
@@ -420,6 +430,9 @@ def _step(fresh: StrategyCandidate, deps: AdvanceDeps) -> _Step:
     if status is StrategyCandidateStatus.PAPER_RUNNING:
         return _paper_running_step(fresh, deps)
 
+    if status is StrategyCandidateStatus.REGIME_HOLD:
+        return _regime_hold_step(fresh, deps)
+
     # registration_failed / in_sample_failed / oos_failed / paper_failed /
     # awaiting_live_approval：都不采证据，判定层各自给出「等谁动」的结论。
     #
@@ -585,12 +598,304 @@ def _oos_verdict(
     cfg: FactoryConfig,
     record: Mapping[str, Any],
 ) -> Verdict:
+    """读 L2 结论并判定，通过后问一次行情闸门（#37，spec #30 D1 / D4）。
+
+    **行情证据在这里取，且只在结论是升档时才用**（spec 的「既有回测/paper 证据先判，
+    行情判定在证据通过后、推进前」）。顺序不是风格问题：样本外的回测证据先说话，
+    行情闸门只负责「这一层过了、能不能真往前走」。反过来（先问行情）会让一个夏普
+    不达标的候选被报成「行情不适用」——那是把最根本的原因埋掉了，而提出人会照着
+    通知去改参数，改的却是一件跟他的策略没关系的事（沿用 `_evaluate_in_sample`
+    的检查顺序纪律）。
+
+    #34 那一版只把行情证据**如实记进依据栏**，判定一字不改；本票把它接到判定上，
+    两个推进点（此处与 `_paper_running_step`）共用同一个 `_apply_regime_gate`，于是
+    那条规则仍然只有一份（用户故事 23）。
+    """
     evidence = deps.read_oos(fresh)
-    return evaluate_candidate(
+    verdict = evaluate_candidate(
         CandidateEvidence(
             status=StrategyCandidateStatus.OOS_RUNNING, oos=evidence, thresholds=cfg
         )
     )
+    return _apply_regime_gate(
+        fresh,
+        deps,
+        verdict,
+        # 本层的升档目标：闸门放行（豁免）时它照常去这一格，被拦时停在 regime_hold。
+        StrategyCandidateStatus.PAPER_PENDING,
+    )
+
+
+#: 两个升档点各自的「上一层的结论是升档」的原因码。闸门**只**在这两个码上开口。
+#: 写死成一个集合而不是 `verdict.next_status is not <当前>`：后者在「起跑与结论同一次
+#: 推进」的形状下会把「升档」与「换了一层」混起来（OOS_PASSED 与 PAPER_PASSED 是
+#: 唯一两个会真的往前走的结论），而一个多字的集合在加层时会立刻需要有人决定。
+_REGIME_GATED_REASONS = frozenset({ReasonCode.OOS_PASSED, ReasonCode.PAPER_PASSED})
+
+
+def _apply_regime_gate(
+    fresh: StrategyCandidate,
+    deps: AdvanceDeps,
+    verdict: Verdict,
+    resume: StrategyCandidateStatus,
+) -> Verdict:
+    """把行情闸门接到**一个升档结论**上（#37，spec #30 D1 / D4 / D5）。
+
+    ## 为什么是一个共享函数
+
+    「既有回测/paper 证据先判，行情判定在证据通过后、推进前」这条次序横切两个点
+    （样本外通过后、 paper 期满后）。写成两个调用点各自 `if verdict.next_status is ...`
+    就一定有漂移的那天：某天只在一边加了闸门，另一边还在静默放行——而那种不一致
+    在单边上各自看都是自洽的。spec 用户故事 23 要的「两个放行点不会漂移」，落地方式
+    就是**规则只有一份**（`evaluate.regime_verdict`）+ **接法只有一份**（本函数）。
+
+    ## 三个前提都被显式检查，而不是靠调用点自觉
+
+    1. **上一层的结论已通过**：本函数只在 `verdict.reason_code` 是升档码时才问闸门。
+       传进来的若是停住/失败结论，原样返回——不许让行情闸门改一篇不是它的结论。
+    2. **`resume` 由调用点给**：闸门放行（豁免）时 candidate 要去的那一格。
+       见 `evaluate.regime_verdict` 的 `resume` 参数说明。
+    3. **判定本身只能改结论，不能改别处**：返回的是一个新的 `Verdict`，`advance`
+       照常落状态与记录——所以一个 Hold 就是一个普通的「停住」，不写第二落点。
+
+    ## 依据栏照抄
+
+    #34 起行情证据就平铺进 `verdict.detail`（`_regime_detail` 的四个键）。闸门开口
+    之后它们照样在：**「为什么被拦」必须连同「现在什么行情」一起读**，只写前半句的
+    通知等于让人自己去猜行情那一侧发生了什么。
+    """
+    if verdict.reason_code not in _REGIME_GATED_REASONS:
+        # 上一层的结论不是「升档」：原样返回。回测/paper 不通过时原因码必须原封不动
+        # 地活着（spec：适用阶段时既有判定行为零变化）。
+        return verdict
+
+    evidence = _read_regime_evidence(fresh, deps)
+    detail = _regime_detail(evidence)
+    if detail is not None:
+        verdict = replace(verdict, detail={**verdict.detail, **detail})
+
+    # 采集侧给 None（冷启动：没有当代池化表、或当前没有生效阶段）→ **Hold 且原因码是
+    # 「判不了」**。这正是 fail-closed：拿不到适用性结论与「结论是适用」是两件事，
+    # 而 #34 的采集侧刻意用 `None` 把它们分开（合成一份中性能跑，但那样调用方再也
+    # 分不开「机制没算过」与「算了、中性」）。注入的替身压根没接这个成员时同样落在
+    # 这里：`deps.read_regime` 不存在是接线没做完，Fail Loud 的方向是**不放行**。
+    regime_gate = evaluate_regime_verdict(fresh, evidence, resume)
+    if regime_gate is None:
+        return verdict
+    # 闸门拦下时**沿用它给的结论**，但依据栏要合起来：既有的回测/paper 数字
+    # （夏普、衰减、盈亏、风控命中）与行情那一侧（阶段、格子、豁免）都是「这一条
+    # 为什么停在这里」的组成部分，只留一半的通知等于让人自己拼。
+    return replace(
+        verdict,
+        next_status=regime_gate.next_status,
+        reason_code=regime_gate.reason_code,
+        detail={**verdict.detail, **regime_gate.detail},
+    )
+
+
+def evaluate_regime_verdict(
+    fresh: StrategyCandidate,
+    evidence: RegimeEvidence | None,
+    resume: StrategyCandidateStatus,
+) -> Verdict | None:
+    """行情闸门的薄适配：`RegimeEvidence` → `regime_verdict` 的四个参数。
+
+    单独一个函数而不是把 `evaluate.regime_verdict` 直接摊在 `_apply_regime_gate` 里：
+    `strategy_id` 的取值（`fresh.strategy_id`，**不是** `fresh.pk`）是这里唯一的
+    一处知识，而它值得有一个名字被测试指住——豁免匹配拿错 id 的表现是「豁免明明在期
+    却不生效」，这种 bug 在库上完全看不出来。
+
+    `evidence is None`（采集侧拿不到适用性结论：冷启动 / 没有当代池化表 / 当前没有
+    生效阶段）在这里落成 `regime_verdict(None, None, None, {}, resume)`：**没有当代
+    与没有格子都走 fail-closed 那一支**，所以同一个「判不了」结论。刻意不在这一侧
+    合成一份中性证据——理由与 `effects.read_regime` 里那条完全相同：合成之后
+    「机制压根没算过」与「算了、结论是中性」在结构上再也分不开，而闸门对这两件事的
+    处置是相反的。
+    """
+    if evidence is None:
+        return regime_verdict(None, None, None, {}, resume)
+    return regime_verdict(
+        fresh.strategy_id,
+        evidence.regime,
+        evidence.cell,
+        evidence.exemptions,
+        resume,
+    )
+
+
+def _regime_hold_step(fresh: StrategyCandidate, deps: AdvanceDeps) -> _Step:
+    """停在行情闸门上的那一步（#37，spec #30 用户故事 4：阶段翻面后自动放行）。
+
+    它是**幂等推进**的落点：候选被拦下之后，5 分钟扫描每一轮都会推它一次（所以
+    `tasks.ADVANCEABLE_STATUSES` 必须有 `regime_hold`），而这一步自己保证「行情没变
+    就不产生任何副作用」。
+
+    ## 为什么每轮都要重判一遍，而不是「等它自己好」
+
+    行情是会翻的：池化表重算、当前生效阶段变化，都可能让一格从 `unfit` 变成 `fit`。
+    而这些变化**不通知漏斗**——漏斗只能自己问。所以这里每一轮都重新走一次闸门，
+    并且在结论是「翻回来了」时把候选原路退回它进来的那一层。
+
+    ## 「原路退回哪一层」是怎么知道的
+
+    从**转移记录**上读（`_came_from_layer`）：进 `regime_hold` 的那一行记着
+    `from_status`，它就是来处。刻意**不**新增一个 `regime_hold_from` 字段——那要一次
+    迁移（#32 已经为 choices 迁过一次），而既有信息已经足够；也刻意不按 `evidence`
+    猜（`layers.oos` / `layers.paper` 谁在就是谁），因为 candidate 可能在 paper 期满
+    后被拦，而它的 `layers.oos` 还留着。**读已经发生过的事**，比再存一份状态轻一倍
+    也准一倍。
+
+    ## 「没有来处」怎么办
+
+    取不到时（记录被人删了 / 手工把 candidate 挪进来）停在 `regime_hold` 本身：
+    那是一个**合法的停住**，不猜、不放行、不抛。一个停住不会有副作用；而猜错了
+    （退回一个它没待过的层）会让那一层的证据被重判一遍，最坏是重新起跑一次回测。
+    """
+    return _Step(
+        StrategyCandidateLayer.PIPELINE,
+        _regime_hold_verdict(fresh, deps),
+    )
+
+
+def _regime_hold_verdict(fresh: StrategyCandidate, deps: AdvanceDeps) -> Verdict:
+    """停在 `regime_hold` 上重判一次：翻了就放回去，没翻就继续停（用户故事 4）。
+
+    ## 为什么这里要重新问一遍那一层的判定
+
+    行情翻面之后，候选**不只是「放回去」**：它得照那一层的既有规则再判一次。两种
+    情形要分开：
+
+    * 行情从 `unfit` 翻回 `fit` → 闸门不拦了，回到来处那一层重新判（那一步可能
+      还是「观察期没满」，那就继续停在那里——**不该**因为闸门放行了就强行升档）。
+    * 行情翻到另一个 `unfit` / 还是判不了 → 继续停。
+
+    ## 「本轮该问哪一层的证据」也是从来处推的
+
+    闸门是横切的，但「这一轮回到哪一层、要读那一层的哪份证据」不是。所以本函数按
+    `_came_from_layer` 的答案分派：来处是 `oos_running` 就走 `_oos_verdict` 的同一
+    条读法（`deps.read_oos`），是 `paper_running` 就走 `_paper_running_step` 的同一条
+    （`deps.read_paper`）。两条读法各只有一份——**不是**在这里抄一遍，是**直接调它们
+    已有的那一步**（`_oos_step` / `_paper_running_step`），于是「层内怎么判」仍然只有
+    一处实现。
+
+    ## 来处读不到时
+
+    停在原地（`regime_hold` → `regime_hold`）。见 `_came_from_layer` 的三级回退：
+    那是「已经发生过的事读不出来」，不是「没有发生过」，所以既不放行也不抛。
+    """
+    came_from = _came_from_layer(fresh)
+    if came_from is None:
+        # 停住：`can_transition(regime_hold, regime_hold)` 是假（自环不是边），
+        # 所以这是一个普通的「不动」，不写转移记录之外的任何东西。
+        return _verdict_for_hold(_regime_hold_reason_code(fresh), fresh, came_from)
+
+    if came_from is StrategyCandidateStatus.OOS_RUNNING:
+        inner = _oos_verdict(
+            fresh, deps, deps.config, _layers(fresh).get(LAYER_OOS) or {}
+        )
+    elif came_from is StrategyCandidateStatus.PAPER_RUNNING:
+        inner = _paper_running_step(fresh, deps).verdict
+    else:  # 来处是别的什么（记录被手改过）→ 停住，不猜
+        return _verdict_for_hold(_regime_hold_reason_code(fresh), fresh, came_from)
+
+    # 闸门不拦（`inner` 是升档结论）→ 原路退回。这时**直接采用 `inner`**：它已经
+    # 是那一层的完整结论（含依据数字），而「回到来处」这个动作由 `next_status` 表达。
+    if inner.reason_code in _REGIME_GATED_REASONS:
+        return replace(inner, next_status=came_from)
+
+    # 那一层自己还没过（观察期没满 / 尚无结论）：也回那一层，但带着它自己的结论。
+    # 「闸门放行了」不等于「这一层过了」——把两件事合成一个升档会伪造一次判定。
+    if inner.reason_code in _REGIME_NON_PROMOTION_REASONS:
+        return replace(inner, next_status=came_from)
+
+    # 那一层判了「不行」（回测失败 / 衰减超标 / 风控命中……）：**原样返回**，不退回。
+    # 一个被行情拦下过的候选，回来时仍然要照同一把尺量；闸门不该替它把一次
+    # 不合格洗成一次停住。
+    return inner
+
+
+#: `regime_hold` 的来处那一层「还没过、但也不是失败」的结论：停住类。这些结论下
+#: 候选回到来处，并且**带着自己的原因码**（`oos_pending` / `paper_observing` 等）——
+#: 所以不能走「强行升档」那条路（那会伪造一次通过），也不能留在 `regime_hold`
+#: （那会把它这一轮的证据丢掉）。
+_REGIME_NON_PROMOTION_REASONS = frozenset(
+    {
+        ReasonCode.OOS_PENDING,
+        ReasonCode.PAPER_OBSERVING,
+        ReasonCode.PAPER_OBSERVATION_INCOMPLETE,
+    }
+)
+
+
+def _verdict_for_hold(
+    reason_code: ReasonCode,
+    fresh: StrategyCandidate,
+    came_from: StrategyCandidateStatus | None,
+) -> Verdict:
+    """「这一轮继续停在 `regime_hold`」的结论。
+
+    `regime_hold_from` 记下来处（读不到就给空串）：它是「为什么停在这里」的一部分，
+    也是运维一眼看出「它在等哪一层翻面」的入口。空串而不是 `None`——`detail` 要进
+    `JSONField`，一个显式的空串比一个 `null` 少一次「这个键到底有没有」的猜测。
+    """
+    return Verdict(
+        next_status=StrategyCandidateStatus.REGIME_HOLD,
+        reason_code=reason_code,
+        detail={"regime_hold_from": came_from.value if came_from is not None else ""},
+    )
+
+
+def _regime_hold_reason_code(fresh: StrategyCandidate) -> ReasonCode:
+    """上一次是被哪个行情原因拦的（从 `evidence[VERDICT_KEY]` 读，读不到就不适用）。"""
+    payload = (fresh.evidence or {}).get(VERDICT_KEY)
+    if isinstance(payload, dict) and payload.get("reason_code") in (
+        ReasonCode.REGIME_UNFIT.value,
+        ReasonCode.REGIME_NO_EVIDENCE.value,
+    ):
+        return ReasonCode(payload["reason_code"])
+    return ReasonCode.REGIME_NO_EVIDENCE
+
+
+def _came_from_layer(fresh: StrategyCandidate) -> StrategyCandidateStatus | None:
+    """候选是从哪个状态停进 `regime_hold` 的（读转移记录，读不到给 None）。
+
+    **为什么读记录而不是读状态**：`regime_hold` 本身不带这个信息（转移表只允许它
+    回 `oos_running` / `paper_running` 两条边）。而转移记录里那次「从 X 到
+    regime_hold」的行正是这件事的唯一真相——它是已经发生过的事实，不是推断。
+
+    三级回退，全部显式，且都在「停住」这一侧收敛：
+
+    1. 最近一条 `to_status == regime_hold` 的行的 `from_status`（正常路径）。
+    2. 再不然退一步：那条行的 `layer` 列（`oos` / `paper`）也能推出同一件事，
+       它是另一处独立记下的答案，用来兜住「有人手写过一行 from_status 是空/脏值」。
+    3. 都读不到 → `None`。调用方据此**停在原地**：见 `_regime_hold_step` 的说明。
+    """
+    row = (
+        StrategyCandidateTransition.objects.filter(
+            candidate=fresh,
+            to_status=StrategyCandidateStatus.REGIME_HOLD.value,
+        )
+        .order_by("-at", "-created_at", "-id")
+        .values("from_status", "layer")
+        .first()
+    )
+    if row is None:
+        return None
+    try:
+        return coerce_status(row["from_status"])
+    except ValueError:
+        # 手写进行里的脏值不 Fail Loud：这里问的是「从哪来」，答不出来就停住。
+        # `status.py` 的 `coerce_status` 刻意不宽容（见它的 docstring），所以这一层
+        # 自己接住并把结论降级成「不知道」。
+        return _layer_to_status(row.get("layer"))
+
+
+def _layer_to_status(layer: Any) -> StrategyCandidateStatus | None:
+    """`layer` 列 → 那一层的运行态（只在 `regime_hold` 的来处推断里用）。"""
+    return {
+        StrategyCandidateLayer.OOS.value: StrategyCandidateStatus.OOS_RUNNING,
+        StrategyCandidateLayer.PAPER.value: StrategyCandidateStatus.PAPER_RUNNING,
+    }.get(layer)
 
 
 def _paper_pending_step(fresh: StrategyCandidate, deps: AdvanceDeps) -> _Step:
@@ -683,14 +988,23 @@ def _paper_running_step(fresh: StrategyCandidate, deps: AdvanceDeps) -> _Step:
     if caveats:
         # 交付 7：口径边界必须随结论透出，不得被读成完整盈亏。
         extra["caveats"] = caveats
+    verdict = evaluate_candidate(
+        CandidateEvidence(
+            status=StrategyCandidateStatus.PAPER_RUNNING,
+            paper=evidence,
+            thresholds=deps.config,
+        )
+    )
     return _Step(
         StrategyCandidateLayer.PAPER,
-        evaluate_candidate(
-            CandidateEvidence(
-                status=StrategyCandidateStatus.PAPER_RUNNING,
-                paper=evidence,
-                thresholds=deps.config,
-            )
+        # 升实盘前的第二道行情闸门（#37）。与 `_oos_verdict` 共用同一个
+        # `_apply_regime_gate`：同一份规则只有一份（用户故事 23），而放行点各有
+        # 自己的 `resume`（这一侧是等人工卡点，不是去排队）。
+        _apply_regime_gate(
+            fresh,
+            deps,
+            verdict,
+            StrategyCandidateStatus.AWAITING_LIVE_APPROVAL,
         ),
         extra_detail=extra,
     )
@@ -701,6 +1015,70 @@ def _take_paper_caveats(fresh: StrategyCandidate) -> list[str]:
     from apps.strategy_factory.effects import take_paper_caveats
 
     return take_paper_caveats(fresh)
+
+
+def _read_regime_evidence(
+    fresh: StrategyCandidate, deps: AdvanceDeps
+) -> RegimeEvidence | None:
+    """取**当前生效行情阶段**上的适用性证据（#34 的注入点消费）。
+
+    本函数是「行情闸门」这条横切读法的**唯一出口**：两个推进点（样本外通过后、paper
+    期满后）都从这里取，于是「既有的层证据先判、行情判定在证据通过后、推进前」这条次序
+    只有一处实现（spec 用户故事 23 要的「同一份规则只有一份」）。
+
+    ## 返回 `None` 意味着什么
+
+    两层含义都落在 `None` 上，且**都不是「放行」**：采集侧本身拿不到结论（冷启动、没有
+    当代池化表、当前没有生效阶段），以及注入的替身压根没接这个成员。前者按 D2 的口径
+    判 `regime_no_evidence` 并 Hold；后者是接线没做完——#37 落地闸门判定时必须显式处置，
+    不能因为「拿不到」就当「没有行情这回事」。
+
+    ## 时钟只传一次，且允许假实现不收
+
+    与 `read_paper` 同一条纪律：`deps.now()` 喂给采集侧钉「在期豁免」的边界，与
+    `advance` 写转移记录的 `at` 是同一个时刻。默认实现收得住 `now=`；注入的假实现若
+    只接受 `(candidate)`，撤回老签名也不该让它炸在签名上——所以退化成不传时钟。
+    """
+    try:
+        return deps.read_regime(fresh, now=deps.now())
+    except TypeError:
+        # 注入的假实现可能只接受 `(candidate)`。退化成不传时钟——判定照样跑，
+        # 只是那个假实现自己决定怎么算「在期」（它本来就是假的，不该被签名卡住）。
+        return deps.read_regime(fresh)
+
+
+def _regime_detail(evidence: RegimeEvidence | None) -> dict[str, Any] | None:
+    """把行情证据压成**依据栏里的一小段纯值**（#34；#37 的 `regime_verdict` 读同一份）。
+
+    与 `_public_payload` / `_public_layer` 同一条纪律：落进 `evidence` JSONField 的只能是
+    数字与短标识。这里挑的四个键正好回答「这一栏在说什么」：当前什么阶段、那一格的结论、
+    有没有待复核、有没有人在期豁免。**没有豁免就不写那个键**——写一个空列表会让「查过、
+    确实没有」与「压根没查」在记录里长得一样。
+
+    返回 `None` 表示**拿不到适用性结论**（采集侧自己给了 `None`，冷启动）。那种情形下
+    依据栏里什么都不加：不是「没有行情这回事」，是「问不出来」，而两者在记录上必须分得开。
+    """
+    if evidence is None:
+        return None
+    detail: dict[str, Any] = {"regime": evidence.regime}
+    if evidence.effective_at is not None:
+        detail["regime_effective_at"] = evidence.effective_at.isoformat()
+    if evidence.cell is not None:
+        detail["cell_state"] = evidence.cell.state
+        if evidence.cell.reason:
+            detail["cell_reason"] = evidence.cell.reason
+        if evidence.cell.source:
+            detail["cell_source"] = evidence.cell.source
+        if evidence.cell.needs_review:
+            detail["cell_needs_review"] = True
+    if evidence.exemptions:
+        # 键是 (策略 id, 阶段) 的元组，JSONField 里要落成**可读**的字符串对，否则
+        # 事后审计只能靠翻 Python repr 反推当初豁免了谁。
+        detail["exempt"] = [
+            {"strategy_id": str(strategy_id), "regime": regime}
+            for strategy_id, regime in evidence.exemptions
+        ]
+    return detail
 
 
 def _paper_account_problem(account: Any) -> str | None:
@@ -926,7 +1304,24 @@ def _is_repeat(
 
 #: 「卡住也必须可见」的结论（D20）：它们停在原地不改变状态，但**需要有人动**或者
 #: **正在等外部条件**，静默下去就是「候选凭空消失」。
-_STUCK_REASONS = frozenset({ReasonCode.PAPER_ACCOUNT_MISSING, ReasonCode.PAPER_QUEUED})
+#:
+#: 两个行情原因码也在里面（#37，spec #30 用户故事 2「候选因行情被拦时通知里写明」）：
+#: 一个候选停在 `regime_hold` 是**等外部条件**——而它自己不会好，得等池化表重算或
+#: 当前阶段变化。不加进来的后果是那条通知**只在第一次**（进 `regime_hold` 是一次
+#: 状态移动，走的是「状态真的动了」那一支），之后每轮的「还在等」全静默：候选在
+#: 审计面上有一行，在收件箱里一句话都没有，而提出人正想知道「它好了没有」。
+#:
+#: 代价说清：加了之后**第一次停住会通知一次**，接着 `_is_repeat` 把同一条结论连来
+#: 的噪音吃掉（同起止状态 + 同原因码 → 不写记录、不发通知）。所以不会每 5 分钟
+#: 一条，只在结论变化时（行情翻面、放行）才再发。
+_STUCK_REASONS = frozenset(
+    {
+        ReasonCode.PAPER_ACCOUNT_MISSING,
+        ReasonCode.PAPER_QUEUED,
+        ReasonCode.REGIME_UNFIT,
+        ReasonCode.REGIME_NO_EVIDENCE,
+    }
+)
 
 
 def _should_notify(from_status: StrategyCandidateStatus, verdict: Verdict) -> bool:
@@ -961,6 +1356,19 @@ _DETAIL_ORDER = (
     "error",
     "account_problem",
     "conflict",
+    # 行情那一段（#34）。放在最后：它是**旁证**（现在什么阶段、那一格怎么说），
+    # 不是这一步的结论依据。`regime_effective_at` / `cell_source` / `exempt` 刻意不进
+    # 这张表——通知正文只要看得懂的那几个，完整留痕在 `evidence` 与转移记录里。
+    "regime",
+    "cell_state",
+    "cell_reason",
+    "cell_needs_review",
+    # 闸门自己的旁证（#37）。`regime_hold_reason` 说「这一轮判成了哪一支」
+    # （`cell_state=unfit` / `no_usable_conclusion`），`exempt` 说「放行是靠谁」。
+    # 两者都必须在表里：`_message` 只渲染**在这张表里**的键，漏一个就是一个
+    # 静默退化——依据栏少了一行，而记录里明明有。
+    "regime_hold_reason",
+    "exempt",
 )
 
 #: 结论 → 「下一步谁做什么」。写在这里而不是让提出人自己猜，是 D20 对可见性的要求：
@@ -983,6 +1391,18 @@ _NEXT_STEP = {
     ReasonCode.PAPER_RISK_HITS_ABOVE_MAX: "paper 期风控命中超过上限：这条策略在模拟期被风控拦过，改参数后重新走漏斗。",
     ReasonCode.PAPER_PASSED: "**需要你**：这条候选跑满观察期且判定通过，等你确认是否升实盘（人工卡点）。",
     ReasonCode.INSUFFICIENT_EVIDENCE: "证据不足，判不了（不放行）：补数据或改窗口后重新推进。",
+    # 闸门两个码（#37）。两条都必须说清**这是暂停而不是否**，并指出「谁会让它继续」：
+    # 一个读起来像「被否了」的下一步，会让人去改一条本来没问题的策略的参数。
+    ReasonCode.REGIME_UNFIT: (
+        "**暂缓，不是否**：当前行情不适用，等行情翻回「适用」就自动回到原来的那一层，"
+        "无需你操作。若想让这条现在就过，可以发一份当期人工豁免（D5）。"
+    ),
+    ReasonCode.REGIME_NO_EVIDENCE: (
+        "**暂缓，不是否**：行情这一侧判不了（切片缺数据 / 当代池化表没有这一格 / "
+        "当前没有生效阶段）。等重算出结论就自动重判，无需你操作。"
+    ),
+    # 豁免放行（D5）：纯留痕。这一条读起来必须像「靠人放过去的」，而不是「行情适用」。
+    ReasonCode.REGIME_EXEMPT: "当期人工豁免在期，按放行处理（留痕，不是「行情适用」）。",
 }
 
 

@@ -16,9 +16,10 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.db.models.deletion import SET_NULL
+from django.utils import timezone
 
 from apps.exchange.models import ExchangeAccount
-from apps.strategy_factory.models import StrategyCandidate
+from apps.strategy_factory.models import StrategyCandidate, StrategyCandidateTransition
 from apps.strategy_factory.status import (
     ALLOWED_TRANSITIONS,
     InvalidTransitionError,
@@ -161,7 +162,7 @@ def test_legal_edges_are_applied(db, status):
 
 @pytest.mark.parametrize("status", list(S), ids=lambda s: s.value)
 def test_illegal_edges_are_rejected_by_the_model(db, status):
-    """169 对里除合法边以外的全部（含自环）都必须在模型层被拒。
+    """196 对里除合法边以外的全部（含自环）都必须在模型层被拒。
 
     这条与 `test_status.py` 的分工：那边用 spec 原文手抄的期望值钉住「表本身对不对」，
     这边用表本身钉住「模型有没有绕过表」。
@@ -179,6 +180,49 @@ def test_transition_accepts_plain_strings(db):
     """状态值从库里取回是字符串（视图层、任务层手里都是字符串）。"""
     candidate = _candidate(status=S.IN_SAMPLE_RUNNING.value, strategy=None)
     assert candidate.transition_to("oos_running") is S.OOS_RUNNING
+
+
+def test_regime_hold_round_trips_through_the_database(db):
+    """暂停位必须能落库、能读回、能原路退回（spec #30 D1）。
+
+    只测内存态会漏掉一件事：`status` 是 `CharField` + `choices`，`regime_hold`
+    没进 choices 的话，`full_clean()` 会拒、序列化器也拿不到展示名——而两者都不在
+    `transition_to` 这条路径上。
+    """
+    candidate = _candidate(status=S.OOS_RUNNING.value, strategy=None)
+    assert candidate.transition_to(S.REGIME_HOLD) is S.REGIME_HOLD
+    candidate.save()
+    candidate.full_clean()  # choices 校验：迁移没带上这一条会在这里炸
+
+    stored = StrategyCandidate.objects.get(pk=candidate.pk)
+    assert stored.status == "regime_hold"
+    assert stored.status_enum is S.REGIME_HOLD
+    assert stored.status_enum.display == "等行情闸门结论"
+
+    # 闸门翻回来：原路退回，不需要人插手。
+    assert stored.transition_to(S.OOS_RUNNING) is S.OOS_RUNNING
+    stored.save()
+    assert StrategyCandidate.objects.get(pk=candidate.pk).status == "oos_running"
+
+
+def test_regime_hold_transition_rows_carry_the_new_status_value(db):
+    """转移记录的 `from_status` / `to_status` 也要认这个值（D20：卡住也可见）。"""
+    candidate = _candidate(status=S.PAPER_RUNNING.value, strategy=None)
+    candidate.transition_to(S.REGIME_HOLD)
+    candidate.save()
+    row = StrategyCandidateTransition.objects.create(
+        candidate=candidate,
+        layer="paper",
+        from_status=S.PAPER_RUNNING.value,
+        to_status=S.REGIME_HOLD.value,
+        reason_code="regime_unfit",
+        detail={"regime": "chop"},
+        at=timezone.now(),
+    )
+    row.full_clean()
+    row.refresh_from_db()
+    assert row.to_status == "regime_hold"
+    assert row.from_status == "paper_running"
 
 
 def test_unknown_status_value_fails_loud(db):

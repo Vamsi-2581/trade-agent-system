@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import itertools
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
@@ -23,12 +24,27 @@ import pytest
 from apps.backtest.models import BacktestResult
 from apps.datasource.models import KlineRecord
 from apps.exchange.models import ExchangeAccount
+from apps.regime import deactivation_run as deactivation_run_module
+from apps.regime import pool_rebuild as pool_rebuild_module
+from apps.regime.deactivation import RegimeState
+from apps.regime.models import (
+    DeactivationExemption,
+    RebuildStatus,
+    RegimePoolCell,
+    RegimePoolRebuild,
+)
 from apps.strategy_engine.base import BaseStrategy
 from apps.strategy_engine.registry import StrategyRegistry
 from apps.strategy_factory import effects
-from apps.strategy_factory.evaluate import InSampleEvidence, OosEvidence
+from apps.strategy_factory.evaluate import (
+    InSampleEvidence,
+    OosEvidence,
+    RegimeEvidence,
+    RegimePoolCellEvidence,
+)
 from apps.strategy_factory.models import StrategyCandidate
 from apps.strategy_factory.orchestrator import (
+    AdvanceDeps,
     AdvanceWiringError,
     RunContext,
 )
@@ -47,6 +63,9 @@ IN_SAMPLE_END = date(2026, 3, 22)
 PROBE_NAME = "factory_probe"
 PARAMS = {"exit_at_mid": False, "position_pct": 0.25}
 FIXED_NOW = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+
+#: 就绪代的指纹计数器（模型上「就绪代的指纹唯一」的部分唯一约束要求每次造代换一个）。
+_fingerprints = itertools.count(1)
 
 
 class _ProbeStrategy(BaseStrategy):
@@ -546,6 +565,280 @@ class TestCreatePaperSession:
         ):
             with pytest.raises(AdvanceWiringError):
                 effects.fetch_account_balance(account)
+
+
+# --------------------------------------------------------------------------- #
+# 跨层：行情证据（#34，spec #30 D2 / D3 / D5）
+# --------------------------------------------------------------------------- #
+
+
+class TestReadRegime:
+    """`effects.read_regime` 的三个读口与两条「拿不到」。
+
+    这一份钉的是票面上最贵的两件事：
+
+    1. **冷启动不抛、给 `None`**：没有当代池化表、或当前没有生效阶段，都是「适用性问题
+       现在问不出来」，不是「结论是中性」。合成一份中性证据会让闸门在证据缺失处自己编
+       一个结论——fail-closed 要防的正是这件事。
+    2. **当代配对**：`current_cells` 必须收到**显式取过的**那一代，不能让它自己再问一次。
+       分两次读会落成「依据写的是第 N 代、引用的却是第 N+1 代那一格」，而这种错在库上
+       看起来完全正常。所以这里 patch `current_cells` 直接断言它收到的 `generation`
+       是不是 `current_generation()` 返回的那一个。
+
+    格子与阶段一律**真造库**（`Strategy` 是 UUID 主键，拿整数当主键写死会在真库上静默
+    错位），只把两个读函数本身换成看得见的替身。
+    """
+
+    pytestmark = pytest.mark.django_db
+
+    @pytest.fixture
+    def _strategy_row(self):
+        return Strategy.objects.create(
+            name="regime_probe", code_path="strategies/regime_probe.py"
+        )
+
+    def _candidate(self, strategy: Strategy) -> StrategyCandidate:
+        return StrategyCandidate.objects.create(
+            name="regime_probe",
+            hypothesis="行情证据采集探针",
+            code_path="~/.tradelogx/strategies/regime_probe.py",
+            origin=StrategyCandidateOrigin.AGENT.value,
+            strategy=strategy,
+            status=StrategyCandidateStatus.OOS_RUNNING.value,
+        )
+
+    def _generation(self, **kwargs) -> RegimePoolRebuild:
+        kwargs.setdefault("status", RebuildStatus.READY.value)
+        kwargs.setdefault("finished_at", FIXED_NOW)
+        # 就绪代的指纹唯一（模型上有一条部分唯一约束）——同一个类里的用例每次造代都得
+        # 给一个新指纹，让计数器兜底，省得每个用例都去编一个字符串。
+        kwargs.setdefault("input_fingerprint", f"f{next(_fingerprints)}")
+        return RegimePoolRebuild.objects.create(
+            actor_kind="task",
+            actor_name="任务",
+            pool_version=1,
+            started_at=FIXED_NOW,
+            **kwargs,
+        )
+
+    def _cell(self, generation, strategy, regime, **kwargs) -> RegimePoolCell:
+        kwargs.setdefault("source", "strategy")
+        return RegimePoolCell.objects.create(
+            rebuild=generation,
+            strategy=strategy,
+            regime=regime,
+            state=kwargs.pop("state", "fit"),
+            reason=kwargs.pop("reason", ""),
+            **kwargs,
+        )
+
+    # -- 冷启动 ------------------------------------------------------------- #
+
+    def test_no_generation_returns_none_without_raising(self, _strategy_row):
+        """当代一张表都没有（从没重算过）→ None，不抛。"""
+        candidate = self._candidate(_strategy_row)
+        assert effects.read_regime(candidate) is None
+
+    def test_no_effective_regime_returns_none(self, _strategy_row):
+        """当代在、当前却没有生效阶段（冷启动）→ None。
+
+        阶段说不清时，那一格即便存在也无从引用——查「在下行趋势里行不行」得先知道现在
+        是不是下行趋势。
+        """
+        candidate = self._candidate(_strategy_row)
+        generation = self._generation()
+        self._cell(generation, _strategy_row, "downtrend", state="unfit")
+
+        with patch.object(
+            deactivation_run_module, "current_regime_state", return_value=RegimeState()
+        ):
+            assert effects.read_regime(candidate) is None
+
+    def test_cold_start_is_not_a_fabricated_neutral(self, _strategy_row):
+        """冷启动必须停在 `None`，不能落成一份合成的中性证据（fail-closed）。
+
+        这条与上两条的分工：上面钉「不抛」，这条钉「形状对」——合成 `regime=None,
+        cell=state='neutral'` 也能跑，但那样调用方再也分不开「机制没算过」与「算了、
+        结论是中性」，而闸门对这两件事的处置相反。
+        """
+        candidate = self._candidate(_strategy_row)
+        assert effects.read_regime(candidate) is None
+        assert RegimeEvidence().cell is None, "空证据里没有格子（不是中性格子）"
+        assert RegimeEvidence().regime is None, "空证据里没有阶段（不是箱体震荡）"
+
+    # -- 当代配对（本票最高价值的一条） -------------------------------------- #
+
+    def test_current_cells_receives_the_fetched_generation(self, _strategy_row):
+        """`current_cells` 必须收到**显式取过的**那一代，不许它自己再问一次。"""
+        candidate = self._candidate(_strategy_row)
+        generation = self._generation()
+        self._cell(generation, _strategy_row, "downtrend", state="unfit")
+
+        seen: list[object] = []
+        real = pool_rebuild_module.current_cells
+
+        def spy(gen=None):
+            seen.append(gen)
+            return real(gen)
+
+        with (
+            patch.object(pool_rebuild_module, "current_cells", spy),
+            patch.object(
+                deactivation_run_module,
+                "current_regime_state",
+                return_value=RegimeState(regime="downtrend", effective_at=FIXED_NOW),
+            ),
+        ):
+            evidence = effects.read_regime(candidate)
+
+        assert len(seen) == 1, "一次 read_regime 只该查一次格子"
+        assert seen[0] == generation, (
+            "current_cells 收到的是 None（它自己会再问一次当前代）→ "
+            "「手里的代」与「拿到的格子」可能来自两代（依据第 N 代、格子第 N+1 代）"
+        )
+        assert seen[0] is not None, "配对读取必须把那一代传进去，不能让它自己再问一次"
+        assert seen[0].pk == generation.pk
+        assert evidence is not None
+        assert evidence.regime == "downtrend"
+        assert evidence.effective_at == FIXED_NOW
+        assert evidence.cell is not None
+        assert evidence.cell.state == "unfit"
+
+    def test_generation_is_fetched_before_cells(self, _strategy_row):
+        """两代并存时，配对的是**最近 ready 的那一代**（`finished_at` 倒序，不是 start）。"""
+        candidate = self._candidate(_strategy_row)
+        old = self._generation(finished_at=FIXED_NOW - timedelta(days=1))
+        new = self._generation(finished_at=FIXED_NOW)
+        # 两代各有这一格，但结论不同——配对错了读到的就是另一份结论。
+        self._cell(old, _strategy_row, "downtrend", state="fit")
+        self._cell(new, _strategy_row, "downtrend", state="unfit")
+
+        with patch.object(
+            deactivation_run_module,
+            "current_regime_state",
+            return_value=RegimeState(regime="downtrend", effective_at=FIXED_NOW),
+        ):
+            evidence = effects.read_regime(candidate)
+
+        assert evidence is not None and evidence.cell is not None
+        assert evidence.cell.state == "unfit", "配对的是最近 ready 的那一代"
+
+    # -- 三样东西都进证据 ---------------------------------------------------- #
+
+    def test_cell_fields_are_carried_verbatim(self, _strategy_row):
+        """格子的四个取值原样进证据，采集侧不重写一句可能与之不一致的话。"""
+        candidate = self._candidate(_strategy_row)
+        generation = self._generation()
+        self._cell(
+            generation,
+            _strategy_row,
+            "range",
+            state="unfit",
+            reason="direction_conflict",
+            source="archetype",
+            needs_review=True,
+        )
+        with patch.object(
+            deactivation_run_module,
+            "current_regime_state",
+            return_value=RegimeState(regime="range", effective_at=FIXED_NOW),
+        ):
+            evidence = effects.read_regime(candidate)
+
+        assert evidence == RegimeEvidence(
+            regime="range",
+            effective_at=FIXED_NOW,
+            cell=RegimePoolCellEvidence(
+                state="unfit",
+                reason="direction_conflict",
+                source="archetype",
+                needs_review=True,
+            ),
+        )
+
+    def test_in_force_exemptions_are_carried(self, _strategy_row):
+        """在期豁免原样进证据（D5）。"""
+        candidate = self._candidate(_strategy_row)
+        generation = self._generation()
+        self._cell(generation, _strategy_row, "downtrend", state="unfit")
+        exemption = DeactivationExemption.objects.create(
+            strategy=_strategy_row,
+            regime="downtrend",
+            granted_at=FIXED_NOW - timedelta(days=1),
+            expires_at=FIXED_NOW + timedelta(days=9),
+            granted_by="ticket34-probe",
+            note="人工复核后放行",
+        )
+
+        with patch.object(
+            deactivation_run_module,
+            "current_regime_state",
+            return_value=RegimeState(regime="downtrend", effective_at=FIXED_NOW),
+        ):
+            # `now` 与造库用的 FIXED_NOW 是同一个时刻：豁免的「在期」是相对现在的量，
+            # 两处各读一次时钟就会让「恰在到期那一刻」这条边界随运行时刻漂移。
+            evidence = effects.read_regime(candidate, now=FIXED_NOW)
+
+        assert evidence is not None
+        assert evidence.exemptions == {(_strategy_row.pk, "downtrend"): exemption.pk}
+
+    def test_regime_known_but_no_cell_is_not_a_fabricated_neutral(self, _strategy_row):
+        """阶段说得清、当代没有这一格 → `cell is None`，而不是一份合成中性。
+
+        多品种 / 窗口未覆盖（spec 用户故事 10）是第三种状态：既不是冷启动，也不是
+        「算了、中性」。它必须能在结构上与中性结论分开，否则依据栏会把「没覆盖」读成
+        「覆盖过了、不适用风险」。
+        """
+        candidate = self._candidate(_strategy_row)
+        generation = self._generation()
+        # 当代存在，但只有别的策略 / 别的阶段的格子——这一格确实没有。
+        other = Strategy.objects.create(
+            name="regime_other", code_path="strategies/regime_other.py"
+        )
+        self._cell(generation, other, "downtrend", state="unfit")
+        self._cell(generation, _strategy_row, "uptrend", state="fit")
+
+        with patch.object(
+            deactivation_run_module,
+            "current_regime_state",
+            return_value=RegimeState(regime="downtrend", effective_at=FIXED_NOW),
+        ):
+            evidence = effects.read_regime(candidate)
+
+        assert evidence is not None
+        assert evidence.regime == "downtrend", "阶段说得清"
+        assert evidence.cell is None, "当代没有这一格——不是合成一份中性"
+        assert evidence.covered is False
+
+    # -- 注入替身 ----------------------------------------------------------- #
+
+    def test_injected_double_drives_the_reader_with_zero_db(self):
+        """`AdvanceDeps.read_regime` 可以整个换掉：判定层因此能在零 DB 下跑。
+
+        这一条是 D2「证据经 deps 注入」的落地证明——造不出一份当代池化表时（单测环境、
+        或单独验闸门判定时），一个 lambda 就能把证据递进去。
+        """
+        expected = RegimeEvidence(
+            regime="downtrend",
+            cell=RegimePoolCellEvidence(state="unfit", reason="direction_conflict"),
+        )
+        deps = AdvanceDeps(
+            resolve_run_context=lambda candidate: None,
+            start_in_sample=lambda candidate, ctx, plan: {},
+            read_in_sample=lambda candidate: None,
+            start_oos=lambda candidate, ctx, plan, rid: {},
+            read_oos=lambda candidate: None,
+            create_paper_session=lambda candidate: None,
+            read_paper=lambda candidate: None,
+            read_regime=lambda candidate: expected,
+            notify=lambda candidate, message: True,
+            now=lambda: FIXED_NOW,
+        )
+        assert deps.read_regime(object()) is expected
+
+    def test_default_deps_wires_the_real_reader(self):
+        deps = effects.default_deps()
+        assert deps.read_regime is effects.read_regime
 
 
 # --------------------------------------------------------------------------- #
