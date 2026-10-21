@@ -815,6 +815,9 @@ class BacktestEngine:
         # 夏普比率（按 K 线周期年化，口径唯一出处见 bars_per_year）
         sharpe = self._compute_sharpe()
 
+        # 盈亏比 / profit_factor（口径见 _compute_trade_quality 的 docstring）
+        profit_factor, payoff_ratio = self._compute_trade_quality(closed_trades)
+
         stats: dict = {
             "final_equity": float(final_equity),
             "total_return_pct": total_return,
@@ -822,6 +825,11 @@ class BacktestEngine:
             "win_rate": win_rate,
             "sharpe_ratio": sharpe,
             "total_trades": total_closed,
+            # 两个都是「已平仓交易」口径，与 win_rate / total_trades 同源。
+            # 算不出来（无亏损笔 / 无已平仓交易）时是 None，不是 0 也不是 inf
+            # —— 理由见 _compute_trade_quality。
+            "profit_factor": profit_factor,
+            "payoff_ratio": payoff_ratio,
             "cost_detail": dict(self.cost_detail),
             "equity_curve": self._equity_curve,
             "trades": self._trades,
@@ -833,6 +841,56 @@ class BacktestEngine:
             stats["benchmark"] = benchmark_stats
 
         return stats
+
+    @staticmethod
+    def _compute_trade_quality(
+        closed_trades: list[dict],
+    ) -> tuple[float | None, float | None]:
+        """已平仓交易 → ``(profit_factor, payoff_ratio)``。
+
+        **两个指标不是同一个东西**，仓库里对「盈亏比」有两种读法，这里两个都出：
+
+        * ``profit_factor`` = 总盈利 / 总亏损（**总额**口径，CFA/行业通行）。它回答
+          「赚的钱是亏的钱的几倍」，与笔数无关——一笔巨亏可以吃掉一百笔小赚。
+        * ``payoff_ratio`` = 平均盈利 / 平均亏损（**单笔**口径，即
+          ``docs/arch/architecture_final.md`` 与 ``docs/arch/v1/backtest_system.md``
+          里写的「盈亏比 = 平均盈利/平均亏损」）。它回答「赢的时候平均赢多少 vs
+          输的时候平均输多少」，与笔数无关但会放大单笔极端值。
+
+        两者都从 ``pnl`` 取数，且 ``pnl`` 已扣手续费与滑点（见 ``_execute_buy`` /
+        ``_apply_sell_fill`` 的 ``pnl = ... - commission``），所以这两个指标与
+        ``win_rate`` / ``total_trades`` 是**同一批已平仓交易**，不存在口径分叉。
+
+        返回 ``None`` 而不是 ``0`` / ``inf`` 的两种情况，都是「分母不成立」：
+
+        * 没有已平仓交易 → 两个都是 ``None``（与 ``win_rate`` 同样的空样本口径）；
+        * 没有亏损笔（``gross_loss == 0``）→ ``profit_factor`` 是 ``None``：
+          数学上是 +∞，落成 ``inf`` 会污染 JSON 序列化与下游排序，落成 ``0`` 则
+          把「一笔都没亏」读成「全亏」。同理没有盈利笔时 ``payoff_ratio`` 是
+          ``None``。
+
+        注意 ``profit_factor == 0.0`` 是**合法值**（有亏损笔、一笔没赚），
+        与上面的 ``None`` 必须区分开——这正是「判不了不是判通过」那条纪律。
+        """
+        if not closed_trades:
+            return None, None
+
+        pnls = [float(t["pnl"]) for t in closed_trades if t.get("pnl") is not None]
+        if not pnls:
+            return None, None
+
+        gross_profit = sum(p for p in pnls if p > 0)
+        gross_loss = -sum(p for p in pnls if p < 0)  # 取正，便于直接做分母
+        wins = [p for p in pnls if p > 0]
+        losses = [-p for p in pnls if p < 0]
+
+        profit_factor = None if gross_loss == 0 else gross_profit / gross_loss
+
+        payoff_ratio = None
+        if wins and losses:
+            payoff_ratio = (sum(wins) / len(wins)) / (sum(losses) / len(losses))
+
+        return profit_factor, payoff_ratio
 
     def _compute_buy_and_hold(self) -> dict:
         """计算 Buy & Hold 基准：首根K线买入，最后一根K线卖出"""
@@ -1075,6 +1133,30 @@ async def create_empty_result_async(
         return None
 
 
+def trade_quality_metrics(stats: dict) -> dict:
+    """引擎 stats → 落进 `BacktestResult.metrics` 的交易质量键（**纯函数**）。
+
+    只产出自己负责的两个键，调用方负责与既有 `metrics` 合并——`metrics` 是个共享
+    JSONField（`regime_slice` / `walk_forward` / `capital_efficiency` 都在里面），
+    任何写方都只能读-改-写自己那几个键。
+
+    **``None`` 不落库**：算不出来的指标（无已平仓交易、无亏损笔）直接不写这个键，
+    而不是写 ``null``。理由与 `capital_efficiency_slicing.stored_payload` 一致：
+    「这个键不存在」= 这次没测到，与「测到了、值是 0」是两件事，而 ``0`` 会被
+    读成「一笔都没赚」。前端 `fmtNum(undefined)` 与 `fmtNum(null)` 都显示占位符，
+    所以对展示没有差别，但对「有没有证据」的判定差别是本质的。
+
+    ``profit_factor == 0.0`` 会照写（有亏损笔、一笔没赚，这是真实的坏结果）。
+    """
+    out: dict = {}
+    for key in ("profit_factor", "payoff_ratio"):
+        value = stats.get(key)
+        if value is None:
+            continue
+        out[key] = float(value)
+    return out
+
+
 async def save_backtest_result(
     strategy_id: str,
     symbol: str,
@@ -1136,6 +1218,14 @@ async def save_backtest_result(
             result.indicator_data = (
                 _compute_indicators(ohlcv_data) if ohlcv_data else {}
             )
+            # 交易质量指标落 `metrics`（前端 `metrics.profit_factor` 就认这个键）。
+            # **读-改-写**，只动自己这两个键：`metrics` 里还住着 `regime_slice` /
+            # `walk_forward` / `capital_efficiency`，整份覆盖会让别人的字段凭空消失
+            # （与 `capital_efficiency_slicing.save_capital_efficiency` 同一纪律）。
+            result.metrics = {
+                **dict(result.metrics or {}),
+                **trade_quality_metrics(stats),
+            }
             # 审核字段不在此处改（spec D12）：回测保存路径不承担「通过」的判定，
             # 否则 result_review 要求的 pending 前置永远不成立、人工审核闸门空转。
             # 更新路径尤其不能回写 pending——那会把一次已做完的人工审核抹掉。
@@ -1159,6 +1249,7 @@ async def save_backtest_result(
                 cost_detail=stats.get("cost_detail", {}),
                 git_commit_hash=git_commit_hash,
                 parameters=parameters,
+                metrics=trade_quality_metrics(stats),
                 equity_curve=stats.get("equity_curve", [])[:2000],
                 drawdown_curve=[
                     {"timestamp": p["timestamp"], "drawdown": p["drawdown"]}

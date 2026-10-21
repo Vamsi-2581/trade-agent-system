@@ -474,6 +474,24 @@ async def _get_redis_task_data(task_id: str) -> dict | None:
         return None
 
 
+#: 交易质量指标：存在 `BacktestResult.metrics` 里，但必须**提到 result 顶层**
+#: 才能被指标锚定块看见（`BaseAgent._TASK_METRIC_KEYS` 读的是顶层键）。
+#: 口径定义见 `apps.strategy_engine.backtest_mode.BacktestEngine._compute_trade_quality`。
+_TRADE_QUALITY_KEYS = ("profit_factor", "payoff_ratio")
+
+
+def _trade_quality_of(metrics: dict | None) -> dict:
+    """`BacktestResult.metrics` → 顶层可锚定的交易质量键（缺失就整键不出现）。
+
+    只挑已知的两个键，不整份展开 `metrics`：里面还住着 `regime_slice` /
+    `walk_forward` / `capital_efficiency` 等嵌套载荷，塞进 result 顶层会污染
+    「这一行的核心指标」这份清单，也会让锚定块变得不可读。
+    """
+    if not isinstance(metrics, dict):
+        return {}
+    return {k: metrics[k] for k in _TRADE_QUALITY_KEYS if metrics.get(k) is not None}
+
+
 async def _get_archived_task_result(task_id: str) -> dict | None:
     """Fall back to PostgreSQL permanent storage.
 
@@ -566,6 +584,12 @@ async def _get_archived_task_result(task_id: str) -> dict | None:
                     "max_drawdown_pct": br.max_drawdown_pct,
                     "win_rate": br.win_rate,
                     "total_trades": br.total_trades,
+                    # 盈亏比 / profit_factor 落在 `metrics` 里（见
+                    # `backtest_mode.trade_quality_metrics`），这里**提到 result 顶层**：
+                    # 锚定块（`BaseAgent._extract_task_metrics`）只读顶层键，
+                    # 留在 `metrics` 子字典里 = 守卫永远看不到它 = 报告里一出现
+                    # 盈亏比就判不可核验。子字典照样原样透出，两处同源不冲突。
+                    **_trade_quality_of(br.metrics),
                     "parameters": br.parameters,
                     "metrics": br.metrics,
                     "created_at": br.created_at.isoformat(),
@@ -614,6 +638,8 @@ async def _get_archived_task_result(task_id: str) -> dict | None:
                     "max_drawdown_pct": job.best_result.max_drawdown_pct,
                     "win_rate": job.best_result.win_rate,
                     "total_trades": job.best_result.total_trades,
+                    # 与 BacktestResult 路径同一来源（`metrics`），口径不分叉。
+                    **_trade_quality_of(job.best_result.metrics),
                 }
             _log.info(
                 "[get_task_result] found in GridSearchJob: id=%s status=%s",
