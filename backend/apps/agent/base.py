@@ -106,8 +106,76 @@ class BaseAgent(ABC):
         "win_rate",
         "total_return_pct",
         "max_drawdown_pct",
+        # 期末权益的两个来源口径（见 _METRIC_CLAIM_PATTERNS 同名注释）：
+        # Celery 归档给 final_equity，BacktestResult 给 final_capital。
+        # 两个都必须在白名单里，否则锚定块不会带上它、溯源校验永远判不可核验。
         "final_equity",
+        "final_capital",
+        # 盈亏比的两个口径（见 _METRIC_CLAIM_PATTERNS 同名注释）：
+        # `profit_factor` 是总额口径（总盈利/总亏损），`payoff_ratio` 是单笔口径
+        # （平均盈利/平均亏损）。两者都叫「盈亏比」，都必须在白名单里——
+        # 只收一个，另一个口径的正确报告就会因「锚定值不在正文里」被误拦。
+        "profit_factor",
+        "payoff_ratio",
         "result_id",
+    )
+
+    # ── 指标溯源（2026-10-19 事故）────────────────────────────────────────
+    # 事故：定时任务 1c05a48b 把一份**从未调用 get_task_result** 的回测报告
+    # 用 notify_user 推给了用户。库里真值 820 笔 / -89.86% / 夏普 -20.20 /
+    # 胜率 13.41%，推出去的是 1,102 笔 / -3.37% / -0.37 / 46.83%。
+    #
+    # 为什么既有守卫没拦住：`_looks_like_unverified_task_claim` 以
+    # `had_tool_results` 为闸门——只要**任何**工具执行过就放行。notify_user
+    # 不是指标来源，却把闸门打开了，于是「先 notify_user 再编数字」绕过守卫；
+    # 而锚定块只在 get_task_result 真执行时才注入，没执行就完全没有锚定。
+    #
+    # 判据因此改为「**这条工具调用是否在向用户断言指标**」，而不是「本轮是否
+    # 调用过工具」：向用户断言指标的调用，其数字必须能在本轮 get_task_result
+    # 的返回值里找到（允许四舍五入）。找不到就是虚构。
+    _METRIC_ASSERTION_TOOLS = frozenset({"notify_user"})
+
+    # 指标断言识别：关键词 → 锚定键元组（空元组表示「没有对应锚定键」）。
+    #
+    # 2026-10-20 变更：盈亏比不再是「无锚定键」的衍生指标。引擎开始算
+    # `profit_factor` / `payoff_ratio` 并透出到 `get_task_result` 之后，它就有了
+    # 真值可比——原先「不参与判定」的豁免变成了一条**虚构后门**：报告写
+    # 「盈亏比 0.96」（事故里那个数）而返回值里没有、或对不上，守卫都会放行。
+    # 现在两个口径都认（总额口径 profit_factor / 单笔口径 payoff_ratio），
+    # 与期末权益认两个来源口径是同一条理由。
+    _METRIC_CLAIM_PATTERNS = (
+        (re.compile(r"总收益率|收益率|回报率"), ("total_return_pct",)),
+        (re.compile(r"夏普"), ("sharpe_ratio",)),
+        (re.compile(r"胜率"), ("win_rate",)),
+        (re.compile(r"最大回撤|回撤"), ("max_drawdown_pct",)),
+        (re.compile(r"交易次数|交易笔数|总交易|笔数"), ("total_trades",)),
+        # 期末权益有两个来源口径，必须都认（2026-10-19 线上复验发现的误拦）：
+        #   * `task_progress` 归档路径 → `final_equity`（Celery result dict）
+        #   * `BacktestResult` 路径     → `final_capital`（`backtest.py:563`）
+        # 只认前者会让走 BacktestResult 的报告永远匹配不上「期末权益」，
+        # 于是**完全正确**的报告被误拦。
+        (
+            re.compile(r"期末权益|最终权益|期末资金|最终资金|期末余额"),
+            ("final_equity", "final_capital"),
+        ),
+        # 盈亏比的两个口径，必须都认：总额口径与单笔口径在同一份报告里
+        # 可能是不同的数（0.96 vs 1.4），只认一个就会把另一个口径的正确报告拦掉。
+        (
+            re.compile(r"盈亏比|profit_factor|profit factor|payoff_ratio"),
+            ("profit_factor", "payoff_ratio"),
+        ),
+    )
+    # 关键词之后取数窗口：够拿到紧邻的那个数字，又窄到不会把同一行的
+    # 其它内容算进来。只向后取——指标值总在关键词之后（`夏普比率：-0.37`）。
+    _METRIC_CLAIM_WINDOW_AFTER = 28
+    _NUMBER_RE = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?")
+
+    _METRIC_PROVENANCE_ERROR = (
+        "Error: 指标溯源校验未通过 —— 本次通知正文包含回测指标，但本轮没有"
+        "任何可核验的 get_task_result 返回值支撑这些数字（或数字与返回值不一致）。"
+        "报告中的每个指标都必须逐字取自 get_task_result 的返回值（可四舍五入），"
+        "缺失的指标写「未提供」。请先调用 get_task_result 拿到真实结果，"
+        "再按其返回值重写通知正文；严禁编造或估算任何数字。"
     )
 
     # 同一工具连续失败达到该阈值后熔断：后续对该工具的调用不再真实执行，
@@ -244,6 +312,177 @@ class BaseAgent(ABC):
         except Exception as e:
             logger.warning("[%s] tool %s failed: %s", self.name, tc.name, e)
             return f"Error: {e}"
+
+    @classmethod
+    def _asserted_metric_groups(cls, text: str):
+        """抽出「正文里被**断言**了的指标组」——即关键词同行内带着数字的那些。
+
+        只看同一行、只向后取（指标值总在关键词之后）。为什么要「同行且带数字」：
+        `回测完成，报告见下` 这类句子不该算指标断言，否则守卫会误伤普通叙述。
+
+        **不**把「关键词旁的那个数字」当成该指标的值——那是原设计的致命假设。
+        2026-10-19 线上复验踩到两次：
+          * 表格排版 `| 最大回撤 | -89.86% |` 里，跨列取数会拿到隔壁列的值；
+          * regime 归因表 `| 震荡 | 324 | 13.89% | ... | 胜率 | ...` 里，
+            「胜率」后面最近的是交易数 324，于是完全正确的报告被判虚构。
+        现在只回答「这个指标被提到了吗」，值对不对交给
+        `_metric_claims_are_anchored` 用「锚定值是否出现在正文」来判。
+        """
+        if not text:
+            return
+        seen: set[tuple] = set()
+        for pattern, keys in cls._METRIC_CLAIM_PATTERNS:
+            for m in pattern.finditer(text):
+                line_end = text.find("\n", m.end())
+                if line_end == -1:
+                    line_end = len(text)
+                tail = text[m.end() : line_end][: cls._METRIC_CLAIM_WINDOW_AFTER]
+                if cls._NUMBER_RE.search(tail) and keys not in seen:
+                    seen.add(keys)
+                    yield keys
+
+    @classmethod
+    def _text_numbers(cls, text: str) -> list[float]:
+        """正文里出现的所有数字（去掉千分位，解析失败丢弃）。"""
+        out: list[float] = []
+        for m in cls._NUMBER_RE.finditer(text):
+            v = cls._parse_number(m.group(0))
+            if v is not None:
+                out.append(v)
+        return out
+
+    @classmethod
+    def _claims_backtest_metrics(cls, text: str) -> bool:
+        """文本是否在断言回测指标（收益率/夏普/胜率/回撤/笔数/盈亏比…）。"""
+        return any(True for _ in cls._asserted_metric_groups(text))
+
+    @classmethod
+    def _metric_claims_are_anchored(cls, text: str, metrics: dict | None) -> bool:
+        """正文断言的指标，能否在本轮 `metrics`（get_task_result 返回值）里对上。
+
+        判据（2026-10-19 第二次修正）：**该指标的锚定值必须出现在正文里**，
+        而不是「关键词旁边那个数字等于锚定值」。
+
+        原判据在真实报告上误拦过两次，都是因为它在猜「这个数字属于哪个指标」：
+        表格跨列、regime 归因表（多行同名列）都会猜错。而「真值有没有出现在
+        报告里」不需要猜——事故里那份虚构报告写的是 1,102 / -3.37 / -0.37 /
+        46.83 / -10.20，真值 820 / -89.86 / -20.20 / 13.41 一个都没出现，
+        照样能被抓住。
+
+        `metrics` 为空 = 本轮根本没查过结果 → 只要断言了指标就判不可锚定
+        （事故形态 A：压根没调 get_task_result 就发了报告）。
+
+        `盈亏比`/`profit_factor`（2026-10-20 起）**参与**判定：引擎算出的
+        `profit_factor` / `payoff_ratio` 已经进了 `get_task_result` 的返回值，
+        它不再是无从核验的衍生指标。此前这里对空元组直接 `continue`，等于给
+        报告里的盈亏比开了一条「随便写」的后门——事故里那个虚构的 0.96 正是
+        这么漏过去的。现在 `_asserted_metric_groups` 不再产出空元组（每组都有
+        锚定键），因此这条豁免连同它的分支一起删掉。
+
+        「有锚定键但本轮没取到该键」仍是 `continue`（不是拦截）：例如老回测行
+        的 `metrics` 里没有 `profit_factor`。这与「口径对不上」不同——那条是
+        明确的虚构证据，这条只是「这次没测到」。但**没有亏损笔时引擎给 None、
+        于是整键缺失**，此时报告若写了盈亏比数字，就会落在「没取到」这一支上
+        被放行——这是已知且刻意的取舍：宁可漏拦一个无法核验的衍生指标，也不
+        要把一份核心指标全对的报告整份拦掉（2026-10-19 已经因误拦翻过一次车）。
+        """
+        anchors = cls._anchor_values(metrics)
+        if not anchors:
+            # 没有可核验的返回值：断言即违规
+            return not cls._claims_backtest_metrics(text)
+        text_numbers = cls._text_numbers(text)
+        for keys in cls._asserted_metric_groups(text):
+            candidates = [anchors[k] for k in keys if anchors.get(k) is not None]
+            if not candidates:
+                continue
+            if not any(
+                cls._numbers_agree(t, a) for t in text_numbers for a in candidates
+            ):
+                return False
+        return True
+
+    @classmethod
+    def _unanchored_metric_claims(cls, text: str, metrics: dict | None) -> list:
+        """列出**不可溯源**的指标断言，形如 ``[("win_rate", 期望值)]``。
+
+        纯诊断用途：拦截时写进日志，让「为什么这份报告被拦」当场可读——
+        否则只能看到一句 "no verifiable return value"，分不清是没查结果、
+        还是某个字段口径没对上（2026-10-19 线上复验就踩过 `final_capital`
+        vs `final_equity`，以及表格跨列取数两个坑，都误拦过正确报告）。
+        """
+        anchors = cls._anchor_values(metrics)
+        text_numbers = cls._text_numbers(text)
+        out: list[tuple[str, object]] = []
+        for keys in cls._asserted_metric_groups(text):
+            candidates = [anchors[k] for k in keys if anchors.get(k) is not None]
+            if not candidates:
+                out.append((keys[0], None))
+                continue
+            if not any(
+                cls._numbers_agree(t, a) for t in text_numbers for a in candidates
+            ):
+                out.append((keys[0], candidates))
+        return out
+
+    @classmethod
+    def _anchor_values(cls, metrics: dict | None) -> dict:
+        """把锚定指标归一成可比较的 float（不可解析的丢弃）。"""
+        if not metrics:
+            return {}
+        out = {}
+        for k, v in metrics.items():
+            if isinstance(v, bool):
+                continue
+            parsed = cls._parse_number(str(v))
+            if parsed is not None:
+                out[k] = parsed
+        return out
+
+    @staticmethod
+    def _parse_number(raw: str) -> float | None:
+        """`-89.86` / `1,102` / `820` → float；失败返回 None。"""
+        try:
+            return float(raw.replace(",", "").strip())
+        except (ValueError, AttributeError):
+            return None
+
+    @staticmethod
+    def _numbers_agree(claimed: float, anchor: float) -> bool:
+        """两个数字是否可视为同一指标值（容纳四舍五入/百分比/小数口径）。
+
+        三种口径都认：
+        * 同量级（收益率 -89.86285 → -89.86）
+        * 小数 vs 百分数（胜率 0.1341 → 13.41%）
+        * 绝对差极小（0.0 附近，避免除零）
+        """
+        if claimed == anchor:
+            return True
+        for a, b in ((claimed, anchor), (claimed, anchor * 100.0)):
+            if b == 0:
+                if abs(a) < 0.01:
+                    return True
+                continue
+            if abs(a - b) <= max(abs(b) * 0.005, 0.01):
+                return True
+        return False
+
+    def _violates_metric_provenance(
+        self, tc_name: str, arguments: dict, task_metrics: dict | None
+    ) -> bool:
+        """该工具调用是否在向用户断言无法溯源的指标。
+
+        只对 `_METRIC_ASSERTION_TOOLS`（当前是 notify_user）生效——这些工具的
+        参数会**直接送达用户**，是虚构指标真正的出口。其它工具（read_file 等）
+        的参数不构成对外断言，不做校验。
+        """
+        if tc_name not in self._METRIC_ASSERTION_TOOLS:
+            return False
+        message = arguments.get("message") or ""
+        if not isinstance(message, str) or not message:
+            return False
+        if not self._claims_backtest_metrics(message):
+            return False
+        return not self._metric_claims_are_anchored(message, task_metrics)
 
     @staticmethod
     def _extract_task_metrics(result_text: str) -> dict | None:
@@ -653,6 +892,10 @@ class BaseAgent(ABC):
         # 指标锚定（2026-09-18 事故）：本轮 get_task_result 返回的复算值，
         # 同时注入工具结果旁（覆盖直接返回路径）与 summary prompt
         task_metrics: dict | None = None
+        # 指标溯源（2026-10-19 事故）：本轮是否发生过「断言指标但不可溯源」的
+        # 拦截。只要发生过，最终答复（不只是 notify_user 正文）同样要守住——
+        # 事故里那轮任务的 result.content 也把虚构数字复述了一遍。
+        metric_provenance_blocked = False
 
         for round_idx in range(self._max_tool_rounds):
             resp = await llm.chat_with_tools(
@@ -807,6 +1050,26 @@ class BaseAgent(ABC):
                         tool=tc.name,
                         n=tool_failure_counts.get(tc.name, 0),
                     )
+                elif self._violates_metric_provenance(
+                    tc.name, tc.arguments, task_metrics
+                ):
+                    # 指标溯源（2026-10-19 事故）：notify_user 正文断言了回测
+                    # 指标，但本轮 get_task_result 没给过可核验的返回值
+                    # （或数字对不上）→ 不执行，把错误回给 LLM 让它先查真值。
+                    # 关键：这条路径不设置 had_tool_results，因此「先 notify_user
+                    # 再编数字」无法再借道绕过防虚构守卫。
+                    logger.error(
+                        "[%s] metric provenance blocked %s: unanchored=%s "
+                        "task_metrics=%s",
+                        self.name,
+                        tc.name,
+                        self._unanchored_metric_claims(
+                            tc.arguments.get("message") or "", task_metrics
+                        ),
+                        task_metrics,
+                    )
+                    metric_provenance_blocked = True
+                    result_text = self._METRIC_PROVENANCE_ERROR
                 else:
                     all_disabled = False
                     result_text = await self._execute_tool_call(tc)
@@ -987,6 +1250,25 @@ class BaseAgent(ABC):
                 "总结中包含与真实工具结果不符的成功声明"
                 "（声称已写入的文件经磁盘验证不存在），为防止虚构内容作为结果送达，"
                 "已拦截该总结。请排查工具失败原因后重试任务。",
+                False,
+            )
+        # 指标溯源（2026-10-19 事故）：本轮拦截过「不可溯源的指标断言」时，
+        # 收尾答复也不许复述那些数字——事故里 result.content 正是第二处出口。
+        if (
+            metric_provenance_blocked
+            and self._claims_backtest_metrics(final)
+            and not self._metric_claims_are_anchored(final, task_metrics)
+        ):
+            logger.error(
+                "[%s] summary still asserts unanchored backtest metrics after "
+                "provenance block; refusing to relay fabricated report",
+                self.name,
+            )
+            return (
+                "⚠️ 本次回测报告已被系统拦截：报告中的指标无法在 "
+                "get_task_result 的返回值中核验（本轮没有取到真实结果，"
+                "或数字与返回值不一致）。为防止虚构数字送达，已拦截该报告。\n"
+                "请重新查询任务结果后重试；若任务仍在运行，请稍后再查。",
                 False,
             )
         return (final, False)

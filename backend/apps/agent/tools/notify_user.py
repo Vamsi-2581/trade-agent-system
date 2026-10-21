@@ -19,6 +19,23 @@ _MAX_MESSAGE_LENGTH = 4000
 _TRUNCATION_MARKER = "…（已截断）"
 
 
+class NotificationNotPersistedError(RuntimeError):
+    """通知没有真正落地（未入库）。
+
+    独立成异常类型而不是复用 OperationalError：它**不是**瞬时故障，
+    重试没有意义（同一个 user_id 仍然解析不到），外层也不该把它当成
+    「丢连接后重试」来处理。
+    """
+
+
+class NotificationNotDeliveredError(RuntimeError):
+    """通知已入库，但实时推送（Redis pubsub）失败。
+
+    入库成功只保证通知中心可查；用户能否立刻看到取决于推送。两者必须
+    分开报：只报「已发送」会让 Agent 以为用户收到了。
+    """
+
+
 def _truncate(message: str) -> str:
     """把超长通知正文截到 ``_MAX_MESSAGE_LENGTH`` 并加截断标记。
 
@@ -81,15 +98,31 @@ class NotifyUserTool(BaseTool):
         # LLM 长生成期间被 PG idle_in_transaction_session_timeout=30s
         # 杀死 → "server closed the connection unexpectedly" → 报告未投递，
         # LLM 回退自行输出并虚构指标。瞬时故障丢弃疑似坏连接后重试一次。
+        #
+        # 两个阶段分开重试（2026-10-19 排查）：
+        # * 入库：只有瞬时 DB 故障才重试；「用户解析不到」是确定性错误，
+        #   重试同一个 user_id 必然再失败，且重试会把失败伪装成「重试成功」。
+        # * 推送：入库成功后推送失败时**只重试推送**——若把整段重来一遍，
+        #   会再写一条 Notification，通知中心出现重复记录。
         last_error: Exception | None = None
+        persisted = False
+        pushed = False
         for attempt in (1, 2):
             try:
-                # 持久化到 Notification 模型
-                await self._persist_notification(user_id, message)
-
-                # 通过 Redis pubsub 推送（ASGI consumer 路由到活跃渠道）
-                self._send_via_redis(user_id, message)
+                if not persisted:
+                    # 持久化到 Notification 模型
+                    await self._persist_notification(user_id, message)
+                    persisted = True
+                if not pushed:
+                    # 通过 Redis pubsub 推送（ASGI consumer 路由到活跃渠道）
+                    self._send_via_redis(user_id, message)
+                    pushed = True
                 last_error = None
+                break
+            except NotificationNotPersistedError as e:
+                # 确定性失败：不重试、不 close 连接（连接本身没问题）
+                last_error = e
+                logger.error("[NotifyUserTool] notification not persisted: %s", e)
                 break
             except Exception as e:  # noqa: BLE001
                 last_error = e
@@ -159,12 +192,20 @@ class NotifyUserTool(BaseTool):
                     or User.objects.filter(feishu_open_id=user_id).first()
                     or User.objects.filter(telegram_id=user_id).first()
                 )
-            if user:
-                Notification.objects.create(
-                    user=user,
-                    channel="web",
-                    message=message,
+            if not user:
+                # 静默跳过 = 谎报成功（2026-10-19 排查）：既不写库也不推送，
+                # 但 `_persist_notification` 正常返回 → 外层认为已送达，
+                # Agent 拿到 success=True 后继续宣称「报告已发送」。
+                # 通知没落地就必须是失败，让调用方知道用户什么都没收到。
+                raise NotificationNotPersistedError(
+                    f"无法解析通知目标用户: {user_id!r}（已尝试 id/username/"
+                    "feishu_open_id/telegram_id），通知未入库、未推送"
                 )
+            Notification.objects.create(
+                user=user,
+                channel="web",
+                message=message,
+            )
 
         @sync_to_async
         def _create_with_stale_connection_retry():
@@ -186,7 +227,13 @@ class NotifyUserTool(BaseTool):
 
     @staticmethod
     def _send_via_redis(user_id: str, text: str) -> None:
-        """通过 Redis pubsub 发布通知，由 ASGI consumer 消费并路由到用户活跃渠道。"""
+        """通过 Redis pubsub 发布通知，由 ASGI consumer 消费并路由到用户活跃渠道。
+
+        失败必须**抛出**（2026-10-19 排查）：这里原来是
+        ``except Exception: logger.warning(...)``，异常被吞掉、函数正常返回，
+        于是 `execute` 认为推送成功并报「已发送」——而用户实际什么都没收到。
+        写库只让通知中心可查，推送才是实时送达；两者不能混为一谈。
+        """
         import json
 
         import redis
@@ -211,7 +258,10 @@ class NotifyUserTool(BaseTool):
                     }
                 ),
             )
-        except Exception:
+        except Exception as e:  # noqa: BLE001
             logger.warning(
                 "[NotifyUserTool] Redis pubsub delivery failed", exc_info=True
             )
+            raise NotificationNotDeliveredError(
+                f"通知已入库，但 Redis 实时推送失败: {e}"
+            ) from e

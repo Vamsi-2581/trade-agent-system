@@ -95,17 +95,28 @@ class TestNotifyUserTool:
         assert len(notification.message) <= 4010  # 4000 + "…（已截断）"
         assert "已截断" in notification.message
 
-    async def test_redis_failure_does_not_crash(self, tool, user, db):
-        """Redis pubsub failure → tool still returns success (best-effort delivery)."""
+    async def test_redis_failure_is_reported_as_failure(self, tool, user, db):
+        """Redis pubsub failure → 入库成功但**必须报失败**（2026-10-19 起）。
+
+        这条测试此前断言「Redis 失败仍返回 success=True」（best-effort 投递）。
+        语义已改：**入库只保证通知中心可查，用户能否立刻看到取决于推送**。
+        只报「已发送」会让 Agent 以为用户收到了，进而宣称「报告已发送」——
+        2026-10-19 那次虚构报告事故里，Agent 正是拿着 success=True 继续编数字。
+
+        两个阶段必须分开报：
+        * 入库失败 → ``NotificationNotPersistedError``（确定性失败，不重试）
+        * 推送失败 → ``NotificationNotDeliveredError``（只重试推送，不重写库）
+        """
         with patch("redis.from_url") as mock_from_url:
             mock_from_url.side_effect = Exception("Redis unavailable")
 
             result = await tool.execute(message="test message", user_id=str(user.id))
 
-        # Notification should still be persisted
+        # 入库仍然必须成功——推送失败不得回滚已落库的通知
         assert Notification.objects.filter(user=user).count() == 1
-        # Tool should still succeed (Redis failure is logged but not surfaced)
-        assert result.success is True
+        # 但绝不能谎报「已送达」
+        assert result.success is False
+        assert "推送失败" in (result.error or "")
 
     async def test_user_lookup_by_username(self, tool, db):
         """When user_id is a username string, lookup works."""
