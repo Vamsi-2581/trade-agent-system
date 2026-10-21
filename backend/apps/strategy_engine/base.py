@@ -46,20 +46,26 @@ class Insight:
 
 @dataclass
 class PortfolioTarget:
-    """目标持仓 — 组合层将洞察转化为具体的持仓目标。"""
+    """目标持仓 — 组合层将洞察转化为具体的持仓目标。
+
+    ``target_quantity`` 是**有符号**的净持仓：
+    - ``> 0`` 多头，``0`` 空仓，``< 0`` 空头（双向持仓）。
+    - 负数只有在策略声明 ``supports_short = True`` 时才会由
+      ``BaseStrategy.construct_portfolio`` 产出；只做多的策略永远拿到 ``>= 0``。
+      校验放在策略层而非此处，是因为「目标持仓」这个数据结构本身需要能表达
+      空头，而「能不能开空」是策略的能力声明。
+    """
 
     symbol: str
-    target_quantity: Decimal  # 目标持仓量（0 = 平仓/空仓, 正数 = 做多）
+    target_quantity: Decimal  # 有符号净持仓：>0 多，0 空仓，<0 空
     reason: str  # 决策理由
     insight_id: str = ""  # 来源 Insight（可追溯）
     target_weight: float | None = None  # Phase 2 预留：目标权重
     metadata: dict = field(default_factory=dict)  # Phase 2: 风控标注等
 
     def __post_init__(self):
-        if self.target_quantity < Decimal("0"):
-            raise ValueError(
-                f"target_quantity must be >= 0, got {self.target_quantity}"
-            )
+        if isinstance(self.target_quantity, float):
+            self.target_quantity = Decimal(str(self.target_quantity))
         if self.target_weight is not None and not (0.0 <= self.target_weight <= 1.0):
             raise ValueError(
                 f"target_weight must be in [0.0, 1.0], got {self.target_weight}"
@@ -70,7 +76,13 @@ def _signal_to_insight(signal: "OrderSignal", source: str) -> Insight:
     """将 OrderSignal 转换为 Insight，保留数量信息。
 
     注意：Insight.symbol 需要在调用处从 StrategyContext.symbol 填充。
+
+    ``is_close_position`` 通过 metadata 透传（Insight 没有对应字段）：策略侧
+    ``close_position()`` 表达的「清空持仓」意图必须在 construct_portfolio 里
+    与「卖出一部分」区分开，否则双向策略的减仓会被误译成全平。
     """
+    metadata = dict(signal.metadata)
+    metadata["is_close_position"] = signal.is_close_position
     return Insight(
         symbol="",  # 由调用处从 self.ctx.symbol 注入
         direction=signal.side,
@@ -80,7 +92,7 @@ def _signal_to_insight(signal: "OrderSignal", source: str) -> Insight:
         quantity=signal.quantity,
         signal_name=signal.signal_name,
         price=signal.price,
-        metadata=signal.metadata,
+        metadata=metadata,
     )
 
 
@@ -164,7 +176,7 @@ class StrategyContext:
 
     @property
     def position(self) -> Decimal:
-        """当前主标的持仓量"""
+        """当前主标的净持仓量（> 0 多头，< 0 空头，0 空仓）"""
         return self._position
 
     @position.setter
@@ -242,16 +254,32 @@ class StrategyContext:
     def close_position(
         self, price: Decimal | None = None, signal_name: str = "close", **kwargs
     ) -> OrderSignal | None:
-        """平仓信号（卖出全部持仓）— 以 reduce_only 传入 RiskGuard，由它免除前置校验"""
-        if self._position <= 0:
-            return None
-        return self.sell(
-            self._position,
-            price=price,
-            signal_name=signal_name,
-            is_close_position=True,
-            **kwargs,
-        )
+        """平仓信号（清空全部持仓，多空皆可）。
+
+        - 多头持仓：卖出 ``position``（与改造前一致）
+        - 空头持仓：买入 ``abs(position)`` 回补
+        - 空仓：返回 None
+
+        一律带 ``is_close_position=True``：下游据此以 reduce_only 传入 RiskGuard
+        获得豁免，并在交易所侧翻译成 reduceOnly（只减不增）。
+        """
+        if self._position > 0:
+            return self.sell(
+                self._position,
+                price=price,
+                signal_name=signal_name,
+                is_close_position=True,
+                **kwargs,
+            )
+        if self._position < 0:
+            return self.buy(
+                -self._position,
+                price=price,
+                signal_name=signal_name,
+                is_close_position=True,
+                **kwargs,
+            )
+        return None
 
 
 class BaseStrategy(ABC):
@@ -272,6 +300,15 @@ class BaseStrategy(ABC):
 
     name = "unnamed"
     description = ""
+    # 是否允许空头持仓（双向）。
+    #
+    # 默认 False = 只做多：``ctx.sell()`` 一律翻译成「清仓」，与改造前行为
+    # 逐位一致，现有策略（box / rsi_cross / ema / donchian …）不受影响。
+    #
+    # 置 True 的策略必须自己保证「无持仓时的 sell 是开空意图」而非笔误，
+    # 且下游引擎必须支持负持仓（回测 BacktestEngine / 实盘 LiveStrategyRunner）。
+    # 打开前请确认：交易品种是合约（is_perp=True），且交易所侧允许双向持仓。
+    supports_short: bool = False
     # 策略启动前需要预加载的最小 K 线根数（warmup）。
     # 指标（RSI/MACD/布林带等）需要足够历史才能产出首个有效值，
     # 若启动时不预加载，策略会一直等待历史积累而无法发出信号。
@@ -323,9 +360,20 @@ class BaseStrategy(ABC):
 
         Phase 2: 如果 self.portfolio 是 SingleAssetPortfolio（默认），
         使用内置的简单映射逻辑；否则委托给 portfolio.allocate()。
+
+        **只做多策略（默认）的语义与改造前完全一致**：``sell`` 一律翻译成
+        ``target_quantity=0``（清仓）。这个行为被现有策略与实盘 ``reduceOnly``
+        依赖（2026-09-27 BNB 双平事故的兜底就是它），不能改。
+
+        **双向策略（``supports_short = True``）走增量语义**：
+        - ``sell`` 减少净持仓：``target = position - qty``（可为负 = 开空）
+        - ``buy`` 增加净持仓：``target = position + qty``（可为正 = 平空后反手）
+        - ``close_position()`` 仍表达「清空」，``target = 0``
         """
         # 检测是否为默认的单标的模型 — 保持向后兼容
         if self.portfolio.__class__.__name__ == "SingleAssetPortfolio":
+            if getattr(self, "supports_short", False):
+                return self._construct_portfolio_signed(insights, context)
             targets = []
             for ins in insights:
                 if ins.direction == "buy":
@@ -366,6 +414,63 @@ class BaseStrategy(ABC):
             return targets
         # 委托给自定义 portfolio 模型
         return self.portfolio.allocate(insights, context)
+
+    def _construct_portfolio_signed(
+        self, insights: list[Insight], context: StrategyContext
+    ) -> list[PortfolioTarget]:
+        """双向策略的目标持仓翻译（增量语义）。
+
+        与只做多分支的三点区别：
+        1. ``sell`` 不再一律归零，而是 ``position - qty``，因此能做空、能平一半。
+        2. ``close_position()`` 通过 metadata 的 ``is_close_position`` 识别，
+           仍然翻译成 ``target=0``（清空），语义不变。
+        3. ``buy`` 在空头持仓下会先把空头买平，再反手做多（``target`` 直接相加，
+           净持仓自然跨越零点）。
+        """
+        targets: list[PortfolioTarget] = []
+        for ins in insights:
+            qty = ins.quantity
+            if qty is None:
+                qty = Decimal(
+                    str(
+                        context.params.get(
+                            "quantity", context.params.get("position_size", 0)
+                        )
+                    )
+                )
+            if isinstance(qty, float):
+                qty = Decimal(str(qty))
+            if qty <= Decimal("0"):
+                continue
+
+            # 清仓意图优先：close_position() 表达的是「回到空仓」
+            if ins.metadata.get("is_close_position"):
+                targets.append(
+                    PortfolioTarget(
+                        symbol=ins.symbol,
+                        target_quantity=Decimal("0"),
+                        reason=ins.signal_name,
+                        metadata=dict(ins.metadata),
+                    )
+                )
+                continue
+
+            if ins.direction == "buy":
+                target_qty = context.position + qty
+            elif ins.direction == "sell":
+                target_qty = context.position - qty
+            else:
+                continue
+
+            targets.append(
+                PortfolioTarget(
+                    symbol=ins.symbol,
+                    target_quantity=target_qty,
+                    reason=ins.signal_name,
+                    metadata=dict(ins.metadata),
+                )
+            )
+        return targets
 
     def select_universe(self) -> list[str]:
         """委托给 universe 模型，返回可交易 symbol 列表。"""

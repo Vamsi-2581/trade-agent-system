@@ -47,6 +47,12 @@ class _Signal:
     quantity: Decimal
     signal_name: str
     is_close_position: bool = False
+    # 真实 OrderSignal 带 metadata（平仓原因走这里）
+    metadata: dict = None
+
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
 
 
 @dataclass
@@ -54,6 +60,13 @@ class _Target:
     symbol: str = "DOGE/USDT"
     target_quantity: Decimal = Decimal("0")
     reason: str = "channel_exit"
+    # 真实 PortfolioTarget 带 metadata；_target_to_order 会透传它。
+    # 替身缺这个字段会让「实盘 exit_reason 退化」这个缺陷测不出来。
+    metadata: dict = None
+
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {"reason": self.reason}
 
 
 class _Ctx:
@@ -93,6 +106,7 @@ class _Ctx:
             Decimal(str(quantity)),
             kw.get("signal_name", "buy"),
             kw.get("is_close_position", False),
+            kw.get("metadata"),
         )
 
     def sell(self, quantity, **kw):
@@ -101,6 +115,7 @@ class _Ctx:
             Decimal(str(quantity)),
             kw.get("signal_name", "sell"),
             kw.get("is_close_position", False),
+            kw.get("metadata"),
         )
 
     def close_position(self, **kw):

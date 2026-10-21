@@ -147,13 +147,20 @@ class TestPortfolioTargetValidation:
         )
         assert target.target_quantity == Decimal("0.5")
 
-    def test_negative_quantity(self):
-        with pytest.raises(ValueError, match="target_quantity must be"):
-            PortfolioTarget(
-                symbol="BTC/USDT",
-                target_quantity=Decimal("-1"),
-                reason="test",
-            )
+    def test_negative_quantity_means_short(self):
+        """负数 target_quantity 表示空头持仓（双向改造后合法）。
+
+        改造前这里断言 ValueError——那时引擎只有 spot 单边语义，
+        「目标持仓为负」是不可表达的非法状态。引入双向持仓后，
+        负数成为空头的正式表达方式；「能不能开空」由策略的
+        ``supports_short`` 能力声明把关，而不是由数据结构拒绝。
+        """
+        target = PortfolioTarget(
+            symbol="BTC/USDT",
+            target_quantity=Decimal("-1"),
+            reason="short_entry",
+        )
+        assert target.target_quantity == Decimal("-1")
 
     def test_zero_quantity_allowed(self):
         """平仓目标：target_quantity=0 表示清仓"""

@@ -491,7 +491,11 @@ class StrategyTester:
         """将回测运行期异常翻译为对策略作者友好的提示。"""
         err_msg = str(e)
         # 非 OrderSignal 返回值：generate_insights 会访问 signal.side → AttributeError
-        if isinstance(e, AttributeError) and "side" in err_msg:
+        # 非 OrderSignal 返回值：generate_insights 会访问 signal.side / signal.metadata
+        # → AttributeError。属性名随实现变化（先读 side，后读 metadata），两者都认。
+        if isinstance(e, AttributeError) and (
+            "side" in err_msg or "metadata" in err_msg
+        ):
             return (
                 f"on_bar 返回了非 OrderSignal 类型（{err_msg}）。"
                 "on_bar 必须返回 ctx.buy()/ctx.sell()/ctx.close_position() 的结果或 None。"

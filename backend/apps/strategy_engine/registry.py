@@ -8,12 +8,34 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .base import BaseStrategy
 
 logger = logging.getLogger(__name__)
+
+
+def _short_enabled() -> bool:
+    """双向持仓策略的准入开关（默认关闭）。
+
+    读 Django setting ``STRATEGY_ENGINE_ALLOW_SHORT``，未配置时回退环境变量
+    ``STRATEGY_ENGINE_ALLOW_SHORT``。只在注册期读一次，不做热更新——启用做空
+    应该是一次重启 + 显式配置的动作，而不是运行中翻转。
+    """
+    try:
+        from django.conf import settings
+
+        if settings.configured and hasattr(settings, "STRATEGY_ENGINE_ALLOW_SHORT"):
+            return bool(settings.STRATEGY_ENGINE_ALLOW_SHORT)
+    except Exception:  # noqa: BLE001 - 无 Django 上下文（单测/脚本）时走环境变量
+        pass
+    return os.environ.get("STRATEGY_ENGINE_ALLOW_SHORT", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 class StrategyRegistry:
@@ -50,9 +72,31 @@ class StrategyRegistry:
     def register(
         cls, strategy_cls: type["BaseStrategy"], *, name: str | None = None
     ) -> type["BaseStrategy"]:
-        """装饰器：注册策略类"""
+        """装饰器：注册策略类
+
+        **双向持仓准入闸门**（2026-10）：声明 ``supports_short = True`` 的策略
+        会走一条与只做多策略完全不同的下单路径（负持仓、穿越零点、按量平仓）。
+        该路径尚未在真实资金链路上验证过，因此默认**拒绝注册**并告警，而不是
+        静默放行——一个未经验证的做空策略上线跑真钱，是这个闸门存在的全部理由。
+
+        刻意**不 raise**：策略引擎起不来会连带停掉所有只做多策略的决策，制造
+        比「少注册一个策略」大得多的故障面。拒绝该策略 + 告警是正确量级。
+
+        放行方式：显式设置 ``STRATEGY_ENGINE_ALLOW_SHORT = True``（环境变量或
+        Django setting）。这是有意的摩擦——启用做空必须是一次显式决定。
+        """
         reg_name = name or strategy_cls.name
         cls.validate_description(strategy_cls)
+
+        if getattr(strategy_cls, "supports_short", False) and not _short_enabled():
+            logger.error(
+                "拒绝注册双向持仓策略 %s：supports_short=True 的下单路径尚未在"
+                "真实资金链路验证。确认已在测试网跑通「开空 → 部分平 → 回补 → "
+                "反手」后，设置 STRATEGY_ENGINE_ALLOW_SHORT=True 再启用。",
+                reg_name,
+            )
+            return strategy_cls
+
         cls._strategies[reg_name] = strategy_cls
         logger.debug("Strategy registered: %s", reg_name)
         return strategy_cls

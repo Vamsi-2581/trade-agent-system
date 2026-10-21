@@ -757,14 +757,97 @@ class LiveStrategyRunner:
         账户真值)——否则超出部分在 reduceOnly 下变反向开仓（2026-09-20
         -17718 空头事故），或平掉别会话的仓位。账户真值已 0 时跳过订单
         （台账会在下次同步被下钳）。
+
+        双向策略（``strategy.supports_short = True``）：卖出可能**有意**穿越零点
+        开空。钳制口径相应放宽为「账户真值 + 本次目标里合法要开的空头量」，
+        而不是「账户真值」。这样既允许做空，又保留了「不得卖出超过账户实际
+        持有 + 计划开空」的原始防线——否则台账虚高时仍会开出超量的空头。
+
+        买入侧（``diff > 0``）在做空能力下镜像同一套钳制与 ``reduceOnly`` 判定。
+        此前该分支直接 ``return ctx.buy(...)``：既没有钳制，也从不设
+        ``is_close_position``，于是「平掉空头」这张买单在交易所侧**不带
+        reduceOnly**——正是 2026-09-27 BNB 事故（平仓单超出持仓 → 反向开仓）
+        的镜像：那边是平多超量变反向开空，这边是平空超量变反向开多。
+        ``metadata`` 同样必须透传（此前整个文件没有一处透传），否则实盘订单的
+        ``exit_reason`` 永远退化，按平仓原因做的统计全部失效。
         """
         diff = target.target_quantity - self.strategy.ctx.position
         if diff == 0:
             return None
-        if diff > 0:
-            return self.strategy.ctx.buy(diff, signal_name=target.reason)
-        sell_qty = abs(diff)
+        short_capable = getattr(self.strategy, "supports_short", False)
         actual = self._last_actual_position
+
+        if diff > 0:
+            buy_qty = diff
+            if short_capable:
+                # 本次目标里合法要开的多头量（目标为正时才有）
+                intended_long = max(Decimal("0"), target.target_quantity)
+                if actual is not None:
+                    # 可买上限 = 账户实际持空 + 计划开多。
+                    # ``actual`` 是**有符号**账户真值（正=多，负=空），持空量因此是
+                    # ``-actual``；写成 ``max(actual, 0)`` 会得到 0、把所有回补单
+                    # 钳成空单。这是本函数唯一容易写反符号的地方。
+                    cap = max(-actual, Decimal("0")) + intended_long
+                    if buy_qty > cap:
+                        if cap <= 0:
+                            logger.info(
+                                f"[LiveStrategyRunner] 买单被钳制为 0，跳过订单: "
+                                f"ledger={buy_qty} account={actual} "
+                                f"intended_long={intended_long} ({self.symbol})"
+                            )
+                            return None
+                        logger.warning(
+                            f"[LiveStrategyRunner] 买单按「账户真值+计划开多」钳制: "
+                            f"ledger={buy_qty} → {cap} (account={actual}, "
+                            f"intended_long={intended_long}) ({self.symbol})"
+                        )
+                        buy_qty = cap
+                # 目标=空仓 → 纯回补，带 reduceOnly；目标>0（反手做多）会增大净持仓，
+                # 带 reduceOnly 会被交易所拒单（-2022），必须不带。
+                is_close = target.target_quantity == Decimal("0")
+                return self.strategy.ctx.buy(
+                    buy_qty,
+                    signal_name=target.reason,
+                    is_close_position=is_close,
+                    metadata=dict(target.metadata),
+                )
+            return self.strategy.ctx.buy(
+                buy_qty,
+                signal_name=target.reason,
+                metadata=dict(target.metadata),
+            )
+
+        sell_qty = abs(diff)
+
+        if short_capable:
+            # 本次目标里合法要开的空头量（目标为负时才有）
+            intended_short = max(Decimal("0"), -target.target_quantity)
+            if actual is not None:
+                # 可卖上限 = 账户实际持多 + 计划开空
+                cap = max(actual, Decimal("0")) + intended_short
+                if sell_qty > cap:
+                    if cap <= 0:
+                        logger.info(
+                            f"[LiveStrategyRunner] 卖单被钳制为 0，跳过订单: "
+                            f"ledger={sell_qty} account={actual} "
+                            f"intended_short={intended_short} ({self.symbol})"
+                        )
+                        return None
+                    logger.warning(
+                        f"[LiveStrategyRunner] 卖单按「账户真值+计划开空」钳制: "
+                        f"ledger={sell_qty} → {cap} (account={actual}, "
+                        f"intended_short={intended_short}) ({self.symbol})"
+                    )
+                    sell_qty = cap
+            # 目标为负（净空头）时不是平仓单，不能带 reduceOnly——带了会被交易所拒单
+            is_close = target.target_quantity == Decimal("0")
+            return self.strategy.ctx.sell(
+                sell_qty,
+                signal_name=target.reason,
+                is_close_position=is_close,
+                metadata=dict(target.metadata),
+            )
+
         if actual is not None and actual < sell_qty:
             clamped = max(actual, Decimal("0"))
             if clamped == Decimal("0"):
@@ -786,7 +869,10 @@ class LiveStrategyRunner:
         # （2026-09-27 BNB 双平手账）。
         is_close = target.target_quantity == Decimal("0")
         return self.strategy.ctx.sell(
-            sell_qty, signal_name=target.reason, is_close_position=is_close
+            sell_qty,
+            signal_name=target.reason,
+            is_close_position=is_close,
+            metadata=dict(target.metadata),
         )
 
     async def _dispatch_targets(
@@ -795,20 +881,33 @@ class LiveStrategyRunner:
         """遍历 safe_targets，过滤重复入场后分发信号。返回实际分发数量。
 
         防重复规则：同一 symbol 已有同方向入场记录时，若 target 仍要求同向加仓
-        （target_quantity > ctx.position），跳过该 target。平仓（target_quantity=0）
-        时清除方向记录，允许反向入场。
+        （目标净持仓相对当前仓位是同向扩大），跳过该 target。平仓
+        （target_quantity=0）时清除方向记录，允许反向入场。
+
+        双向持仓下「同向」按**净持仓的符号方向**判定，而不是「target 是否为正」：
+        空头加仓的目标也是负数，用 `target > 0` 判会把空头加仓当成平仓。
         """
         count = 0
         for target in targets:
-            direction = (
-                "buy" if target.target_quantity > self.strategy.ctx.position else "sell"
+            current = self.strategy.ctx.position
+            # 净持仓方向：正=多，负=空，0=空仓
+            target_dir = (
+                "hold"
+                if target.target_quantity == current
+                else ("buy" if target.target_quantity > current else "sell")
+            )
+            # 同向扩大才需要去重：当前多且目标更多 / 当前空且目标更空
+            is_same_dir_add = (
+                (current > 0 and target.target_quantity > current)
+                or (current < 0 and target.target_quantity < current)
+                or (current == 0 and target.target_quantity != 0)
             )
             prev = self._entry_direction.get(target.symbol)
-            if prev is not None and direction == prev and target.target_quantity > 0:
+            if prev is not None and target_dir == prev and is_same_dir_add:
                 logger.debug(
-                    f"[SF-02][LiveStrategyRunner] skip repeated {direction} "
+                    f"[SF-02][LiveStrategyRunner] skip repeated {target_dir} "
                     f"for {target.symbol} (target={target.target_quantity} "
-                    f"position={self.strategy.ctx.position})"
+                    f"position={current})"
                 )
                 continue
 
@@ -838,10 +937,16 @@ class LiveStrategyRunner:
                 # 对账侧的在途窗口依据：平仓单在途期间「账户仍有持仓而台账=0」
                 # 是本单未成交，不是外部持仓（否则误报，见 _sync_position_from_exchange）
                 self._last_order_dispatch_ts = time.monotonic()
-                if target.target_quantity <= 0:
+                if target.target_quantity == 0:
+                    # 清仓：清除方向记录，允许反向入场
                     self._entry_direction.pop(target.symbol, None)
                 else:
-                    self._entry_direction[target.symbol] = signal.side
+                    # 记录的是**净持仓方向**（buy/sell），不是订单 side：
+                    # 空头加仓的订单 side 是 sell，但净持仓方向也是 sell，
+                    # 二者在此一致；平空反手的订单 side 是 buy，净持仓方向变 buy。
+                    self._entry_direction[target.symbol] = (
+                        "buy" if target.target_quantity > 0 else "sell"
+                    )
                 count += 1
             else:
                 logger.debug(

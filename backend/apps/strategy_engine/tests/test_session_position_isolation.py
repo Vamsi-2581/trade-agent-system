@@ -67,6 +67,13 @@ class _Signal:
     quantity: Decimal
     signal_name: str
     is_close_position: bool = False
+    # 真实 OrderSignal 带 metadata（平仓原因走这里）。替身缺这个字段会让
+    # 「实盘 exit_reason 退化」这个缺陷在测试里看不出来。
+    metadata: dict = None
+
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
 
 
 @dataclass
@@ -74,6 +81,13 @@ class _Target:
     symbol: str = "DOGE/USDT"
     target_quantity: Decimal = Decimal("0")
     reason: str = "channel_exit"
+    # 真实 PortfolioTarget 带 metadata，_target_to_order 会 dict() 它并透传给
+    # OrderSignal。替身缺这个字段会让「实盘 exit_reason 退化」这个缺陷测不出来。
+    metadata: dict = None
+
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {"reason": self.reason}
 
 
 class _Ctx:
@@ -113,6 +127,7 @@ class _Ctx:
             Decimal(str(quantity)),
             kw.get("signal_name", "buy"),
             kw.get("is_close_position", False),
+            kw.get("metadata"),
         )
 
     def sell(self, quantity, **kw):
@@ -121,6 +136,7 @@ class _Ctx:
             Decimal(str(quantity)),
             kw.get("signal_name", "sell"),
             kw.get("is_close_position", False),
+            kw.get("metadata"),
         )
 
     def close_position(self, **kw):
@@ -655,6 +671,161 @@ class TestSellClamp(TestCase):
         self.assertEqual(sig.quantity, Decimal("1000"))
 
 
+class TestShortSideOrderTranslation(TestCase):
+    """双向策略（``supports_short=True``）的买入侧：钳制 + reduceOnly。
+
+    这是 2026-09-27 BNB 事故（平仓单超出持仓 → 反向开仓）的**镜像**：
+    当时是「平多超量变反向开空」，做空上线后是「平空超量变反向开多」。
+    修复前 ``diff > 0`` 分支直接 ``return ctx.buy(...)``，既不钳制、也从不设
+    ``is_close_position``，于是「平掉空头」这张买单在交易所侧不带 reduceOnly。
+    """
+
+    def _bare(self, position: str, supports_short: bool = True):
+        ctx = _Ctx(position=position)
+        strategy = _FakeStrategy(ctx)
+        strategy.supports_short = supports_short
+        return LiveStrategyRunner(
+            strategy,
+            "DOGE/USDT",
+            "1h",
+            "acct-1",
+            user_id="user-1",
+            live_session_id="sess-1",
+        )
+
+    # ── reduceOnly 判定 ──────────────────────────────────────
+
+    def test_cover_short_carries_reduce_only(self):
+        """平空（目标=0）= 纯回补 → 必须带 reduceOnly。"""
+        runner = self._bare("-1000")
+        runner._last_actual_position = Decimal("-1000")
+        sig = runner._target_to_order(_Target(target_quantity=Decimal("0")))
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.side, "buy")
+        self.assertEqual(sig.quantity, Decimal("1000"))
+        self.assertTrue(
+            sig.is_close_position,
+            "平空必须带 reduceOnly——否则超出持仓的买单会在交易所侧反向开多",
+        )
+
+    def test_flip_to_long_does_not_carry_reduce_only(self):
+        """反手做多（目标>0）会增大净持仓，带 reduceOnly 会被交易所拒单（-2022）。"""
+        runner = self._bare("-1000")
+        runner._last_actual_position = Decimal("-1000")
+        sig = runner._target_to_order(_Target(target_quantity=Decimal("500")))
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.side, "buy")
+        self.assertEqual(sig.quantity, Decimal("1500"), "回补 1000 + 开多 500")
+        self.assertFalse(sig.is_close_position)
+
+    # ── 钳制：符号方向是这里唯一的坑 ─────────────────────────
+
+    def test_cover_clamped_by_short_actual(self):
+        """台账持空 -1000 但账户只剩 -300 → 最多买回 300。"""
+        runner = self._bare("-1000")
+        runner._last_actual_position = Decimal("-300")
+        sig = runner._target_to_order(_Target(target_quantity=Decimal("0")))
+        self.assertIsNotNone(sig)
+        self.assertEqual(sig.quantity, Decimal("300"), "不得回补超出账户持空的量")
+
+    def test_cover_skipped_when_account_flat(self):
+        """账户已无空头（被平掉了）→ 不发明知是 0 的买单。"""
+        runner = self._bare("-1000")
+        runner._last_actual_position = Decimal("0")
+        self.assertIsNone(
+            runner._target_to_order(_Target(target_quantity=Decimal("0")))
+        )
+
+    def test_cover_not_clamped_without_actual(self):
+        """账户真值未知 → 维持传统行为，不猜。"""
+        runner = self._bare("-1000")
+        self.assertIsNone(runner._last_actual_position)
+        sig = runner._target_to_order(_Target(target_quantity=Decimal("0")))
+        self.assertEqual(sig.quantity, Decimal("1000"))
+
+    def test_long_position_actual_does_not_block_cover(self):
+        """符号陷阱：账户真值为**正**（持多）时，可买上限应只剩「计划开多量」。
+
+        ``cap = max(-actual, 0) + intended_long``；若误写成 ``max(actual, 0)``，
+        持多场景会得到一个非零上限，把「先平多再反手开空」的买单放过去。
+        """
+        runner = self._bare("-1000")
+        runner._last_actual_position = Decimal("500")  # 账户其实持多
+        # 目标是平空到 0：intended_long=0 → cap=0 → 必须跳过
+        self.assertIsNone(
+            runner._target_to_order(_Target(target_quantity=Decimal("0")))
+        )
+
+    # ── 只做多策略回归 ───────────────────────────────────────
+
+    def test_long_only_buy_unaffected(self):
+        """只做多策略的买入侧行为不变：不钳制、不带 reduceOnly。"""
+        runner = self._bare("0", supports_short=False)
+        runner._last_actual_position = Decimal("0")
+        sig = runner._target_to_order(_Target(target_quantity=Decimal("100")))
+        self.assertEqual(sig.side, "buy")
+        self.assertEqual(sig.quantity, Decimal("100"))
+        self.assertFalse(sig.is_close_position)
+
+
+class TestMetadataPassthrough(TestCase):
+    """``PortfolioTarget.metadata`` 必须透传到 ``OrderSignal.metadata``。
+
+    修复前 ``live_mode`` 全文没有一处透传（回测侧有 5 处），于是实盘订单的
+    ``exit_reason`` 永远退化，按平仓原因做的统计全部失效。
+    """
+
+    def _bare(self, position: str, supports_short: bool = True):
+        ctx = _Ctx(position=position)
+        strategy = _FakeStrategy(ctx)
+        strategy.supports_short = supports_short
+        return LiveStrategyRunner(
+            strategy,
+            "DOGE/USDT",
+            "1h",
+            "acct-1",
+            user_id="user-1",
+            live_session_id="sess-1",
+        )
+
+    def test_sell_passes_metadata(self):
+        runner = self._bare("1000")
+        runner._last_actual_position = Decimal("1000")
+        target = _Target(
+            target_quantity=Decimal("0"),
+            reason="stop_loss",
+            metadata={"reason": "stop_loss"},
+        )
+        sig = runner._target_to_order(target)
+        self.assertEqual(sig.metadata.get("reason"), "stop_loss")
+
+    def test_short_sell_passes_metadata(self):
+        """开空（target<0）同样要透传。"""
+        runner = self._bare("0")
+        runner._last_actual_position = Decimal("0")
+        target = _Target(
+            target_quantity=Decimal("-100"),
+            reason="entry_short",
+            metadata={"reason": "entry_short"},
+        )
+        sig = runner._target_to_order(target)
+        self.assertEqual(sig.side, "sell")
+        self.assertEqual(sig.metadata.get("reason"), "entry_short")
+
+    def test_buy_passes_metadata(self):
+        """平空走买入侧，同样要透传。"""
+        runner = self._bare("-1000")
+        runner._last_actual_position = Decimal("-1000")
+        target = _Target(
+            target_quantity=Decimal("0"),
+            reason="take_profit_1",
+            metadata={"reason": "take_profit_1"},
+        )
+        sig = runner._target_to_order(target)
+        self.assertEqual(sig.side, "buy")
+        self.assertEqual(sig.metadata.get("reason"), "take_profit_1")
+
+
 class TestIncidentEndToEnd(TestCase):
     """2026-10-07 事故形态端到端：同账户同品种两支 running 会话并存时，
     后启动的一支不得把先启动那支开的仓平掉。"""
@@ -705,4 +876,80 @@ class TestIncidentEndToEnd(TestCase):
             runner.strategy.bar_calls,
             1,
             "决策路径本身照常运行（是「无仓可平」，不是「被跳过」）",
+        )
+
+
+class TestDispatchDirectionDedup(TestCase):
+    """``_dispatch_targets`` 的去重方向必须按**净持仓符号**判定。
+
+    修复前判据是「``target.target_quantity > 0``」——那在只做多世界成立，
+    双向持仓下会把**空头加仓**（目标也是负数）当成平仓，于是去重记录被清掉，
+    同一个空头被反复开仓；反过来也可能把同向加仓漏判。失败模式是静默的：
+    不报错，只是仓位规模和策略意图不一致。
+    """
+
+    def _runner(self, position: str):
+        ctx = _Ctx(position=position)
+        strategy = _FakeStrategy(ctx)
+        strategy.supports_short = True
+        runner = LiveStrategyRunner(
+            strategy, "DOGE/USDT", "1h", "acct-1", user_id="user-1", live_session_id="s"
+        )
+        runner._last_actual_position = Decimal(position)
+        runner._test_dispatched = []  # type: ignore[attr-defined]
+
+        async def _record(signal):
+            runner._test_dispatched.append(signal)
+            return True
+
+        runner._dispatch_signal = _record  # type: ignore[assignment]
+        return runner
+
+    def _dispatch(self, runner, targets):
+        return asyncio.run(runner._dispatch_targets(targets, dict(KLINE)))
+
+    def test_short_add_is_deduped(self):
+        """持空 -100，目标 -200（加空）→ 与上次同向，必须跳过。"""
+        runner = self._runner("-100")
+        runner._entry_direction["DOGE/USDT"] = "sell"
+        n = self._dispatch(runner, [_Target(target_quantity=Decimal("-200"))])
+        self.assertEqual(n, 0, "空头加仓被去重，不得重复开空")
+        self.assertEqual(runner._test_dispatched, [])
+
+    def test_short_add_dispatched_when_direction_not_recorded(self):
+        """同样的加空，若方向记录为空 → 正常放行（去重只拦「重复」）。"""
+        runner = self._runner("-100")
+        n = self._dispatch(runner, [_Target(target_quantity=Decimal("-200"))])
+        self.assertEqual(n, 1)
+        self.assertEqual(runner._test_dispatched[0].side, "sell")
+
+    def test_cover_short_is_not_deduped(self):
+        """平空（目标 0）方向是 buy，与上次 sell 相反 → 必须放行。"""
+        runner = self._runner("-100")
+        runner._entry_direction["DOGE/USDT"] = "sell"
+        n = self._dispatch(runner, [_Target(target_quantity=Decimal("0"))])
+        self.assertEqual(n, 1, "平空不得被去重拦掉")
+        self.assertEqual(runner._test_dispatched[0].side, "buy")
+
+    def test_short_cover_clears_direction_record(self):
+        """平到空仓后方向记录被清除，允许随后反向开多。"""
+        runner = self._runner("-100")
+        runner._entry_direction["DOGE/USDT"] = "sell"
+        self._dispatch(runner, [_Target(target_quantity=Decimal("0"))])
+        self.assertNotIn(
+            "DOGE/USDT",
+            runner._entry_direction,
+            "清仓必须清掉方向记录，否则反手开多会被误判成重复",
+        )
+
+    def test_flip_to_long_records_buy(self):
+        """反手做多（目标 +50）→ 方向记录应变为 buy（按净持仓符号，不是订单 side）。"""
+        runner = self._runner("-100")
+        runner._entry_direction["DOGE/USDT"] = "sell"
+        n = self._dispatch(runner, [_Target(target_quantity=Decimal("50"))])
+        self.assertEqual(n, 1)
+        self.assertEqual(
+            runner._entry_direction["DOGE/USDT"],
+            "buy",
+            "记录的是净持仓方向，不是订单 side",
         )
