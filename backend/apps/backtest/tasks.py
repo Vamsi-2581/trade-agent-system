@@ -582,6 +582,195 @@ def _close_async_resources(loop: asyncio.AbstractEventLoop) -> None:
         pass
 
 
+def _result_ids_from_error(error: str) -> list[str]:
+    """从异常消息里抠出已完成组合的 BacktestResult id。
+
+    `run_grid_search_task` 在 SoftTimeLimitExceeded 时拿不到 `results` 列表
+    ——信号是在某一根 bar 里抛出来的，栈已经翻不回去。但已完成的组合**确实**
+    都落库了（`run_backtest` 在返回前就把行写进 BacktestResult），所以用异常
+    消息里携带的 id 把它们找回来，交给切片 / 资金效率补齐尾巴。
+
+    匹配两处来源：runner 自己的日志行、以及 BacktestResult 的 str()
+    （`<symbol> <timeframe> <uuid>`，Django 的 "unexpected" 包装里会带上它）。
+    """
+    import re
+
+    return list(
+        dict.fromkeys(
+            re.findall(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", error
+            )
+        )
+    )
+
+
+def _finalize_partial_grid(job, job_id, results: list, *, cause: str) -> dict:
+    """超时 / 失败时，把**已完成的组合**结算掉，而不是整批丢弃。
+
+    2026-10-17 的那次线上故障里，100 个组合一个都没跑完，这件事本身无所谓；但
+    同类配置下更常见的是「跑了 34 个然后超时」，而当时的边界处理是整批放弃：
+    34 行的 grid_search_id 已经写好（数据是在的，前端也能按 job 列出来），
+    却既不算 best_result、也不投切片和资金效率，用户拿到的是一张「什么都没得到」
+    的失败单。而重跑一次的代价是又几十分钟 CPU。
+
+    所以这里做三件事：
+      1. 把 BacktestResult 回填到 `job`（超时分支里那个 job 可能已被重连刷新过）；
+      2. 按 `sort_by` 选出 best_result 并写进 job —— 注意 job 状态仍然是 failed，
+         「有最好组合」与「这次网格跑完了」是两件事，不混为一谈；
+      3. 投切片与资金效率。这两者本身是「绝不抛」的（见各自 docstring），
+         此处不加 try，正是为了不把它们的失败重新变成主产物的失败。
+
+    无论发生什么，本函数都不抛：它跑在异常处理路径上，抛出会覆盖真正的原因。
+    """
+    from django.db import close_old_connections
+
+    from apps.backtest.models import BacktestResult, GridSearchJob
+
+    result_ids = [r["result_id"] for r in results if r.get("result_id")]
+    if not result_ids:
+        logger.info(f"[GridSearchTask] job {job_id} 失败于 {cause}，无已完成组合可结算")
+        return {"partial_saved": 0}
+
+    # 1. 统计真正落库的条数。只认还挂在本 job 下的行——被别的任务改走的不算。
+    try:
+        close_old_connections()
+        result_ids = list(
+            BacktestResult.objects.filter(
+                id__in=result_ids, grid_search_id=job.id
+            ).values_list("id", flat=True)
+        )
+    except Exception as e:
+        logger.warning(f"[GridSearchTask] job {job_id} 结算前查结果失败: {e}")
+
+    if not result_ids:
+        return {"partial_saved": 0}
+
+    # 2. best_result：排序在 Python 侧做，理由同主路径（sort_by 可能是 metrics 里的键，
+    #    不在 BacktestResult 的列上，没法交给 DB 排序）。
+    sort_key = (getattr(job, "sort_by", None) or "sharpe_ratio").lstrip("-")
+    best_payload = None
+    candidates = [r for r in results if r.get("result_id") in set(map(str, result_ids))]
+    if candidates:
+        best_payload = sorted(
+            candidates, key=lambda r: r.get(sort_key, 0) or 0, reverse=True
+        )[0]
+
+    try:
+        close_old_connections()
+        update_fields: dict = {}
+        if best_payload and best_payload.get("result_id"):
+            update_fields["best_result_id"] = best_payload["result_id"]
+        # completed_combinations 用真实落库条数校正：循环里那次 save 可能在超时前
+        # 就没写成（同一个连接问题），这个数直接决定前端「已完成 x/y」的可信度。
+        update_fields["completed_combinations"] = len(result_ids)
+        GridSearchJob.objects.filter(id=job_id).update(**update_fields)
+    except Exception as e:
+        logger.warning(f"[GridSearchTask] job {job_id} 写回部分结果元数据失败: {e}")
+
+    # 3. 切片 + 资金效率：一次性整批，与成功路径同一个入口（同一套兜底）。
+    dispatch_slice(result_ids)
+    try:
+        from apps.strategy_factory.tasks import dispatch_capital_efficiency
+
+        dispatch_capital_efficiency(result_ids)
+    except Exception:
+        logger.error(
+            "[GridSearchTask] job %s 部分结果的资金效率投递失败（结果本身已落库）",
+            job_id,
+            exc_info=True,
+        )
+
+    logger.info(
+        f"[GridSearchTask] job {job_id} 失败于 {cause}，已结算 "
+        f"{len(result_ids)}/{getattr(job, 'total_combinations', '?')} 个已完成组合"
+    )
+    return {
+        "partial_saved": len(result_ids),
+        "best_result_id": (str(best_payload["result_id"]) if best_payload else None),
+    }
+
+
+def _mark_grid_job_failed(
+    job_id, error: str, attempts: int = 3, partial: dict | None = None
+) -> bool:
+    """把网格任务写成 failed，并在写不进去时重连重试。
+
+    失败路径本身就是「DB 连接已经不可用」的高发场景：任务在 CPU 上长时间跑组合
+    期间不碰数据库，连接会被 DB 的 idle_session_timeout（生产 1min）/ pgbouncer 的
+    server_idle_timeout（30s）从服务端掐掉。此前这个分支直接 `job.save()`，于是
+    save 自己抛 OperationalError('server closed the connection unexpectedly')，
+    把外层 `except Exception` 拉进来 —— 任务以「数据库连接中断」报错收场，
+    而真正的原因（软超时）只留在 celery 日志里，且 job.status 一个字都没写进去，
+    grid_search_jobs 里留下一条永远 running 的僵尸记录（2026-10-17 SOL/USDT 15m
+    那次 100 组合网格即如此）。
+
+    所以这里：每个 attempt 先 close_old_connections() 拿到新连接，用
+    filter().update() 而不是 model.save()（不依赖内存里那份可能过期的 error_log，
+    也不会被其他字段的状态干扰），失败就退避重试。
+
+    `partial` 是 `_finalize_partial_grid` 的返回值。它落库时若也撞上同一个连接问题，
+    completed_combinations 就还是旧值——而「failed 的任务里到底有几个组合是有效的」
+    恰恰是用户最需要看清楚的一件事，所以这里再补一次。
+
+    写库失败绝不向外抛：调用方已经在处理原始异常，这里再抛会覆盖掉真正的原因。
+    返回值只用于记录是否最终落库。
+    """
+    import time as _time
+
+    from django.db import close_old_connections
+
+    from apps.backtest.models import GridSearchJob
+
+    # JSONField 的追加在 Python 侧拼，因为 update() 是单条 SQL，拿不到旧值。
+    # 读失败也不致命：拿不到旧 error_log 就只写本次这一条。
+    previous: list = []
+    for attempt in range(attempts):
+        try:
+            close_old_connections()
+            row = (
+                GridSearchJob.objects.filter(id=job_id)
+                .values_list("error_log", flat=True)
+                .first()
+            )
+            if row is None:
+                logger.error(
+                    f"[GridSearchTask] job {job_id} 已不存在，无法写回失败状态"
+                )
+                return False
+            previous = list(row or [])
+            break
+        except Exception as e:
+            logger.warning(
+                f"[GridSearchTask] 读取 error_log 失败(attempt {attempt + 1}/{attempts}): {e}"
+            )
+            _time.sleep(min(2**attempt, 5))
+
+    error_log = previous + [{"error": error}]
+    update_fields: dict = {"status": "failed", "error_log": error_log}
+    if partial and partial.get("partial_saved"):
+        update_fields["completed_combinations"] = partial["partial_saved"]
+
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            close_old_connections()
+            updated = GridSearchJob.objects.filter(id=job_id).update(**update_fields)
+            if updated:
+                logger.info(f"[GridSearchTask] job {job_id} 已标记 failed: {error}")
+                return True
+            logger.error(f"[GridSearchTask] job {job_id} 已不存在，无法写回失败状态")
+            return False
+        except Exception as e:
+            last_exc = e
+            logger.warning(
+                f"[GridSearchTask] 写回 failed 状态失败(attempt {attempt + 1}/{attempts}): {e}"
+            )
+            _time.sleep(min(2**attempt, 5))
+
+    logger.error(f"[GridSearchTask] job {job_id} 写回 failed 状态最终失败: {last_exc}")
+    return False
+
+
 @app.task(
     bind=True,
     max_retries=1,
@@ -652,6 +841,10 @@ def run_grid_search_task(self, job_id: str, user_id: str | None = None) -> dict:
     token = tracker_context.set(tracker)
     tracker.start(f"开始网格搜索：{job.symbol} {job.timeframe}")
 
+    # 在 try 之外初始化：超时可能在组合循环之前就发生（例如卡在 OHLCV 抓取），
+    # 那时 except 分支仍要能引用它——失败路径上 NameError 会盖掉真正的原因。
+    results: list[dict] = []
+
     try:
         job.status = "running"
         job.celery_task_id = self.request.id
@@ -692,7 +885,6 @@ def run_grid_search_task(self, job_id: str, user_id: str | None = None) -> dict:
         tracker.milestone(f"已获取 {len(ohlcv_data)} 条K线数据", progress=0.2)
 
         runner = StrategyRunner()
-        results = []
         loop = asyncio.new_event_loop()
         start_time = timezone.now().timestamp()
 
@@ -813,20 +1005,31 @@ def run_grid_search_task(self, job_id: str, user_id: str | None = None) -> dict:
         }
 
     except SoftTimeLimitExceeded:
-        job.status = "failed"
-        job.error_log = job.error_log + [{"error": "soft time limit exceeded"}]
-        job.save(update_fields=["status", "error_log"])
-        tracker.fail("网格搜索超时")
+        # 部分结果结算：先尽力接住（`results` 在热路径里通常可用；实在拿不到就用
+        # 异常消息里的 result id 兜底），再写终态。顺序不能反——写终态那一步
+        # 要把 status 定成 failed，而结算要读的 completed_combinations 是它自己的事。
+        partial = _finalize_partial_grid(
+            job, job_id, results, cause="soft time limit exceeded"
+        )
+        _mark_grid_job_failed(job_id, "soft time limit exceeded", partial=partial)
+        tracker.fail(
+            "网格搜索超时"
+            + (
+                f"（已保留 {partial['partial_saved']} 个已完成组合）"
+                if partial and partial.get("partial_saved")
+                else ""
+            )
+        )
         return {
             "status": "FAILURE",
             "error_type": "TimeoutError",
             "error_message": "time limit exceeded",
             "error": "time limit exceeded",
+            "partial_results_saved": (partial or {}).get("partial_saved", 0),
         }
     except Exception as e:
-        job.status = "failed"
-        job.error_log = job.error_log + [{"error": str(e)}]
-        job.save(update_fields=["status", "error_log"])
+        partial = _finalize_partial_grid(job, job_id, results, cause=str(e))
+        _mark_grid_job_failed(job_id, str(e), partial=partial)
         tracker.fail(f"网格搜索失败: {e}")
         raise
     finally:
