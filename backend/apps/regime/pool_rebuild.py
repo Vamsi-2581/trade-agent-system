@@ -312,20 +312,61 @@ def _evidence_block(params: config.EvidenceConfig) -> dict[str, Any]:
     return block
 
 
+def _archetype_block(
+    matches: Mapping[int, pool.ArchetypeMatch] | None,
+) -> dict[str, Any]:
+    """原型归属那一块指纹。
+
+    **收全部策略，不做「只有会走兜底的那批」的收窄。** 收窄看起来是免费的优化
+    （实测 61 条里只有 6 条不需要兜底），但它会把本条修复要堵的那个 bug 原样放回来：
+
+    `pool._pool_cell` 的兜底是拿**同原型的全部策略**一起池（`siblings`）。所以一条
+    自己四格样本都够格的策略，它的原型仍然决定**别人**兜底时读到哪些样本——改了它
+    的原型，另一条样本不足的策略那一格就变了。按「它自己不需要兜底」把它排除在指纹
+    之外，指纹不会动，旧代被复用，那一格的错就没有任何地方会报出来。
+
+    省下的那点重算（一条自给自足的策略改描述才多翻一代）远不值这个风险。
+
+    `source` 与 `matched_word` 也进指纹，不只进 `archetype`：人工覆盖（`override`）
+    与关键词命中（`keyword`）在 `archetype` 上可能恰好同名，但它们是两件不同的事
+    ——前者是「人做的决定、描述下次改动也不该翻」的，后者是「机器这次猜中的」。
+    只比名字会把「把一条策略从机器猜中改成人工指定、值恰好一样」读成什么都没变。
+    """
+    if not matches:
+        return {}
+    return {
+        str(strategy_id): {
+            "archetype": match.archetype,
+            "source": match.source,
+            "matched_word": match.matched_word,
+        }
+        for strategy_id, match in sorted(matches.items(), key=lambda kv: str(kv[0]))
+    }
+
+
 def input_fingerprint(
     samples: Sequence[pool.SliceSample],
     exclusions: Mapping[str, int],
     params: config.EvidenceConfig | None = None,
+    *,
+    archetypes: Mapping[int, pool.ArchetypeMatch] | None = None,
 ) -> str:
     """本次重算「看进去了什么」的指纹。
 
-    盖住四样，每一样都能改变结论或改变记录里该看到的数：
+    盖住五样，每一样都能改变结论或改变记录里该看到的数：
 
     - 池化算法版本（`pool.POOL_VERSION`）——合并口径变了，同样的样本会有不同结论；
     - **整个**证据分组（`config.snapshot`，不是只取两个门槛）——将来给 `EVIDENCE`
       加字段时它自动进指纹，不必记得回来补一行；
     - 每一份样本的逐日曲线、逐笔样本、该阶段天数；
-    - 排除计数（它进重算记录，属于产出的一部分）。
+    - 排除计数（它进重算记录，属于产出的一部分）；
+    - **原型归属**（`archetypes`）——`build_pool` 用 `matches` 决定兜底分组。
+
+    最后一样是补上的：指纹原先不看它，于是「改了关键词表 / 写了覆盖表 / 重建时注册表
+    恰好是空的」这三种情况都会算出**同一个指纹**，`rebuild_pool` 直接命中复用分支返回
+    旧代——纠正无法生效，表现是「改完没反应，日志说指纹未变」。这不是可选的一节：
+    `pool.resolve_archetype` 的 docstring 承诺覆盖表「可以纠正」，而纠正要能改变结论，
+    就必须先能改变指纹。
 
     `sorted` + `sort_keys` + 紧凑分隔符：指纹与样本的到来顺序无关，也与 JSON 的
     空白风格无关。
@@ -338,6 +379,7 @@ def input_fingerprint(
             for sample in sorted(samples, key=lambda s: str(s.result_id))
         ],
         "exclusions": {key: int(value) for key, value in sorted(exclusions.items())},
+        "archetypes": _archetype_block(archetypes),
     }
     blob = json.dumps(
         payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str
@@ -440,7 +482,13 @@ def rebuild_pool(
     now = now or timezone.now()
 
     samples, exclusions, candidates = collect_samples()
-    fingerprint = input_fingerprint(samples, exclusions, params)
+
+    # 原型归属必须在算指纹**之前**定下来：它决定兜底分组，因而能改变格子结论。
+    # 顺序反了就是本条修复之前的形状——指纹先算、原型后取，于是改映射算出的指纹
+    # 与旧代相同，`existing` 命中复用分支，纠正一个字都落不下去。
+    matches = archetype_matches([s.strategy_id for s in samples])
+
+    fingerprint = input_fingerprint(samples, exclusions, params, archetypes=matches)
 
     existing = RegimePoolRebuild.objects.filter(
         status=RebuildStatus.READY.value, input_fingerprint=fingerprint
@@ -462,7 +510,6 @@ def rebuild_pool(
             "needs_review": needs_review,
         }
 
-    matches = archetype_matches([s.strategy_id for s in samples])
     result = pool.build_pool(samples, matches, params=params)
 
     rebuild = RegimePoolRebuild.objects.create(

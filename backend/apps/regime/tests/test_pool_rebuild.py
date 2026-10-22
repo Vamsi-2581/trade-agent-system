@@ -285,11 +285,14 @@ class TestInputFingerprint(SimpleTestCase):
         ]
         self.exclusions = {EXCLUDED_NO_PAYLOAD: 1, EXCLUDED_NO_MERGE_INPUTS: 0}
 
-    def fingerprint(self, *, samples=None, exclusions=None, params=SMALL):
+    def fingerprint(
+        self, *, samples=None, exclusions=None, params=SMALL, archetypes=None
+    ):
         return pool_rebuild.input_fingerprint(
             self.samples if samples is None else samples,
             self.exclusions if exclusions is None else exclusions,
             params,
+            archetypes=archetypes,
         )
 
     def test_it_is_a_sha256_hex_digest(self):
@@ -363,6 +366,133 @@ class TestInputFingerprint(SimpleTestCase):
             self.assertNotEqual(
                 self.fingerprint(params=SMALL), self.fingerprint(params=TWO_MONTHS)
             )
+
+    # -- 原型归属 -------------------------------------------------------- #
+
+    def test_a_changed_archetype_changes_the_fingerprint(self):
+        """原型换了，指纹必须跟着换——否则覆盖表「可以纠正」是一句空话。
+
+        坏掉的样子是**静默**的，且是这个仓库真实踩过的那个：注册表在重建时恰好是
+        空的，47 条策略全落「未归类」，共用同一条策略的样本；修好注册表再重算，
+        指纹与旧代完全相同 ⇒ 命中复用分支 ⇒ 返回「复用第 1 代」，格子一个字不改。
+        改完看不到任何反应，而日志还会说「输入指纹未变」，看起来一切正常。
+        """
+        unclassified = {
+            1: pool.ArchetypeMatch(ARCHETYPE_UNCLASSIFIED, matched_word=""),
+            2: pool.ArchetypeMatch(ARCHETYPE_UNCLASSIFIED, matched_word=""),
+        }
+        classified = {
+            1: pool.ArchetypeMatch("均值回归", matched_word="均值回归"),
+            2: pool.ArchetypeMatch("趋势跟踪", matched_word="趋势"),
+        }
+
+        self.assertNotEqual(
+            self.fingerprint(archetypes=unclassified),
+            self.fingerprint(archetypes=classified),
+        )
+
+    def test_the_archetype_source_and_matched_word_are_part_of_the_fingerprint(self):
+        """同名不同源也是变了：人工覆盖 vs 机器猜中，下次描述改动后的行为不同。
+
+        只比 `archetype` 会把「把一条策略从关键词命中改成人工指定、值恰好一样」
+        读成什么都没变，而这两件事在 `resolve_archetype` 的级联里是两条不同的路。
+        """
+        by_keyword = {
+            1: pool.ArchetypeMatch(
+                "均值回归", matched_word="均值回归", source=ARCHETYPE_SOURCE_KEYWORD
+            )
+        }
+        by_override = {
+            1: pool.ArchetypeMatch(
+                "均值回归", matched_word="", source=ARCHETYPE_SOURCE_OVERRIDE
+            )
+        }
+
+        self.assertNotEqual(
+            self.fingerprint(archetypes=by_keyword),
+            self.fingerprint(archetypes=by_override),
+        )
+
+    def test_no_archetypes_matches_an_empty_mapping(self):
+        """不传与传空是同一件事：没有策略走兜底时，原型不构成输入。
+
+        这两条必须相等，否则「一条策略都不需要在兜底」的代会在两次重算之间
+        无谓地翻代（一次传 `None`、一次传 `{}`）。
+        """
+        self.assertEqual(
+            self.fingerprint(archetypes=None), self.fingerprint(archetypes={})
+        )
+
+    def test_the_archetype_mapping_order_does_not_matter(self):
+        """映射的到达顺序不是输入的一部分（它来自一次 `values_list`）。"""
+        a = {1: pool.ArchetypeMatch("趋势跟踪"), 2: pool.ArchetypeMatch("均值回归")}
+        b = {2: pool.ArchetypeMatch("均值回归"), 1: pool.ArchetypeMatch("趋势跟踪")}
+
+        self.assertEqual(self.fingerprint(archetypes=a), self.fingerprint(archetypes=b))
+
+
+# --------------------------------------------------------------------------- #
+# 为什么指纹必须收**全部**策略的原型
+# --------------------------------------------------------------------------- #
+
+
+class TestArchetypeFingerprintScope(SimpleTestCase):
+    """指纹收全量原型，不收窄到「会走兜底的那批」。
+
+    收窄看起来是免费的优化（实测 61 条样本里只有 6 条不需要兜底），但它依赖一个
+    **假的**前提：「自己样本够格的策略，原型与别人无关」。事实相反——`pool._pool_cell`
+    的兜底是拿同原型的**全部**策略一起池（`siblings`），所以一条够格的策略换了原型，
+    另一条样本不足的策略那一格的样本池就变了。
+
+    本类的用例直接对着 `build_pool` 的实际产物断言，不自己复述一遍门槛：判据若与
+    池化分叉，「指纹以为不用管原型」与「池化其实用了原型」就会静默错开，而那正是
+    这整条修复要堵的那个 bug。
+    """
+
+    def test_a_self_sufficient_strategys_archetype_changes_anothers_fallback(self):
+        """够格策略换原型 ⇒ 别人兜底那一格的结论变了 ⇒ 它的原型必须进指纹。"""
+        # 够格：三笔落在一格，满足 SMALL（3 笔 / 1 个月）。
+        enough = pure_sample(
+            [same_day(0, 10.0), same_day(0, 10.0), same_day(0, 10.0)],
+            tags_span(12),
+            12,
+            result_id="enough",
+            strategy_id=1,
+        )
+        # 不够格：一笔。它会走兜底，读的是同原型那一批的样本。
+        short = pure_sample(
+            [same_day(0, 10.0)],
+            tags_span(12),
+            12,
+            result_id="short",
+            strategy_id=2,
+        )
+
+        # 两条都归「趋势跟踪」→ 兜底能借到 1 号那三笔；只有 2 号自己时借不到。
+        same_group = {
+            1: pool.ArchetypeMatch("趋势跟踪"),
+            2: pool.ArchetypeMatch("趋势跟踪"),
+        }
+        apart = {
+            1: pool.ArchetypeMatch("趋势跟踪"),
+            2: pool.ArchetypeMatch("均值回归"),
+        }
+
+        with_sibling = pool.build_pool([enough, short], same_group, params=SMALL)
+        without_sibling = pool.build_pool([enough, short], apart, params=SMALL)
+
+        # 够格的 1 号自己不受影响（它压根不查原型）。
+        self.assertEqual(
+            with_sibling.cells[(1, RANGE.value)].state,
+            without_sibling.cells[(1, RANGE.value)].state,
+        )
+        # 而 2 号兜底那一格**变了**——这就是「够格策略的原型也进指纹」的理由。
+        self.assertNotEqual(
+            with_sibling.cells[(2, RANGE.value)].evidence["trades"],
+            without_sibling.cells[(2, RANGE.value)].evidence["trades"],
+            "同原型兜底应当借到 1 号那三笔；若这里相等，说明本用例没有真的造出"
+            "「够格策略的原型影响别人」这个前提",
+        )
 
 
 # --------------------------------------------------------------------------- #

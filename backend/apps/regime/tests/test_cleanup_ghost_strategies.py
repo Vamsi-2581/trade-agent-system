@@ -193,6 +193,32 @@ def _make_override(user, strategy):
     )
 
 
+@_factory(("strategy_factory", "strategycandidate"))
+def _make_candidate(user, strategy):
+    """候选策略（P2 流水线，spec #19）。
+
+    **它的 FK 是 `SET_NULL`，不是 `CASCADE`**——与清单里其它六张表都不同。删掉这条
+    策略不会带走这行候选，只会把 `strategy` 置空；而候选要能回答「为什么当初没上」
+    （D26），所以它必须活下来。
+
+    工厂仍然造一行引用：`reference_counts` 数的是「指着它的行」，与删掉之后残留什么
+    形状无关——有引用的策略走「退役」而不是「删除」，那正是这里想要的保守结果。
+    把 `SET_NULL` 读成「可以删」会让一条在册候选悄悄失去它的策略行，而审计面看起来
+    一切正常。
+
+    `proposed_by` 刻意留空（唯一必须的 FK 是 `strategy`）：少造一个用户对象，也别让
+    本用例间接依赖用户域的字段形状。
+    """
+    from apps.strategy_factory.models import StrategyCandidate
+    from apps.strategy_factory.status import StrategyCandidateOrigin
+
+    return StrategyCandidate.objects.create(
+        strategy=strategy,
+        name=f"Probe_{uuid.uuid4().hex[:8]}",
+        origin=StrategyCandidateOrigin.AGENT.value,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 共用夹具
 # --------------------------------------------------------------------------- #

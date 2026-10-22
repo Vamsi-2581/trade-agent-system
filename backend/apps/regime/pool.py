@@ -85,7 +85,17 @@ from apps.regime.slice import (
 #: 池化载荷的形状版本。切片有 `SLICE_VERSION`，池化有自己的——两者进位的原因不同：
 #: 前者是「输入样本长什么样」，后者是「合并口径怎么算」。合成一个版本号会让「重算了
 #: 切片」与「改了合并口径」在库里长得一样，而前者需要重算切片、后者只需要重算池化。
-POOL_VERSION = 1
+#:
+#: 2：原型归属进入输入指纹（`pool_rebuild.input_fingerprint`）。第 1 代池化是在
+#: 注册表为空的状态下建的，47 条策略因此全落「未归类」并共用一条策略的样本；修好
+#: 注册表后必须重算出新代。**这里进位是必须的，不是顺手**——指纹虽然已把 `archetypes`
+#: 并入，但「池化算法版本」是另一根轴：它让「用旧口径算的格子」与「用新口径算的格子」
+#: 在库里分得开，而不是靠指纹碰巧不同。
+#:
+#: 3：`normalize_archetype` 改为只扫 `策略类型：` 那一行（无该行才退回整篇）。归错类的
+#: 策略会换组，兜底借到的样本随之改变——第 2 代那 244 格里有一大批是按「整篇扫」算的，
+#: 语义不同，不能当同构结果比差异。
+POOL_VERSION = 3
 
 #: 一份切片被排除在池化之外的原因。**按原因分开计数**，不记一个「跳过了几个」：
 #: 「三个是本金为 0」与「三个是版本太旧」需要两个完全不同的动作（前者要人去查回测
@@ -167,17 +177,65 @@ POOL_SOURCE_STRATEGY = "strategy"
 POOL_SOURCE_ARCHETYPE = "archetype"
 
 
+#: `description` 里声明策略类型的那一行的前缀。与
+#: `strategy_engine.registry.validate_description` 的四字段模板同源——那个模板
+#: 要求每条策略的 description 必须含这四个字段，所以「这一行一定在」不是假定，
+#: 是注册期已经钉住的契约（`test_pool.py` 里另有一组用例把两边对齐）。
+ARCHETYPE_DECLARATION_PREFIX = "策略类型："
+
+
+def _declared_type_line(raw_text: str) -> str | None:
+    """`description` 里「策略类型：」那一行；没有则 `None`。
+
+    **只取第一个这种行。** 描述模板把它们排在最前，而自由文本里再出现第二次
+    「策略类型：」只可能是别的东西（比如某段注释引用了模板），拿最后一处会读到
+    一个不是声明的位置。
+    """
+    for line in (raw_text or "").splitlines():
+        if line.strip().startswith(ARCHETYPE_DECLARATION_PREFIX):
+            return line
+    return None
+
+
 def normalize_archetype(raw_text: str) -> tuple[str, str]:
     """把一段策略描述归到原型，返回 `(原型, 命中词)`；未命中给 `(ARCHETYPE_UNCLASSIFIED, "")`。
 
     纯函数、只看文本。与覆盖表分开是因为两者要各自被钉住：映射表判错（`rsi_cross`
     被归到趋势跟踪）与覆盖表没生效（人工改过还是走了映射表）是两个不同的故障。
+
+    ## 先扫「策略类型：」那一行，扫不到才退回整篇
+
+    整篇扫子串会把**不声明类型的地方**也当成声明，现网实测 18 条有描述的策略里
+    5 条归错，而且方向一致地错：错向「均值回归」。
+
+    | 策略 | 声明 | 整篇扫出来 | 命中的词来自 |
+    |---|---|---|---|
+    | `EMACrossoverSimple` | 趋势跟踪 | 均值回归 | 「不适合**震荡**盘整」 |
+    | `box_time_range_breakout_strategy` | 突破 | 均值回归 | 「**震荡**后启动的突破行情」 |
+    | `mm_with_ofi_strategy` | 做市+动量 | 均值回归 | 「高流动性**震荡**市场」 |
+    | `TickImbalanceV3` | Tick失衡动量 | 均值回归 | 「Tick Imbalance**回归**中性」 |
+    | `volume_support_reclaim_strategy` | 突破反转 | 均值回归 | 「假突破反**转**」 |
+
+    前三条是**否定句与背景描述**被当成了类型，后两条是出场逻辑里的词。危害不止
+    标签难看：兜底是**按原型分组借样本**的，一条策略归错类会让整组兜底结论都吃到
+    不属于它的样本，而「震荡」这个词在各种「不适合震荡」的句子里到处都是——于是
+    均值回归组变成所有组的垃圾桶（实测 10 条 / 755 份样本，最胖的一组）。
+
+    退回到整篇是给不合模板的文本留的活路：`strategies/rsi_cross.py` 那句
+    「RSI 超卖区金叉买入，超买区死叉卖出」没有「策略类型：」行，而它是本模块
+    **有序映射**那条设计（均值回归必须排在趋势跟踪前面）唯一的真实依据，不能
+    因为改用行扫描就把它判成未归类。注册期模板要求「策略类型：」存在，所以现网
+    走向这一支的只会有历史文本与测试夹具。
     """
-    text = (raw_text or "").lower()
+    line = _declared_type_line(raw_text)
+    text = (line if line is not None else (raw_text or "")).lower()
     for archetype, keywords in ARCHETYPE_KEYWORDS:
         for word in keywords:
             if word in text:
                 return archetype, word
+    # 声明行命中不了（比如「策略类型：自定义」）时**不退回整篇**：声明行是作者写下的
+    # 判断，其余行是背景描述，让背景描述覆盖作者自己的声明正是这次要修的那件事。
+    # 整篇扫这一支只服务「压根没有声明行」的历史文本，它的回落已经体现在上行。
     return ARCHETYPE_UNCLASSIFIED, ""
 
 

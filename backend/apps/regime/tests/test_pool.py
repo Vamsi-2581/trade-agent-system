@@ -37,6 +37,7 @@ from apps.regime import slice as sl
 from apps.regime.config import EvidenceConfig
 from apps.regime.models import PoolSource, RegimePoolCell
 from apps.regime.pool import (
+    ARCHETYPE_DECLARATION_PREFIX,
     ARCHETYPE_SOURCE_KEYWORD,
     ARCHETYPE_SOURCE_OVERRIDE,
     ARCHETYPE_SOURCE_UNCLASSIFIED,
@@ -545,6 +546,102 @@ class TestArchetypeNormalisation(SimpleTestCase):
         self.assertEqual(match.source, ARCHETYPE_SOURCE_OVERRIDE)
         self.assertEqual(match.matched_word, "")  # 覆盖表没有走映射表
         self.assertEqual(match.raw_text, "RSI 超卖区金叉买入")
+
+
+class TestDeclarationLineWins(SimpleTestCase):
+    """`策略类型：` 那一行是作者写下的判断，其余行是背景描述。
+
+    整篇扫子串会把**不声明类型的地方**当成声明。现网实测 18 条有描述的策略里 5 条
+    归错，方向一致地错向「均值回归」——因为「震荡」这个词在各种「不适合震荡」
+    「震荡后启动」的句子里到处都是，于是均值回归组变成所有组的垃圾桶
+    （实测 10 条 / 755 份样本，四组里最胖）。
+
+    每条断言都用**现网真实 description**，不是编的字符串：这些句子是从
+    `~/.tradelogx/strategies/` 与 `backend/strategies/` 里逐字抄来的。
+    """
+
+    def test_a_negated_scenario_does_not_override_the_declaration(self):
+        """「不适合震荡盘整」里的「震荡」不是类型声明。"""
+        desc = (
+            "策略类型：趋势跟踪\n"
+            "核心指标：EMA\n"
+            "适用场景：趋势行情，不适合震荡盘整\n"
+            "入场逻辑：快线上穿慢线时买入"
+        )
+        self.assertEqual(normalize_archetype(desc), ("趋势跟踪", "趋势"))
+
+    def test_a_background_phrase_does_not_override_the_declaration(self):
+        """「震荡后启动的突破行情」里的「震荡」也是背景，不是类型。"""
+        desc = (
+            "策略类型：突破\n"
+            "核心指标：箱体\n"
+            "适用场景：震荡后启动的突破行情\n"
+            "入场逻辑：收盘价突破箱体上沿"
+        )
+        self.assertEqual(normalize_archetype(desc), ("突破", "突破"))
+
+    def test_an_exit_rule_word_does_not_override_the_declaration(self):
+        """「Tick Imbalance 回归中性」是出场逻辑，不是「均值回归」这个类型。"""
+        desc = (
+            "策略类型：Tick失衡动量\n"
+            "核心指标：Tick Imbalance\n"
+            "适用场景：5m 高流动性\n"
+            "入场逻辑：Tick Imbalance 超过阈值时跟随方向\n"
+            "出场逻辑：Tick Imbalance 回归中性或 ATR 止损"
+        )
+        self.assertEqual(normalize_archetype(desc), ("动量", "动量"))
+
+    def test_a_market_making_declaration_is_read_as_its_own_type(self):
+        """「做市+动量」，适用场景里的「震荡」不该把它变成均值回归。"""
+        desc = (
+            "策略类型：做市+动量\n"
+            "核心指标：ATR, EMA\n"
+            "适用场景：高流动性震荡市场，不适合极端趋势行情\n"
+            "入场逻辑：基于 Avellaneda-Stoikov 模型计算保留价格"
+        )
+        self.assertEqual(normalize_archetype(desc), ("动量", "动量"))
+
+    def test_a_declaration_without_any_keyword_does_not_fall_back_to_the_body(self):
+        """声明行一个关键词都没有时**不退回整篇**：那会拿背景描述覆盖作者的声明。
+
+        这条钉的是「不退回」这个决定本身。模型里 `ARCHETYPE_UNCLASSIFIED` 是**如实**
+        的结论（要计数、要进日报第④段），而不是一个需要用背景文本去猜的缺口。
+        """
+        desc = "策略类型：自定义形态\n核心指标：无\n适用场景：震荡行情\n入场逻辑：无"
+        self.assertEqual(normalize_archetype(desc), (ARCHETYPE_UNCLASSIFIED, ""))
+
+    def test_without_a_declaration_line_the_whole_text_is_still_scanned(self):
+        """没有声明行的历史文本仍按整篇扫——`rsi_cross.py` 是那条设计的真实依据。
+
+        它是**有序映射**（均值回归排在趋势跟踪前）唯一被真实数据要求的场合：
+        同时命中「超卖/超买」与「金叉/死叉」。改成行扫描不能把它判成未归类。
+        """
+        self.assertEqual(
+            normalize_archetype("RSI 超卖区金叉买入，超买区死叉卖出"),
+            ("均值回归", "超卖"),
+        )
+
+    def test_the_prefix_matches_the_registry_template(self):
+        """扫描用的前缀必须与注册期四字段模板里的那个字段**逐字相同**。
+
+        两边若漂开（有人把模板改成「策略类别：」），行扫描会对所有策略失配，
+        然后**静默**退回整篇——也就是悄悄退回这次修掉的那个 bug。
+        """
+        from apps.strategy_engine.base import BaseStrategy
+
+        self.assertIn("策略类型：", BaseStrategy.description_template)
+        self.assertIn("策略类型：", ARCHETYPE_DECLARATION_PREFIX)
+
+    def test_a_second_declaration_line_does_not_win(self):
+        """只认**第一个**声明行：模板把它排在最前，后面再出现的不是声明位置。"""
+        desc = (
+            "策略类型：突破\n"
+            "核心指标：箱体\n"
+            "适用场景：无\n"
+            "入场逻辑：无\n"
+            "策略类型：均值回归（这是注释里引用的模板，不是声明）"
+        )
+        self.assertEqual(normalize_archetype(desc), ("突破", "突破"))
 
     def test_the_keyword_path_says_so(self):
         match = resolve_archetype("海龟突破")
