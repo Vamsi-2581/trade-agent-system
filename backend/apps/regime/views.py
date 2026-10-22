@@ -1,12 +1,13 @@
-"""机制 Web 读面的三个只读端点（P5 子票 #41，map #40）。
+"""机制 Web 读面的端点（P5 子票 #41 与 #48）。
 
 | 路由 | 装什么 | 为什么是这个形状 |
 | --- | --- | --- |
 | `GET api/regime/overview/` | 三个开关的当前档 + 最近一次切换、当前代摘要、当前生效阶段 | 首屏要的**全部**廉价数，一次请求装完 |
 | `GET api/regime/pool/` | 当前代（或指定代）的全部格子 | 池化表本体，键是 `(策略, 阶段)` |
 | `GET api/regime/pool/generations/` | 代际历史分页 + 指定代与上一代的逐格差异 | 「这一代谁何时算的、变了什么」 |
+| `GET api/regime/briefing/<kind>/` | 三张确认页之一（正文 + 审计串 + 排版用的数） | **重请求，按需拉**——不在轮询里 |
 
-## 为什么 `overview` 不装确认页的正文
+## 为什么 `overview` 不装确认页的正文、而 `briefing` 单独一条
 
 这不是「慢一点」而是「每 60 秒重导入一次全部策略模块」。两条调用链：
 
@@ -17,7 +18,7 @@
   全量重算所有历史标签（`slicing.py` 自己写着「每次调用都重算，不缓存」）。
 
 首屏要的是「现在是什么状态」，而三张确认页只在人**要做一个决定**时才需要。它们住在
-另一张票（#48 的 `briefing/<kind>/`），按需拉。本模块因此有一条**纪律性断言**：
+`briefing/<kind>/`（#48），按需拉。本模块因此有一条**纪律性断言**：
 `OVERVIEW_QUERY_BUDGET` 把 `overview` 的查询数钉成常数，退化成调 `page()` 会当场变红。
 
 ## 枚举的 display 一律由后端给
@@ -63,6 +64,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from apps.regime import briefing as briefing_module
 from apps.regime import deactivation_run, pool_rebuild
 from apps.regime import serializers as ser
 from apps.regime.models import (
@@ -420,3 +422,38 @@ def pool_generations(request: Request) -> Response:
         payload["diff"] = _diff(generation)
 
     return Response(payload)
+
+
+# --------------------------------------------------------------------------- #
+# 4. briefing/<kind>
+# --------------------------------------------------------------------------- #
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def briefing(request: Request, kind: str) -> Response:
+    """三张确认页之一，**按需拉**（P5 子票 #48）。
+
+    与上面三个端点的关系是明确的：`overview` 装廉价只读、每 60 秒轮询；本端点每一次调用
+    都会重导入全部策略模块（gate）或全量重算历史标签（mechanism），所以它**不在轮询里**，
+    只在人要做一个决定时拉一次。响应带 `heavy: true`，HTTP 层再发 `Cache-Control: no-store`
+    ——两层都说同一件事：这一次的求值不许被任何中间层留下来，因为它的副作用（策略模块
+    重导入）与结果绑定在同一个时刻上。
+
+    **`body` 与 `summary` 同源**：都由 `briefing.evaluate()` 里那**一次** `page()` 调用渲染。
+    不在本视图里分别调两次取它们的便捷函数（那正是这条不变量唯一会破的地方）。
+
+    错误：未知 `kind` → **400**（枚举取值错），不是 404。`MechanismKind(slug)` 自己就是
+    校验器，这里不另写一份 slug 清单——多一份清单就多一处「加了第四个开关而这一处没加」。
+    """
+    try:
+        payload = briefing_module.payload(kind)
+    except ValueError:
+        allowed = " / ".join(m.value for m in MechanismKind)
+        return _bad_request(f"未知的 kind：{kind!r}（可选：{allowed}）")
+
+    response = Response(payload)
+    # 重请求 + 进程级副作用：不许缓存。`no-store` 而不是 `no-cache`——后者还允许存下来
+    # （只是用之前要回源），而这里连「存下来」都不该发生。
+    response["Cache-Control"] = "no-store"
+    return response

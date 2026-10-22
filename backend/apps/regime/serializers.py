@@ -143,6 +143,28 @@ def kind_payload(kind: MechanismKind) -> dict[str, str]:
     return _labelled(kind.value, kind.display)
 
 
+def event_impact_payload(event: Any) -> dict[str, str]:
+    """一条重大事件的冲击档位。
+
+    **收事件对象、不收 slug**：`MajorEvent.impact_display` 已经是「这一条事件怎么说法」的
+    唯一出处（`Model.impact_display` 的 docstring），而收 slug 会逼调用方再去查一张枚举表
+    ——那就是「事件的展示名」的第二个说法。sigil 与其它 payload 同形（成对），所以前端
+    仍然只认 `{value, display}` 这一种形状。
+    """
+    return _labelled(event.impact, event.impact_display)
+
+
+def event_status_payload(event: Any) -> dict[str, str]:
+    """一条重大事件的生命周期（排期 / 已取消）。展示名取模型自己的 property。"""
+    return _labelled(event.status, event.status_display)
+
+
+def event_scope_payload(event: Any) -> dict[str, str]:
+    """一条重大事件的作用域（全市场 / 指定品种）。展示名取模型自己的 property
+    ——品种列表那一支是「、」连起来的，只有模型知道怎么拼它。"""
+    return _labelled(event.scope_kind, event.scope_display)
+
+
 # --------------------------------------------------------------------------- #
 # 开关卡片
 # --------------------------------------------------------------------------- #

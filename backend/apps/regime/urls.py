@@ -1,4 +1,4 @@
-"""机制 Web 读面的路由（P5 子票 #41）。
+"""机制 Web 读面的路由（P5 子票 #41 与 #48）。
 
 前缀在 `core/urls.py` 挂成 `api/regime/`。**这是 `apps/regime` 的第一个 REST 前缀**——
 它此前刻意没有（`apps/strategy_factory/urls.py:4` 把那写成了它的选择：机制只走 agent
@@ -10,6 +10,11 @@
 `pool/generations/` 写在 `pool/` **之前**。Django 按序匹配，`pool/` 是一条精确路径
 （`^pool/$`），本不会吃掉 `pool/generations/`；把更具体的写在前面只是让阅读顺序与匹配
 顺序一致——将来若有人把 `pool/` 改成前缀式匹配，这个顺序仍然是对的。
+
+`briefing/<kind>/` 是一条**带参数**的路由，与上面三条无参数路由不互相遮蔽：`kind` 是
+一个路径段，所以 `briefing/mechanism/` 只会落到它身上，不会有人误以为它是「briefing/ 这个
+目录的索引页」。未知 kind 由视图回 400（枚举取值错不是「资源不存在」），所以这里没有
+一条「兜底的 404」路由——那会把它变成 404，而两者要求人做的动作完全不同。
 """
 
 from django.urls import path
@@ -20,4 +25,5 @@ urlpatterns = [
     path("overview/", views.overview, name="regime-overview"),
     path("pool/generations/", views.pool_generations, name="regime-pool-generations"),
     path("pool/", views.pool, name="regime-pool"),
+    path("briefing/<str:kind>/", views.briefing, name="regime-briefing"),
 ]
