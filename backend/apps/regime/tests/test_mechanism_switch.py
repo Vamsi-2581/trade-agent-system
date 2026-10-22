@@ -551,6 +551,17 @@ class TestTheBackRecord(_Fixture):
         self.assertIn("人工", body)
         self.assertIn("alice", body, "退回 Shadow 由谁做的必须写出来")
 
+    def test_a_web_back_is_rendered_as_web_not_as_a_command(self):
+        """`ActorKind.WEB` 是 P5 加的第四种（#43）。这条钉的是**读侧已经在等它**：
+        漏掉 `_ACTOR_KIND_DISPLAY` 的成员时 `ActorKind.WEB.display` 抛 `KeyError`，而它
+        只在「渲染那一条流水」时才炸——也就是在这一页上，而不是在写入时。同时它必须
+        **不是**「命令行」：两者的存在理由就是事后排查要区分网页点的与命令行敲的。"""
+        self.start(days_ago=MIN_DAYS - 1)
+        self.back(actor_kind=ActorKind.WEB, name="bob")
+        body = self.body()
+        self.assertIn("网页·bob", body)
+        self.assertNotIn("命令行·bob", body)
+
     def test_a_self_fused_back_asks_for_the_root_cause(self):
         """第 161 条：自熔断之后再回执行态要显式记录「这是自熔断后的恢复」并把根因摆出来。
 
