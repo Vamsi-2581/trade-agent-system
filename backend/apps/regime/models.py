@@ -361,14 +361,22 @@ class ActorKind(str, Enum):
     「谁干的」这一栏会混进两种互不可比的标识。`actor_name` 的取值口径因此按 kind 走：
     `cli` 是系统用户名、`task` 是写死的任务名、`chat` 是平台 sender id。
 
-    **每加一个成员都要动两张表**（`RegimePoolRebuild` 与 `RegimeMechanismSwitch` 的
-    `choices` 会一起进迁移）。这是刻意付的代价：`choices` 只是校验面，合出来的是
+    `WEB` 是 P5 加的第四种（机制 Web 写入口，`docs/adr/0005-web-write-requires-staff.md`）。
+    **它不与 `CLI` 合并**，理由与 `CHAT` 同源但更强：网页上的人有系统用户名，可他走的
+    是另一条通路，而事后排查「这次翻档是命令行敲的还是网页点的」正要区分这两者——合并
+    之后这个问题就永远答不出来了。它的 `actor_name` 取系统用户名（`User.username`），
+    与 `cli` 同一个取值口径，**但不是同一个来源**（`cli` 是 `getpass.getuser()`，会随
+    容器里的 `USER` 变化；`web` 是认证过的数据库行）。
+
+    **每加一个成员都要动一遍带 `choices` 的表**（今天七处 `actor_kind` / 录入方 / 撤回方
+    字段，迁移里是 `AlterField`）。这是刻意付的代价：`choices` 只是校验面，合出来的是
     「谁干的」这一套词汇——分成两套枚举会让同一件事在两张表里叫两个名字。
     """
 
     CLI = "cli"
     TASK = "task"
     CHAT = "chat"
+    WEB = "web"
 
     @property
     def display(self) -> str:
@@ -383,6 +391,7 @@ _ACTOR_KIND_DISPLAY = {
     ActorKind.CLI: "命令行",
     ActorKind.TASK: "定时任务",
     ActorKind.CHAT: "聊天渠道",
+    ActorKind.WEB: "网页",
 }
 
 
