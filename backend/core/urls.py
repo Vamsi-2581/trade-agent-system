@@ -25,4 +25,9 @@ urlpatterns = [
     path("api/datasource/", include("apps.datasource.urls")),
     path("api/signal-monitor/", include("apps.signal_monitor.api.urls")),
     path("api/logs/", include("apps.logging_app.urls")),
+    # 机制的 Web 读面（P5，map #40）：overview / pool / pool/generations 三个只读端点。
+    # 这是 `apps/regime` 的**第一个** REST 前缀——它此前刻意没有（只走 agent 工具与
+    # slash 命令），本次给它开面是 map #40 定下的范围，理由见 CONTEXT.md 同名一节。
+    # 写入口（POST /api/regime/switch/、pool/rebuild/）是后续子票，不住在这个文件里。
+    path("api/regime/", include("apps.regime.urls")),
 ]
