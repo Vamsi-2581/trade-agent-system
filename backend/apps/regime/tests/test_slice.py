@@ -487,8 +487,18 @@ class TestScalingCannotRescueAThinSample(SimpleTestCase):
 # --------------------------------------------------------------------------- #
 
 
-def _metrics(dd, calmar):
-    return {"max_drawdown_pct": dd, "calmar": calmar}
+def _metrics(dd, calmar, annualized=10.0):
+    """一格 / 全样本的比价指标。
+
+    `annualized` 默认 **+10%**：`_fitness` 从 2026-10-22 起在相对比较之外还有一道
+    绝对水平门（分段年化必须为正），所以「不更差 ⇒ 适用」那几条用例必须自带正的年化，
+    否则它们测的就变成了那道新门而不是相对比较。要测绝对门本身，显式传负值。
+    """
+    return {
+        "max_drawdown_pct": dd,
+        "calmar": calmar,
+        "annualized_return_pct": annualized,
+    }
 
 
 class TestFitnessDecisionTable(SimpleTestCase):
@@ -536,6 +546,68 @@ class TestFitnessDecisionTable(SimpleTestCase):
         """跨三个函数的隐式不变量在栈里一个字都看不到，所以这里显式落中性。"""
         state, reason = sl._fitness(_metrics(None, None), _metrics(None, None))
         self.assertEqual((state, reason), (sl.STATE_NEUTRAL, sl.REASON_INCOMPARABLE))
+
+
+class TestAbsoluteProfitFloor(SimpleTestCase):
+    """相对比较之上那道**绝对水平门**：不更差但自己在亏 ⇒ 中性。
+
+    这条门补的是现网真实踩到的荒谬结论：`ema_trend_weekday` 在 `range` 档年化
+    **−171.4%**、Calmar −1.50、分段回撤 114.5%（全样本 273.4%），两个指标都比全样本
+    「不更差」，于是被判 **适用**——它「更不差」只是因为别处更差。一条年化 −171% 的
+    策略被标成「震荡期适用」，拿去做放行依据，就是把相对优势当成了绝对可行性。
+    """
+
+    def test_not_worse_but_losing_money_is_neutral(self):
+        state, reason = sl._fitness(
+            _metrics(114.5, -1.50, annualized=-171.4),
+            _metrics(273.4, -3.06, annualized=-171.4),
+        )
+        self.assertEqual((state, reason), (sl.STATE_NEUTRAL, sl.REASON_NOT_PROFITABLE))
+
+    def test_a_hair_above_zero_clears_the_floor(self):
+        """门槛不设「至少要 > 5%」这类阈值：这个仓库里没有挑那个数的依据。
+
+        两维相对比较已经承担了「有多好」的排序，绝对门只负责拦住「在亏」。
+        """
+        self.assertEqual(
+            sl._fitness(_metrics(5.0, 2.0, annualized=0.01), _metrics(10.0, 1.0)),
+            (sl.STATE_FIT, ""),
+        )
+
+    def test_the_full_sample_being_unprofitable_does_not_block_fit(self):
+        """全样本亏损是常态（参数没调好），只要**这一段自己**赚钱就说得出「这段能跑」。"""
+        self.assertEqual(
+            sl._fitness(
+                _metrics(5.0, 2.0, annualized=12.0),
+                _metrics(10.0, 1.0, annualized=-80.0),
+            ),
+            (sl.STATE_FIT, ""),
+        )
+
+    def test_an_unmeasurable_annualized_is_not_a_pass(self):
+        """`None` 是「不知道」，不是「赚了」。fail-closed 那一侧。"""
+        cell = _metrics(5.0, 2.0)
+        cell["annualized_return_pct"] = None
+        state, reason = sl._fitness(cell, _metrics(10.0, 1.0))
+        self.assertEqual((state, reason), (sl.STATE_NEUTRAL, sl.REASON_NOT_PROFITABLE))
+
+    def test_the_floor_only_ever_downgrades_fit_it_never_creates_unfit(self):
+        """这道门只拦 `fit`，不制造 `unfit`。
+
+        不达标落中性：`unfit` 的语义是「经比较显著更差，建议停用」，而「这一段自己
+        没赚钱」既可能是策略不行、也可能是这一段样本太少。把它当停用理由会让机制
+        比证据说的更有把握。
+        """
+        # 两维都更差 ⇒ 仍然是不适用，与年化无关
+        self.assertEqual(
+            sl._fitness(_metrics(20.0, 0.5, annualized=-50.0), _metrics(10.0, 1.0)),
+            (sl.STATE_UNFIT, ""),
+        )
+        # 两维都更差但年化为正 ⇒ 还是不适用的那一支，不受绝对门影响
+        self.assertEqual(
+            sl._fitness(_metrics(20.0, 0.5, annualized=99.0), _metrics(10.0, 1.0)),
+            (sl.STATE_UNFIT, ""),
+        )
 
 
 # --------------------------------------------------------------------------- #

@@ -190,6 +190,14 @@ REASON_DIRECTION_CONFLICT = "direction_conflict"
 REASON_INCOMPARABLE = "incomparable"
 REASON_HIGH_VOL_BLANKET = "high_vol_blanket_halt"
 REASON_NO_REGIME_DAYS = "no_regime_days"
+#: 相对比较过关（不比全样本差），但这一格**自己没赚钱**。2026-10-22 起适用多一道
+#: 绝对水平门：`ema_trend_weekday` 年化 −171% 曾是 range 档唯一的 fit，它「不更差」
+#: 只是因为别处更差。落中性而不是不适用——理由见 `_fitness` 的 docstring。
+REASON_NOT_PROFITABLE = "not_profitable"
+#: 兜底（原型）路径算出来是「适用」，但**这一条策略自己样本不够格**。借来的样本
+#: 只能说明「这一类策略」在这个阶段如何，不能证明「这一条」适合——而 `fit` 正是被拿
+#: 去做放行依据的那个值。降成中性。见 `pool._pool_cell` 的兜底分支。
+REASON_ARCHETYPE_NOT_FIT = "archetype_evidence"
 
 #: 上面两组的展示名。与 `quant._DISPLAY` 同一约定：**取值是落库契约**（改名等于让新旧
 #: `metrics` 与新旧池化表出现两套键），中文只出现在展示层。放在词表的归属处而不是模型
@@ -209,6 +217,8 @@ REASON_DISPLAY = {
     REASON_INCOMPARABLE: "不可比",
     REASON_HIGH_VOL_BLANKET: "高波动保命档",
     REASON_NO_REGIME_DAYS: "窗口内该阶段未出现",
+    REASON_NOT_PROFITABLE: "该阶段自身未盈利",
+    REASON_ARCHETYPE_NOT_FIT: "仅有同原型证据",
 }
 
 #: 比例与金额在 JSON 里的保留位数。切片是统计量，参与记账的是回测自己的
@@ -449,14 +459,60 @@ def _fitness(cell: dict, full: dict) -> tuple[str, str]:
     全样本比一次，**两个都说「不更差」才是适用，两个都说「更差」才是不适用，
     一个更好一个更差就是方向矛盾**——落中性。
 
-    为什么矛盾要落中性而不是按 Calmar 一锤定音：两个指标的矛盾本身就是「这段
-    样本讲不出一个稳定的故事」的证据（要么是运气，要么是窗口太短让曲线形状主导），
-    而中性的语义正是「先用不上它」。倾向是不停用：中性不构成停用理由，所以这个
-    读法整体偏保守，与「门槛是唯一天然刹车」的取向一致。
+    ## 只有相对比较是不够的（2026-10-22 补的角度门槛）
+
+    上面那套是**纯相对**判据：一格只要「比自己全样本不太差」就是适用。它单独成立时
+    会放过一种荒谬结论——现网实测到的那个：
+
+        `ema_trend_weekday` 在 `range` 档：年化 **−171.4%**、Calmar −1.50、
+        分段回撤 114.5%（全样本 273.4%）
+
+    两个指标都比全样本「不更差」（100 多比 200 多好），于是判 **适用**。可它不是
+    「在这个阶段能赚钱」，而是「在这个阶段亏得比别处少」。把一条年化 −171% 的策略
+    标成「震荡期适用」，然后拿它去放行开仓，是把相对优势当成了绝对可行性。
+
+    所以适用多了一道**绝对水平门**：分段年化收益必须为正。`full` 那一侧不看——
+    全样本亏损是常态（回测没调好参数），只要这一段自己赚钱，就说得出「这段能跑」。
+
+    这道门只拦 `fit`，**不制造 `unfit`**：不达标落中性。理由是 `unfit` 的语义是
+    「经比较显著更差，建议停用」，而「这一段本身没赚钱」既可能是策略不行、也可能是
+    这一段样本太少（分位没攒满、窗口太短让曲线形状主导）。把它当停用理由会让机制
+    比证据说的更有把握，而 `neutral` 的语义正是「先用不上它」——不构成停用理由，
+    也不会被读成放行。
+
+    **`calmar` 与 `max_drawdown_pct` 那一套判据原样保留**：相对比较回答的是
+    「这个阶段是不是它的场子」，绝对门回答的是「它在这里到底赚不赚钱」，两件事
+    都要。去掉任何一个都会退回到上面那个荒谬结论或它的镜像。
 
     **形状一样但两个都无法算**（全样本零回撤、该格零回撤）时 `calmar` 双方都是
     `None`：那不是「不更差」，是「无从比较」，落中性并写明 `incomparable`——
     把它当适用会让一个从没测到回撤的分段得到一个不该有的结论。
+    """
+    # 相对比较那一段**只有一份实现**（`relative_fitness`），冲突判定也调它。
+    # 在这里再抄一遍比较逻辑会让「同一份数据，state 说 fit、conflict 说方向不同」
+    # 这种自相矛盾的证据同时出现在一条记录里。
+    state, reason = relative_fitness(cell, full)
+    if state == STATE_FIT and not _profitable(cell):
+        # 相对比较过关，但这一段自己没赚钱。见 docstring 的「绝对水平门」。
+        return STATE_NEUTRAL, REASON_NOT_PROFITABLE
+    return state, reason
+
+
+def relative_fitness(cell: dict, full: dict) -> tuple[str, str]:
+    """**只有相对比较**的那一半判定：不比全样本差 ⇒ `fit`，两个都更差 ⇒ `unfit`。
+
+    拆出来是为了让「跨品种冲突」的判定能单独问相对方向（`pool._conflict`）。冲突的
+    语义是「合并后的结论与某个品种自己的结论方向相反」，它问的是**相对**关系；绝对
+    水平门（`_fitness` 里那道 `_profitable`）与冲突无关——一条策略在所有品种上都亏钱
+    时，它「不比全样本差」仍然成立，而那不是冲突。
+
+    把两者混成一个函数会让绝对门静默地关掉冲突判定：`_fitness` 把 fit 降成中性之后
+    `_direction` 返回 0，`_conflict` 直接返回 `None`，于是「两个品种方向相反、都过
+    门槛」这件该让人看一眼的事不再进待复核。那正是这个拆分要挡的回归。
+
+    **不要在两个地方各自实现一遍比较。** 这里的比较逻辑与 `_fitness` 的前半段必须
+    是同一条判据，否则「同一份数据，`state` 说 fit、`conflict` 说方向不同」这种自相
+    矛盾的证据会同时出现在一条记录里。
     """
     cell_dd = cell["max_drawdown_pct"]
     full_dd = full["max_drawdown_pct"]
@@ -464,18 +520,11 @@ def _fitness(cell: dict, full: dict) -> tuple[str, str]:
     full_calmar = full["calmar"]
 
     if cell_dd is None or full_dd is None:
-        # 回撤这一维都拿不到值就无从比较。走到这里说明有一方的分段曲线是空的，
-        # 而 `_cell` 只在样本过门槛时才调本函数——过门槛意味着至少有一笔交易落在了
-        # 有标签的日子里，那条曲线就不该是空的。真到了这里，宁可落中性（「先用不上
-        # 它」）也不要拿 `None` 去比大小：那是 `TypeError`，会把一次切片变成一条
-        # 看不懂的崩溃栈，而它的成因（跨三个函数的隐式不变量）在栈里一个字都看不到。
         return STATE_NEUTRAL, REASON_INCOMPARABLE
 
     dd_not_worse = cell_dd <= full_dd
 
     if cell_calmar is None and cell_dd == 0.0:
-        # 该格从没从峰值上下来过——回撤这一维上是「不更差」的最强形式，Calmar
-        # 算不出来纯粹是因为分母为零，不该因此判它不可比。
         calmar_not_worse: bool | None = True
     elif cell_calmar is None or full_calmar is None:
         calmar_not_worse = None
@@ -489,6 +538,23 @@ def _fitness(cell: dict, full: dict) -> tuple[str, str]:
     if not calmar_not_worse and not dd_not_worse:
         return STATE_UNFIT, ""
     return STATE_NEUTRAL, REASON_DIRECTION_CONFLICT
+
+
+def _profitable(cell: dict) -> bool:
+    """这一格的**绝对**年化收益是否为正。算不出来时算「不达标」。
+
+    `annualized_return_pct` 是 `None` 表示这段没有可外推的收益区间（没有现金流日子、
+    或 `span_days == 0`）——那是「不知道」，不是「赚了」。`_fitness` 只在两种口径都
+    算得出来时才走到这里，但把 `None` 读成「不达标」是 fail-closed 的那一侧，而这条
+    判据的全部意义就是不让「不知道」冒充「可行」。
+
+    **不设阈值**（不要求 > 5% 之类）：任何阈值都要挑一个数，而挑数的依据在这个仓库里
+    不存在——`calmar` / 回撤那两维已经承担了「有多好」的排序，这里只需要拦住「在亏」。
+    """
+    annualized = cell.get("annualized_return_pct")
+    if annualized is None:
+        return False
+    return annualized > 0
 
 
 # --------------------------------------------------------------------------- #

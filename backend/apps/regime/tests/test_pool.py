@@ -451,17 +451,27 @@ class TestConflictNeedsReview(SimpleTestCase):
         )
 
     def test_opposite_directions_above_both_thresholds_flag_for_review(self):
-        # 两个品种在箱体里净额为零 → 合并后这一格既不更好也不更差（`fit`）；
+        # 两个品种在箱体里净额为零 → 合并后这一格**相对比较**既不更好也不更差；
         # 而 BTC 自己那一份是「不适用」。方向相反，两侧都过门槛。
+        #
+        # 2026-10-22：这一格最终状态是 `neutral / not_profitable`，不是 `fit`——
+        # 合并后年化恰好 0.0（净额为零 ⇒ 打平），绝对水平门要求**严格为正**。
+        # 但冲突判定问的是**相对**方向，与绝对门无关：`pool._pool_cell` 显式把
+        # `relative_fitness` 的结果传给 `_conflict`，所以 `needs_review` 与
+        # `conflict.pooled_state` 仍然是相对比较的 `fit`。
+        #
+        # 这条用例同时钉住那个易犯的回归：把绝对门后的状态传给 `_conflict`，
+        # `_direction("neutral")` 返回 0，冲突判定直接静默退出。
         result = self._two_symbols([7, 8, 9])
         cell = cell_of(result, 1, RANGE)
 
         self.assertTrue(cell.needs_review)
-        self.assertEqual(cell.state, sl.STATE_FIT)  # 结论照常产出，不被冲突改写
+        self.assertEqual(cell.state, sl.STATE_NEUTRAL)
+        self.assertEqual(cell.reason, sl.REASON_NOT_PROFITABLE)
         conflict = cell.evidence["conflict"]
         self.assertEqual(conflict["symbol"], "BTC/USDT")
         self.assertEqual(conflict["symbol_state"], sl.STATE_UNFIT)
-        self.assertEqual(conflict["pooled_state"], sl.STATE_FIT)
+        self.assertEqual(conflict["pooled_state"], sl.STATE_FIT)  # 相对比较的结论
 
     def test_a_side_below_the_threshold_is_noise_not_conflict(self):
         """一侧只有 2 笔（`min_trades=3`）→ 是样本噪声，不是冲突。
@@ -693,18 +703,26 @@ class TestArchetypeFallback(SimpleTestCase):
         )
 
     def test_a_thin_strategy_borrows_its_archetype_samples(self):
-        """兜底那一格的状态照样是比出来的，不是「借用即中性」。
+        """兜底那一格借同原型的样本，但**借来的样本不出「适用」结论**（2026-10-22）。
 
-        s1 与 s2 的成交**全部**落在箱体里，所以合并后的箱体分段与合并后的全样本
-        是同一批日子、同一条曲线——两个指标都不更差，落 `fit`。这件事看起来像巧合，
-        其实是这条 fixture 的性质：借用来的样本自己与自己比，出不了别的结论。
+        s1 与 s2 的成交全部落在箱体里，所以合并后的箱体分段与合并后的全样本是同一批
+        日子、同一条曲线——两个指标都不更差。旧行为在这里落 `fit`，而这个测试自己的
+        docstring 已经写出了它的毛病：「借用来的样本自己与自己比，出不了别的结论」。
+
+        那不是证据，是构造方式的副产品。现网实测过它的后果：一条自己只有 0 笔样本的
+        策略，因为借了均值回归组（344 笔）而判 `range / fit`；换一代借到「未归类」组
+        （11693 笔）就判 `unfit`。同一条策略、同样稀薄的证据，换个组从不适用翻成适用。
+
+        所以兜底的 `fit` 一律降成中性并写明 `archetype_evidence`：`fit` 是会被拿去做
+        放行依据的值，而这条策略自己没有任何证据支撑它。`unfit` 保持原样——那个方向
+        是安全的（见 `pool._pool_cell` 的兜底分支）。
         """
         result = self._pool()
         cell = cell_of(result, 1, RANGE)
 
         self.assertEqual(cell.source, POOL_SOURCE_ARCHETYPE)
-        self.assertEqual(cell.state, sl.STATE_FIT)
-        self.assertEqual(cell.reason, "")
+        self.assertEqual(cell.state, sl.STATE_NEUTRAL)
+        self.assertEqual(cell.reason, sl.REASON_ARCHETYPE_NOT_FIT)
         self.assertEqual(cell.evidence["archetype"]["name"], "均值回归")
         self.assertEqual(cell.evidence["archetype"]["matched_word"], "超卖")
         self.assertEqual(cell.evidence["archetype"]["source"], ARCHETYPE_SOURCE_KEYWORD)
@@ -880,6 +898,8 @@ class TestVocabularyMatchesTheModel(SimpleTestCase):
         sl.REASON_INCOMPARABLE,
         sl.REASON_HIGH_VOL_BLANKET,
         sl.REASON_NO_REGIME_DAYS,
+        sl.REASON_NOT_PROFITABLE,
+        sl.REASON_ARCHETYPE_NOT_FIT,
     )
 
     def test_states_and_reasons_are_exactly_the_displayed_vocabulary(self):

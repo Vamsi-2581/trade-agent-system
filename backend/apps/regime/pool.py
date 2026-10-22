@@ -69,6 +69,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from apps.regime import config
 from apps.regime.quant import PRIORITY, BaseRegime
 from apps.regime.slice import (
+    REASON_ARCHETYPE_NOT_FIT,
     REASON_HIGH_VOL_BLANKET,
     REASON_INSUFFICIENT,
     REASON_NO_REGIME_DAYS,
@@ -78,6 +79,7 @@ from apps.regime.slice import (
     STATE_UNFIT,
     STATE_UNKNOWN,
     _fitness,
+    relative_fitness,
     _segment_metrics,
     covered_months,
 )
@@ -554,7 +556,7 @@ def _conflict(
         own = _merge(by_symbol[symbol], regime, params)
         if not own.enough:
             continue
-        own_state, _ = _pooled_state(own, BaseRegime(regime))
+        own_state, _ = relative_fitness(own.metrics, own.full_metrics)
         if _direction(own_state) == -pooled_dir:
             return {
                 "symbol": symbol,
@@ -695,7 +697,11 @@ def _pool_cell(
 
     if merged.enough:
         state, reason = _pooled_state(merged, regime)
-        conflict = _conflict(state, own, regime.value, params)
+        # 冲突判定问的是**相对**方向：合并结论与某个品种自己的结论是否相反。绝对水平
+        # 门（`_fitness` 里那道）与它无关——一条策略在所有品种上都亏钱时，它「不比
+        # 全样本差」仍然成立，而那不构成冲突。传 `state` 会让绝对门静默关掉冲突判定。
+        relative_state, _ = relative_fitness(merged.metrics, merged.full_metrics)
+        conflict = _conflict(relative_state, own, regime.value, params)
         return PooledCell(
             strategy_id=strategy_id,
             regime=regime.value,
@@ -723,6 +729,22 @@ def _pool_cell(
 
     fallback = _merge(siblings, regime.value, params)
     state, reason = _pooled_state(fallback, regime)
+
+    # 兜底路径**不出「适用」结论**（2026-10-22）。借来的样本能说明「这一类策略在这个
+    # 阶段行不行」，说明不了「这一条行不行」——而 `fit` 是会被拿去做放行依据的那个值。
+    #
+    # 现网实测到的荒谬结论正出在这里：`volume_support_reclaim_strategy` 自己的样本
+    # 是 0 笔，却因为借了均值回归原型组（344 笔）而判 `range / fit`；同一批证据下，
+    # 它在另一代里借的是「未归类」组（11693 笔）就被判 `unfit`。**同一条策略、同样
+    # 稀薄的证据，换个组就从不适用翻成适用。** 那不是证据，那是分组方式的副产品。
+    #
+    # 降成中性而不是不适用，与 `_fitness` 的绝对门同一条理由：中性不构成停用理由，
+    # 也不构成放行理由，它准确地表达了「这一段对这条策略，我们还没有自己的证据」。
+    # `unfit` 保留原样——它拦的是停用，方向上是安全的（借用别人的差样本说「你可能
+    # 不行」再要求人工确认，与直接放行不是同一个量级的风险）。
+    if state == STATE_FIT:
+        state = STATE_NEUTRAL
+        reason = REASON_ARCHETYPE_NOT_FIT
 
     return PooledCell(
         strategy_id=strategy_id,
