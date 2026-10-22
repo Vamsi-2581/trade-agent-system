@@ -1,4 +1,4 @@
-"""机制 Web 读面的路由（P5 子票 #41 与 #48）。
+"""机制 Web 读面与写入口的路由（P5 子票 #41、#48、#42）。
 
 前缀在 `core/urls.py` 挂成 `api/regime/`。**这是 `apps/regime` 的第一个 REST 前缀**——
 它此前刻意没有（`apps/strategy_factory/urls.py:4` 把那写成了它的选择：机制只走 agent
@@ -15,6 +15,13 @@
 一个路径段，所以 `briefing/mechanism/` 只会落到它身上，不会有人误以为它是「briefing/ 这个
 目录的索引页」。未知 kind 由视图回 400（枚举取值错不是「资源不存在」），所以这里没有
 一条「兜底的 404」路由——那会把它变成 404，而两者要求人做的动作完全不同。
+
+## 读与写
+
+前四条是**读**（`IsAuthenticated`：所有登录用户都能看），最后一条 `switch/` 是**写**
+（`IsStaffUser`：`is_staff` 才放行）。两者不是「同一件事的两个精度」，而是两套权限
+（ADR 0005）——所以它们各占一条路由，而不是在一条路由里按方法分权：那样 `GET` 与 `POST`
+的权限会写在同一处，改动其中一个时很容易连带另一个。
 """
 
 from django.urls import path
@@ -26,4 +33,5 @@ urlpatterns = [
     path("pool/generations/", views.pool_generations, name="regime-pool-generations"),
     path("pool/", views.pool, name="regime-pool"),
     path("briefing/<str:kind>/", views.briefing, name="regime-briefing"),
+    path("switch/", views.switch, name="regime-switch"),
 ]
