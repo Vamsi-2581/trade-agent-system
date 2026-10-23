@@ -605,12 +605,20 @@ def briefing(request: Request, kind: str) -> Response:
 
     错误：未知 `kind` → **400**（枚举取值错），不是 404。`MechanismKind(slug)` 自己就是
     校验器，这里不另写一份 slug 清单——多一份清单就多一处「加了第四个开关而这一处没加」。
+
+    **校验的范围只到 `kind` 那一行**，不包住 `payload()`。两件事必须分开：`kind` 认不出来
+    是**请求拼错**（400，让客户端改 URL）；`page()` 内部抛出来的 `ValueError` 是**服务端
+    数据坏了**（比如流水表里有一条手工写脏的 `to_mode`），把它也说成「未知的 kind」既对
+    操作者撒谎（路径段明明是合法的），又违反本模块自己的错误约定（参数错与内部故障不混）。
+    所以这里先解析、再求值，内部故障照常冒成 500——那才是它该有的样子。
     """
     try:
-        payload = briefing_module.payload(kind)
+        switch = MechanismKind(kind)
     except ValueError:
         allowed = " / ".join(m.value for m in MechanismKind)
         return _bad_request(f"未知的 kind：{kind!r}（可选：{allowed}）")
+
+    payload = briefing_module.payload(switch)
 
     response = Response(payload)
     # 重请求 + 进程级副作用：不许缓存。`no-store` 而不是 `no-cache`——后者还允许存下来

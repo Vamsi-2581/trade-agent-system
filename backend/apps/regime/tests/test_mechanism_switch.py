@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import dataclasses
+from unittest.mock import patch
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
@@ -1012,3 +1013,50 @@ class TestTheExpiryNotice(_Fixture):
         self.assertIsNotNone(before)
         _truth(TODAY - timedelta(days=1), TODAY)
         self.assertEqual(mechanism_switch.expiry_notice(now=NOW), before)
+
+
+# --------------------------------------------------------------------------- #
+# 性质 5：一次求值只读一次档位（修 #3 的另一半）
+# --------------------------------------------------------------------------- #
+
+
+class TestTheModeComesFromTheSnapshot(_Fixture):
+    """**档位随快照走，渲染函数自己不再去读一次。**
+
+    T3 的复核修整（`f2861ac`）把这条改对了：`Confirmation` 记下求值那一刻的 `mode`，
+    `_render_body` 与 `closing_summary` 都用它。但**当时声称补了回归用例，实际没有**——
+    所以它一直是可以悄悄回退的：把正文改回 `RegimeMechanismSwitch.current(KIND)`，
+    本文件此前全绿（实测）。
+
+    这一条要防的具体形态是**同一份快照说出两个档位**：正文说「当前档位：Shadow」、
+    摘要说「退回前是执行态」。两次读之间只要落一次切换就会出现，而页面上那句话正是
+    人据以决定按不按的东西。
+    """
+
+    def test_one_page_renders_one_mode(self):
+        """把第 2 次及以后的 `current()` 改成另一个档位，正文与摘要必须仍说同一个档位。"""
+        real = RegimeMechanismSwitch.current
+        calls = {"n": 0}
+
+        def flip_after_first(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return real(*args, **kwargs)
+            return MechanismMode.EXECUTING
+
+        with patch.object(
+            RegimeMechanismSwitch, "current", side_effect=flip_after_first
+        ):
+            data = mechanism_switch.confirmation(now=NOW)
+            body = mechanism_switch._render_body(data)
+            closing = mechanism_switch.closing_summary(data)
+
+        # 正文那一行说 Shadow（第 1 次读的结果，即快照里的档位）……
+        self.assertIn(
+            f"当前档位：{MechanismMode.SHADOW.display}",
+            body,
+            "正文必须用快照里的档位，不许自己再读一次",
+        )
+        # ……摘要也必须说同一个档位，而不是被第 2 次读带成「执行态」。
+        self.assertIn("退回前本来就是 Shadow", closing)
+        self.assertNotIn("退回前是执行态", closing)

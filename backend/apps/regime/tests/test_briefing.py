@@ -153,32 +153,60 @@ class TestBodyAndSummaryComeFromOneEvaluation(_Client):
     结果颠倒了用的实现只调两次中的每一个…… 这两种错法不是同一种，所以两种都钉。
     """
 
-    def _spy(self, module, *, closing: bool | None = None):
-        """把模块的 `page()` 换成「调一次真的，然后把两段文字贴上可识别的标记」。
+    def _spy(self, module):
+        """把模块的 `page()` 与它底下的 `confirmation()` 各包一层。
 
-        返回 `(calls, holders)`：`calls` 是每次调用的 kwargs 列表，`holders` 是每次返回的
-        真实 `Briefing`（用来比对 `data` 是不是同一次求值的产物）。
+        返回 `(calls, holders, confirmations, patcher)`：
+
+        - `calls`：每次 `page()` 的 kwargs 列表；
+        - `holders`：每次 `page()` 返回的真实 `Briefing`；
+        - `confirmations`：**每次真正取数**（`confirmation()`）的入参列表。
+
+        **`page()` 的调用次数不够**：只数它的话，一个
+        `summary = closing_summary(module.confirmation(now=...))` 的实现照样只调一次
+        `page()`，而它已经**重新求了一次值**——两段文字来自两个快照，只是测试跑得太快、
+        两次求值恰好逐字相同。所以这里把 `confirmation()` 也数上：一次求值 = 一次取数。
         """
-        original = module.page
+        original_page = module.page
+        original_confirmation = module.confirmation
         calls: list[dict] = []
         holders: list = []
+        confirmations: list[dict] = []
 
-        def spy(**kwargs):
+        def confirmation_spy(**kwargs):
+            confirmations.append(kwargs)
+            return original_confirmation(**kwargs)
+
+        def page_spy(**kwargs):
             calls.append(kwargs)
-            page = original(**kwargs)
+            page = original_page(**kwargs)
             holders.append(page)
             return dataclasses.replace(
                 page, body="<BODY-MARK>", summary="<SUMMARY-MARK>"
             )
 
-        return calls, holders, patch.object(module, "page", side_effect=spy)
+        patcher = patch.object(module, "confirmation", side_effect=confirmation_spy)
+        patcher.start()
+        page_patcher = patch.object(module, "page", side_effect=page_spy)
+        page_patcher.start()
+
+        def stop():
+            page_patcher.stop()
+            patcher.stop()
+
+        return calls, holders, confirmations, stop
 
     def test_the_open_direction_takes_both_texts_from_one_call(self):
-        calls, holders, patcher = self._spy(mechanism_switch)
-        with patcher:
+        calls, holders, confirmations, stop = self._spy(mechanism_switch)
+        try:
             body = self.client.get(url(MechanismKind.MECHANISM.value)).json()
+        finally:
+            stop()
 
         self.assertEqual(len(calls), 1, "`page()` 每次请求只许调一次")
+        self.assertEqual(
+            len(confirmations), 1, "取数（`confirmation()`）每次请求只许一次"
+        )
         self.assertEqual(body["body"], "<BODY-MARK>")
         # 当前档位是 Shadow ⇒ 这一页对应「出 Shadow」⇒ summary 取 page.summary。
         self.assertEqual(body["summary"], "<SUMMARY-MARK>")
@@ -203,11 +231,19 @@ class TestBodyAndSummaryComeFromOneEvaluation(_Client):
             reason="测试",
         )
 
-        calls, holders, patcher = self._spy(mechanism_switch)
-        with patcher:
+        calls, holders, confirmations, stop = self._spy(mechanism_switch)
+        try:
             body = self.client.get(url(MechanismKind.MECHANISM.value)).json()
+        finally:
+            stop()
 
         self.assertEqual(len(calls), 1)
+        # **这一条才是真正的防回归**：`closing_summary(module.confirmation())` 那种
+        # 「换一份摘要就重新取一次数」的实现只调一次 `page()`，所以只数 `page()` 抓不到它；
+        # 数 `confirmation()` 才抓得到（两次读表 = 两个快照）。
+        self.assertEqual(
+            len(confirmations), 1, "换摘要不许重新取数：正文与摘要必须同一份快照"
+        )
         self.assertEqual(body["body"], "<BODY-MARK>")
         self.assertEqual(body["to_mode"]["value"], MechanismMode.SHADOW.value)
         # 关闭方向的摘要是**从同一份 data 渲染**出来的那句话，不是 page.summary。
@@ -234,11 +270,14 @@ class TestBodyAndSummaryComeFromOneEvaluation(_Client):
             reason="测试",
         )
 
-        calls, holders, patcher = self._spy(gate_switch)
-        with patcher:
+        calls, holders, confirmations, stop = self._spy(gate_switch)
+        try:
             body = self.client.get(url(MechanismKind.REGIME_GATE.value)).json()
+        finally:
+            stop()
 
         self.assertEqual(len(calls), 1)
+        self.assertEqual(len(confirmations), 1)
         self.assertTrue(calls[0].get("closing"))
         # 正文第一行是关闭那一套（与 CLI / `/regime gate off` 逐字同一个常量）。被替身
         # 换掉的是响应里那一段，真实那一份在 `holders` 里——两个都钉，各自钉一件事。
@@ -336,10 +375,14 @@ class TestDirectionAndDetails(_Client):
         self.assertIn("managed", gate)
         self.assertIn("blanket_hold", gate)
         self.assertIn("skipped", gate)
-        # 冷启动下 `regime` 是 `None` 而 `regime_display` 仍要给一句话（理由同 T2 的
-        # `overview.regime_state.cold`）：`null` 只说了「没有」。
+        # 冷启动下 `regime` 是 `None`（`null` 说的是「从没判定过」，理由同 T2 的
+        # `overview.regime_state.cold`）。
         self.assertIsNone(gate["regime"])
-        self.assertTrue(gate["regime_display"])
+        # **阶段只有一个出口**：不许再放一个平级的 `regime_display`。两处放同一个事实的
+        # 代价不只是冗余——`gate_switch._regime_display`（脏值原样回显）与
+        # `deactivation_run.regime_display`（脏值加「认不出的阶段」后缀）是两个换算口，
+        # 脏行上会真的说出两个不同的字。
+        self.assertNotIn("regime_display", gate)
 
 
 # --------------------------------------------------------------------------- #
@@ -492,9 +535,105 @@ class TestTheExplicitDirection(_Client):
             briefing_module.evaluate(MechanismKind.MECHANISM, to_mode="not_a_mode")
 
     def test_the_target_mode_is_the_one_the_flip_would_use(self):
-        """方向与 `flip_*` 的入参是同一个枚举值，不是字符串。"""
-        result = briefing_module.evaluate(
-            MechanismKind.EVENT_BREAKER, to_mode=MechanismMode.EXECUTING
-        )
+        """方向与 `flip_*` 的入参是同一个枚举值，不是字符串。
+
+        **摘要那一条用标记验证**，不拿 `breaker_switch.page().summary` 去比：那是两次求值
+        的两个字符串，任何一个确定性实现都会绿——比的是「两个时刻恰好相同」，不是「同源」。
+        """
+        original = breaker_switch.page
+
+        def marked(**kwargs):
+            return dataclasses.replace(original(**kwargs), summary="<S>")
+
+        with patch.object(breaker_switch, "page", side_effect=marked):
+            result = briefing_module.evaluate(
+                MechanismKind.EVENT_BREAKER, to_mode=MechanismMode.EXECUTING
+            )
+
         self.assertIs(result.to_mode, MechanismMode.EXECUTING)
-        self.assertEqual(result.summary, breaker_switch.page().summary)
+        self.assertEqual(result.summary, "<S>")
+
+
+# --------------------------------------------------------------------------- #
+# 性质 8：脏行不该让整页炸掉（本模块的口径是「认不出来原样回显」）
+# --------------------------------------------------------------------------- #
+
+
+class TestDirtyEnumRowsDoNotBreakThePage(TestCase):
+    """`serializers` 的既定口径是「认不出来的取值原样回显，不猜、不回落」。
+
+    事件的 `impact` / `status` 曾经走模型的 `impact_display` / `status_display`，而那两个
+    property 是 `EventImpact(self.impact).display`——**没有兜底**。手工写脏的一行（迁移回填、
+    补录）会让整张确认页 500，而同一个脏值在别的读口都只是原样显示。这条钉的是「一页不许
+    因为一条脏行炸掉，也不许把它显示成某个真实档位」。
+    """
+
+    def test_a_dirty_impact_is_echoed_not_guessed(self):
+        from types import SimpleNamespace
+
+        from apps.regime import serializers as ser
+
+        dirty = SimpleNamespace(
+            impact="bogus", status="bogus", scope_kind="market", scope_display="全市场"
+        )
+
+        self.assertEqual(
+            ser.event_impact_payload(dirty), {"value": "bogus", "display": "bogus"}
+        )
+        self.assertEqual(
+            ser.event_status_payload(dirty), {"value": "bogus", "display": "bogus"}
+        )
+
+    def test_a_clean_row_still_uses_the_enum_display(self):
+        """兜底不能把正常行也变成原样回显：认得出就必须给枚举的展示名。"""
+        from types import SimpleNamespace
+
+        from apps.regime import serializers as ser
+        from apps.regime.models import EventImpact
+
+        clean = SimpleNamespace(impact="high", status="bogus", scope_kind="market")
+
+        self.assertEqual(
+            ser.event_impact_payload(clean),
+            {"value": "high", "display": EventImpact.HIGH.display},
+        )
+
+
+# --------------------------------------------------------------------------- #
+# 性质 9：参数错与内部故障不混（修 #3 的锚）
+# --------------------------------------------------------------------------- #
+
+
+class TestParameterErrorsAreNotInternalFaults(_Client):
+    """**`except ValueError` 只许包住 `kind` 的解析，不许包住 `payload()`。**
+
+    T3 的复核修整（`f2861ac`）把这条改对了，但**当时没有补用例**——所以它一直是可以
+    悄悄回退的：把 `try` 重新包住整个 `payload()`，本文件其余 27 条用例全绿（实测）。
+    这一条就是那道闸，它问的是「视图有没有把内部故障误报成客户端的参数错」。
+
+    两件事必须分开，因为要求人做的动作完全不同：
+
+    - `kind` 认不出来 → **400**，人该改 URL；
+    - `payload()` 里因脏数据抛 `ValueError`（流水表一条手写坏的 `to_mode`）→ **500**，
+      人该去修数据。报成 400 等于对操作者撒谎（路径段明明合法），还会让他一遍遍改 URL。
+    """
+
+    def test_an_internal_value_error_is_not_reported_as_a_bad_kind(self):
+        """`payload()` 内部抛 `ValueError` 时，视图不许把它吞成 400。"""
+        from apps.regime import briefing as briefing_module
+
+        def boom(*args, **kwargs):
+            raise ValueError("'bogus' is not a valid MechanismMode")
+
+        with patch.object(briefing_module, "payload", side_effect=boom):
+            # Django 的测试客户端默认把未捕获异常原样抛出来（`raise_request_exception`），
+            # 那正是「没被吞掉」的证据。吞成 400 的话这里拿到的会是一个 Response。
+            with self.assertRaises(ValueError):
+                self.client.get(url(MechanismKind.MECHANISM.value))
+
+    def test_an_unknown_kind_is_still_a_bad_request(self):
+        """反方向的锚：`kind` 认不出来仍然必须是 400（别为了修上面那条把这条弄丢）。"""
+        resp = self.client.get("/api/regime/briefing/bogus/")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("未知的 kind", resp.json()["error"])

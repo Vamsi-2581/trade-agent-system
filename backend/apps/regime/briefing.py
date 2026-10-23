@@ -5,7 +5,7 @@
 三个开关各有一页「先看一眼再决定」的确认页，它们的**求值口与形状完全同形**（同一个
 `page()` 返回 `body` + `summary` + `data` 三件套），所以 kind → 模块的映射写成一张表
 `BRIEFING_SOURCES`，而不是在视图里 `if/elif` 三次。加第四个开关那天，要改的是这张表加
-一行；忘掉登记会红在 `test_briefing.test_every_kind_is_registered`——它断言这张表的键集
+一行；忘掉登记会红在 `test_briefing.test_every_mechanism_kind_is_registered`——它断言这张表的键集
 与 `MechanismKind` 相等。
 
 **`body` 与 `summary` 必须来自同一次 `page()` 求值**，这是本模块存在的全部理由，也是
@@ -18,15 +18,27 @@
 而「网页上看到的理由」与「流水里记的理由」逐字一致这件事，只能靠两处共用同一段取数
 逻辑来保证，不能靠两处各写一遍相同的表达式。
 
-## 方向：与当前档位相反的那一个
+## 方向：与当前档位相反的那一个（**这不是「slash 打印的那一页」**）
 
-页面上那一个动作永远只有一个——当前是 Shadow 就只能出 Shadow，当前是执行态就只能退回
-Shadow。所以方向由**当前档位**推出来（`to_mode`），前端不用传：`GET briefing/<kind>/`
-问的就是「此刻我能做的那一步，会写进去什么」。这一点对 gate 尤其重要：它支持两个方向的
-正文（`page(closing=True/False)` 渲染两套措辞，见 `gate_switch._render_body`），而两个方向
-必须是**同一次求值的两种说法**，不是两次求值。另外两个开关今天只有一个方向的正文（关闭
-方向在 slash 通路里只回一句「关掉之后什么变了」），所以它们的方向差异只体现在 `summary`
-上——`closing_summary(data)` 收的仍是同一份 `data`。
+只读端点的方向由**当前档位**推出来（`to_mode` = 另一档），前端不用传：`GET
+briefing/<kind>/` 问的是「此刻我能做的那一步，会写进去什么」。
+
+**它与 `/regime gate` 打印的那一页不是同一页，这一点必须说清**：`/regime gate`（以及
+`regime_gate` 不带动作参数时）无论当前档位是什么，都印 `page(closing=False)` 那一套「上线
+确认」正文（`regime_commands._gate_status`、`regime_gate.handle` 的 `closing = bool(off)`）。
+本端点则按档位取方向：gate 已经是执行态时，它给的是**下线确认**那一套正文。
+
+两种取法都对，但它们回答的不是同一个问题，所以不要拿本端点当「slash 那页的 JSON 版」：
+
+- `/regime gate` 回答「这个开关现在是什么状态、打开会怎样」——那是**状态页**，方向恒定。
+- 本端点回答「我此刻能做的那一步，确认页长什么样、`reason` 会写什么」——那是**动作页**，
+  方向跟着档位走。T4 的确认弹窗要的正是后者（它要展示的就是那一次动作的页）。
+
+同一个 `kind` 在同一个档位下**两个方向都是同一次求值的两种说法**，不是两次求值：
+`gate_switch.page(closing=...)` 只算一次 `data`，两个方向只是对同一份样子说不同的话
+（见 `gate_switch._render_body`）。另外两个开关今天只有一个方向的正文（关闭方向在 slash
+通路里只回一句「关掉之后什么变了」），所以它们的方向差异只体现在 `summary` 上——
+`closing_summary(data)` 收的仍是同一份 `data`。
 
 **不缓存**：`mechanism_switch.page()` 会经 `truth_run.agreement(tags=None)` →
 `slicing.load_tags()` 全量重算所有历史标签；`gate_switch.page()` 会经
@@ -215,11 +227,13 @@ def _gate_details(data: Any) -> dict[str, Any]:
     """
     return {
         "as_if_open": data.as_if_open,
-        # 冷启动时 `regime` 是 `None`，但那句话仍然要有人给：`regime_display` 在那种情况下
-        # 是「（无）」（`gate_switch._regime_display`），与 T2 的 `overview.regime_state.cold`
-        # 是同一取向——`null` 只说了「没有」，没说是「从没判定过」。
+        # **一个阶段只有一个出口**：`regime` 成对给出（冷启动时是 `None`），不再另放一个
+        # `regime_display` 平级键。两处放同一个事实的代价不只是冗余——`gate_switch._regime_display`
+        # 与 `deactivation_run.regime_display` 是**两个**换算口（前者对脏值原样回显，后者加
+        # 「认不出的阶段」后缀），所以脏行上它们会真的说出两个不同的字。这里只留 `regime`
+        # 那一对；冷启动那句「（无）」由前端按 `regime is null` 走空态（与 T2 的
+        # `overview.regime_state.cold` 同一取向——`null` 说的是「从没判定过」）。
         "regime": None if data.regime is None else ser.regime_payload(data.regime),
-        "regime_display": data.regime_display,
         "regime_effective_at": ser.iso(data.regime_effective_at),
         "blanket": data.blanket,
         "blanket_hold": data.blanket_hold,

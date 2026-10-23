@@ -39,6 +39,8 @@ from apps.regime import slice as sl
 from apps.regime.quant import PRIORITY
 from apps.regime.models import (
     ActorKind,
+    EventImpact,
+    EventStatus,
     MechanismKind,
     MechanismMode,
     PoolSource,
@@ -193,22 +195,31 @@ def kind_payload(kind: MechanismKind) -> dict[str, str]:
 def event_impact_payload(event: Any) -> dict[str, str]:
     """一条重大事件的冲击档位。
 
-    **收事件对象、不收 slug**：`MajorEvent.impact_display` 已经是「这一条事件怎么说法」的
-    唯一出处（`Model.impact_display` 的 docstring），而收 slug 会逼调用方再去查一张枚举表
-    ——那就是「事件的展示名」的第二个说法。sigil 与其它 payload 同形（成对），所以前端
-    仍然只认 `{value, display}` 这一种形状。
+    **收事件对象、不收 slug**：调用方（`briefing._event_summary`）拿到的是模型行，让它自己
+    再查一张枚举表就是给「这条事件怎么说」造第二个说法。
+
+    **但展示名不走模型的 `impact_display`**：那个 property 是
+    `EventImpact(self.impact).display`，**没有兜底**——手工写脏的一行（迁移回填、补录）会
+    让整张确认页 500，而本模块的既定口径是「认不出来的取值原样回显，不猜、不回落」
+    （`_enum_display` 的 docstring，`regime_payload` / `state_payload` 都照此办）。所以这里
+    走 `_enum_display`：认得出就用枚举的展示名（与 `impact_display` 逐字同一个字），认不出
+    就原样回显那个脏值——**一条脏行不该让一整页炸掉，也不该被显示成某个真实档位**。
     """
-    return _labelled(event.impact, event.impact_display)
+    return _labelled(event.impact, _enum_display(EventImpact, event.impact))
 
 
 def event_status_payload(event: Any) -> dict[str, str]:
-    """一条重大事件的生命周期（排期 / 已取消）。展示名取模型自己的 property。"""
-    return _labelled(event.status, event.status_display)
+    """一条重大事件的生命周期（排期 / 已取消）。理由同 `event_impact_payload`。"""
+    return _labelled(event.status, _enum_display(EventStatus, event.status))
 
 
 def event_scope_payload(event: Any) -> dict[str, str]:
-    """一条重大事件的作用域（全市场 / 指定品种）。展示名取模型自己的 property
-    ——品种列表那一支是「、」连起来的，只有模型知道怎么拼它。"""
+    """一条重大事件的作用域（全市场 / 指定品种）。
+
+    **这一对收模型的 property**：`scope_display` 不只是查枚举（品种列表那一支是「、」连起来
+    的，只有模型知道怎么拼它），而 `scope_kind` 认不出来时它回的是空列表拼出来的空串——
+    那不会抛异常，所以不需要兜底。两者的差别就在「有没有可能抛」这一件事上。
+    """
     return _labelled(event.scope_kind, event.scope_display)
 
 

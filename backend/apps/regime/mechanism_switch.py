@@ -297,6 +297,12 @@ class Confirmation:
     event_days: int
     #: 最近一次**退回 Shadow** 的那条流水（人工或自熔断），从没退回过是 `None`。
     last_back: RegimeMechanismSwitch | None
+    #: 求值那一刻的档位。**必须由 `confirmation()` 记下来，不许渲染层再去读一次**：
+    #: `_render_body` 印「当前档位」、`closing_summary` 印「退回前是执行态」，两者若各自
+    #: 读一次，中间落一次切换就会让同一份快照渲染出两句互相矛盾的档位——而那正是
+    #: `page()` 的 docstring 说它要防的事（「确认页上写的数与人点头之后落进 reason 的数
+    #: 必须是同一次快照」）。一次求值里档位只读一次，值随快照走。
+    mode: MechanismMode
     #: 第①条标准（一致率）的比对结果。**没有默认值**：给它一个 `Agreement()` 的默认值，
     #: 就是让「忘了算」在页面上长得与「一段真值都没录」一模一样，而这两件事一个要查代码
     #: 一个要录真值。构造这个对象的地方必须显式回答「一致率从哪来」。
@@ -377,6 +383,8 @@ def confirmation(*, now: datetime | None = None) -> Confirmation:
 
     return Confirmation(
         now=at,
+        # 档位与其它数取自同一次求值：渲染层的两句话都从这一个值说，不再各读一次。
+        mode=RegimeMechanismSwitch.current(KIND),
         achieved=achieved,
         trigger_days=trigger_days,
         deactivation_days=deactivation_days,
@@ -541,10 +549,11 @@ def _render_body(data: Confirmation) -> str:
     之所以是一整页：这一档决定的是「机制整体可不可信」，而它的三条依据分散在三张表里
     （判定、Shadow 记录、事件日历）。分成几条消息发，就会有人只看到其中一条。
     """
-    mode = RegimeMechanismSwitch.current(KIND)
     lines = [
         "机制整体 · 出 Shadow 体检（这一步本身不改变任何东西）",
-        f"当前档位：{mode.display}",
+        # 档位随快照走（`Confirmation.mode`），不在这里再读一次：同一页上「当前档位」与
+        # 摘要里那句「退回前是…」必须说同一件事。
+        f"当前档位：{data.mode.display}",
         "",
         *_start_line(data),
         "",
@@ -611,9 +620,10 @@ def closing_summary(data: Confirmation) -> str:
     那一刻留下了什么」。最要紧的是**退回不会解除任何东西**——机制档不是执行开关，停下它
     不动停止声明表、不动策略停用决策，也不动人工豁免（那些各有各的开关与到期）。
     """
-    mode = RegimeMechanismSwitch.current(KIND)
     where = (
-        "退回前是执行态" if mode is MechanismMode.EXECUTING else "退回前本来就是 Shadow"
+        "退回前是执行态"
+        if data.mode is MechanismMode.EXECUTING
+        else "退回前本来就是 Shadow"
     )
     age = (
         f"Shadow 已跑 {data.achieved.ran_days} 个自然日"
