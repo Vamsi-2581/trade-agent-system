@@ -60,7 +60,7 @@ describe("权限与二次确认", () => {
   });
 
   it("staff 看得到按钮；点了先出二次确认，写清只重建池化表", () => {
-    render(<RebuildButton isStaff />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={5} />);
 
     fireEvent.click(screen.getByTestId("rebuild-trigger"));
 
@@ -74,7 +74,7 @@ describe("权限与二次确认", () => {
   });
 
   it("取消就什么都不发生", () => {
-    render(<RebuildButton isStaff />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={5} />);
 
     fireEvent.click(screen.getByTestId("rebuild-trigger"));
     fireEvent.click(screen.getByTestId("rebuild-confirm-cancel"));
@@ -84,7 +84,7 @@ describe("权限与二次确认", () => {
   });
 
   it("确认后才投递，并且轮询的是回执里的 task_id", async () => {
-    render(<RebuildButton isStaff />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={5} />);
     askAndConfirm();
 
     await waitFor(() => expect(rebuildPool).toHaveBeenCalledTimes(1));
@@ -97,7 +97,7 @@ describe("权限与二次确认", () => {
 describe("四种收场分开显示", () => {
   it("新代就绪：绿色 + cells_changed", async () => {
     getRebuildStatus.mockResolvedValue(status({ cells_changed: 7 }));
-    render(<RebuildButton isStaff />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={5} />);
     askAndConfirm();
 
     const outcome = within(await screen.findByTestId("rebuild-outcome"));
@@ -117,7 +117,7 @@ describe("四种收场分开显示", () => {
         cells_changed: null,
       })
     );
-    render(<RebuildButton isStaff />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={5} />);
     askAndConfirm();
 
     const outcome = await screen.findByTestId("rebuild-outcome");
@@ -138,7 +138,7 @@ describe("四种收场分开显示", () => {
         cells_changed: null,
       })
     );
-    render(<RebuildButton isStaff />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={5} />);
     askAndConfirm();
 
     const outcome = await screen.findByTestId("rebuild-outcome");
@@ -156,7 +156,7 @@ describe("四种收场分开显示", () => {
         failure: "同一输入指纹已有一代就绪",
       })
     );
-    render(<RebuildButton isStaff />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={5} />);
     askAndConfirm();
 
     const outcome = await screen.findByTestId("rebuild-outcome");
@@ -179,7 +179,7 @@ describe("四种收场分开显示", () => {
       )
       .mockResolvedValueOnce(status({ cells_changed: 3 }));
 
-    render(<RebuildButton isStaff pollIntervalMs={5} />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={5} />);
     askAndConfirm();
 
     await waitFor(() => expect(getRebuildStatus).toHaveBeenCalledTimes(2));
@@ -200,7 +200,7 @@ describe("四种收场分开显示", () => {
         display: "超过 30 分钟仍在重算中，检查 worker",
       })
     );
-    render(<RebuildButton isStaff pollIntervalMs={10_000} />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={10_000} />);
     askAndConfirm();
 
     const stale = await screen.findByTestId("rebuild-stale");
@@ -220,7 +220,7 @@ describe("四种收场分开显示", () => {
         state_ambiguous: true,
       })
     );
-    render(<RebuildButton isStaff />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={5} />);
     askAndConfirm();
 
     const pending = within(await screen.findByTestId("rebuild-pending"));
@@ -233,10 +233,25 @@ describe("四种收场分开显示", () => {
   });
 });
 
+describe("第一次读状态的时机（T9 冒烟实测出来的缺陷）", () => {
+  it("投递完不许立刻读：那一刻 worker 一定还没取走，读到的是 null", async () => {
+    render(<RebuildButton isStaff firstPollDelayMs={50} pollIntervalMs={50} />);
+    askAndConfirm();
+
+    await waitFor(() => expect(rebuildPool).toHaveBeenCalledTimes(1));
+    // 投递的同一拍里不该有状态读——从前的写法在这里就已经读了一次，而那次必然读到
+    // `outcome === null`（worker 还没取走），页面于是把一次刚投递成功的重算说成
+    // 「还没有 worker 取走」，真正的收场永远看不到。
+    expect(getRebuildStatus).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(getRebuildStatus).toHaveBeenCalledWith("task-1"));
+  });
+});
+
 describe("请求失败", () => {
   it("投递失败是红字原文，不是白页", async () => {
     rebuildPool.mockRejectedValue(new Error("API error: 503"));
-    render(<RebuildButton isStaff />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={5} />);
     askAndConfirm();
 
     const error = await screen.findByTestId("rebuild-error");
@@ -246,7 +261,7 @@ describe("请求失败", () => {
 
   it("轮询失败也如实说，不假装重算成功", async () => {
     getRebuildStatus.mockRejectedValue(new Error("API error: 500"));
-    render(<RebuildButton isStaff />);
+    render(<RebuildButton isStaff firstPollDelayMs={5} pollIntervalMs={5} />);
     askAndConfirm();
 
     const error = await screen.findByTestId("rebuild-error");

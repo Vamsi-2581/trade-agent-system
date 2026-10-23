@@ -45,13 +45,31 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * **第一次**读状态之前的等待（毫秒）。投递返回时 worker 几乎一定还没取走任务，所以这一刻
+ * 读到的必然是 `outcome === null`——一次刚投递成功的重算会被当场说成「还没有 worker 取走」。
+ *
+ * 取 3 秒而不是回执里的 `poll_after_seconds`（60 秒）：那个数是「重算是分钟级，别一秒一问」
+ * 的建议节拍，而实测一轮池化只跑 0.4–0.5 秒（40 条回测）。等 60 秒才出结果，会让人以为
+ * 页面卡住了，而真相是它一直在等。3 秒同时是「worker 有取走的机会」的合理下限：等不到就
+ * 继续按 `poll_after_seconds` 轮询，`pending` 那句话仍然会说出口。
+ */
+const FIRST_POLL_DELAY_MS = 3_000;
+
 export interface RebuildButtonProps {
   /** 写权限（ADR 0005：这是界面纪律，不是安全边界）。非 staff 直接不渲染。 */
   isStaff: boolean;
   /** 一轮重算到达终局时回调（页面据此刷新矩阵与代际历史）。 */
   onFinished?: (status: RegimeRebuildStatus) => void;
   /**
-   * 轮询间隔的兜底（毫秒）。默认用后端回执里的 `poll_after_seconds`——
+   * **第一次**读状态的等待（毫秒）。默认 `FIRST_POLL_DELAY_MS`。
+   *
+   * 它和下面的 `pollIntervalMs` 是两个旋钮而不是一个：首次等待只需「worker 有机会取走」，
+   * 而后续节拍是「还在跑时多久回来问一次」。
+   */
+  firstPollDelayMs?: number;
+  /**
+   * 后续轮询的间隔（毫秒）。默认用后端回执里的 `poll_after_seconds`——
    * 那是建议值，测试里才需要钉一个确定的间隔。
    */
   pollIntervalMs?: number;
@@ -60,6 +78,7 @@ export interface RebuildButtonProps {
 export default function RebuildButton({
   isStaff,
   onFinished,
+  firstPollDelayMs,
   pollIntervalMs,
 }: RebuildButtonProps) {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -127,7 +146,20 @@ export default function RebuildButton({
         setPhase("settled");
         return;
       }
-      await pollOnce(dispatch.task_id, dispatch.poll_after_seconds);
+      // **第一次读状态要等一会儿**（T9 冒烟实测出来的一个真缺陷）。
+      //
+      // 从前的写法是「投递完立刻读」。那一刻 worker 几乎一定还没把任务取走，Celery 回
+      // PENDING、`outcome === null`，而下面那条判据会说「投递成功但还没有 worker 取走」
+      // ——一次刚投递成功的重算被当场读成「没人在跑」，真正的收场（新代 / 复用）永远
+      // 走不到。
+      //
+      // 这一句等待同时保住了下面那条判据的含义：等过之后**仍然**是 `outcome === null`，
+      // 才是真的「没有 worker 取走，或结果已过期」——那时说这句话是有依据的。
+      const firstDelay = firstPollDelayMs ?? FIRST_POLL_DELAY_MS;
+      timer.current = setTimeout(
+        () => void pollOnce(dispatch.task_id, dispatch.poll_after_seconds),
+        firstDelay
+      );
     } catch (caught) {
       if (!mounted.current) return;
       setError(messageOf(caught));
