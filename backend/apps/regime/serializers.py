@@ -134,8 +134,55 @@ def status_payload(value: Any) -> dict[str, str]:
 
 
 def actor_kind_payload(value: Any) -> dict[str, str]:
-    """触发方类别（命令行 / 定时任务 / 聊天渠道）。表在 `ActorKind`。"""
+    """触发方类别（命令行 / 定时任务 / 聊天渠道 / 网页）。表在 `ActorKind`。"""
     return _labelled(value, _enum_display(ActorKind, value))
+
+
+def outcome_payload(value: str, *, generation: int | None = None) -> dict[str, str]:
+    """一次重算的收场。**词表在 `pool_rebuild`**（那是判据的家），这里只配对。
+
+    收场不是模型上的枚举——它由 `pool_rebuild.outcome_of()` 从「状态 + 两个布尔 + 失败
+    原文」折出来，所以没有 `Model.choices` 可查。展示名仍由后端给（map #40 的渲染分界），
+    前端不重拼。
+
+    `generation` 只对 `reused` 有意义（「复用第 N 代」），且它**不是词表的一部分**：编号
+    是数据。传进来就补上，没传就是词表原句。
+    """
+    from apps.regime import pool_rebuild
+
+    return _labelled(value, pool_rebuild.outcome_display(value, generation=generation))
+
+
+def stale_building_payload(
+    generation: RegimePoolRebuild, *, now: Any = None
+) -> dict[str, Any]:
+    """「这一代卡在重算中了吗」：布尔 + 已经过去多少分钟。
+
+    **布尔与分钟数成对**，与 `_labelled` 同一条理由：只给布尔，前端拿不到 N 就没法把
+    「超过 N 分钟仍在重算中，检查 worker」这句话说出来；只给分钟数，前端就得自己跟阈值
+    比一遍——那就是本仓反复在防的「同一件事的第二个说法」，阈值改一处、另一处不知道。
+
+    三件事实都要能让调用方区分开：还在正常跑（`stale=False` + 分钟数）、卡住了
+    （`stale=True`）、以及**根本不是 `building`**（`stale=False` 且 `minutes=None`）——
+    最后一种不是「跑了 0 分钟」，它是「这一代已经收场了」。给 0 会把 `failed` 的行说成
+    「刚跑」。
+    """
+    from apps.regime import pool_rebuild
+
+    if generation.status != RebuildStatus.BUILDING.value:
+        return {"stale": False, "minutes": None, "threshold_minutes": _stale_limit()}
+    return {
+        "stale": pool_rebuild.is_stale_building(generation, now=now),
+        "minutes": pool_rebuild.building_minutes(generation, now=now),
+        "threshold_minutes": _stale_limit(),
+    }
+
+
+def _stale_limit() -> int:
+    """阈值本身也透出：页面要说的那句「超过 N 分钟」里的 N 不该在前端另写一份。"""
+    from apps.regime import pool_rebuild
+
+    return int(pool_rebuild.STALE_BUILDING_AFTER.total_seconds() // 60)
 
 
 def kind_payload(kind: MechanismKind) -> dict[str, str]:
@@ -250,7 +297,34 @@ def generation_summary(generation: RegimePoolRebuild) -> dict[str, Any]:
         # 不是防御性编程，是把「模型列在运行时是什么」收在一处，理由同 `iso`。
         "exclusions": dict(_mapping(generation.exclusions)),
         "failure": generation.failure,
+        # --- 这一代自己的收场（P5 子票 #47）--------------------------------- #
+        # 四种收场里，`new_generation` / `duplicate` / `failed` 可以从一行记录判出来，
+        # `reused` **判不出来**：复用那一轮连一条 `building` 行都没有。它只在任务状态读
+        # 里出现（`rebuild_status_payload`），所以这两个键一个都不在这里撒谎。
+        #
+        # `outcome` 与 `status` 不是同一件事：`duplicate` 那一行在库里是 `failed`
+        # （约束撞上时 `_mark_failed` 只坐这一个入口），把 `status=failed` 直接当收场显示，
+        # 一次并发触发就会变成一条红色故障（ADR 0006 明令这是「约束在起作用」）。
+        "outcome": outcome_payload(ser_outcome_of(generation)),
+        "stale_building": stale_building_payload(generation),
     }
+
+
+def ser_outcome_of(generation: RegimePoolRebuild) -> str:
+    """一行记录 → 收场。**只是 `pool_rebuild.outcome_of` 的转发**，不在这里另判一次。
+
+    存在的理由是可读性：`generation_summary` 里那行要短，而优先级（`reused` 先于
+    `status`）必须留在判据那一个函数里。转发也不许加判断——一加就是第二处判据。
+
+    `str(...)` 是「把模型列的运行时形状收在一处」的同一条手法（见本函数上面 `iso` 的
+    docstring）：本仓没装 `django-stubs`，pyright 看到的是 `CharField` / `TextField`
+    描述符而不是运行时值。
+    """
+    from apps.regime import pool_rebuild
+
+    return pool_rebuild.outcome_of(
+        status=str(generation.status), failure=str(generation.failure)
+    )
 
 
 def cell_payload(row: Mapping[str, Any], strategy_name: str) -> dict[str, Any]:

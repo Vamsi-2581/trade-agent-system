@@ -31,6 +31,20 @@ from . import views
 urlpatterns = [
     path("overview/", views.overview, name="regime-overview"),
     path("pool/generations/", views.pool_generations, name="regime-pool-generations"),
+    # `pool/rebuild/<task_id>/` 与 `pool/rebuild/` 是**两条**路由而不是一条带可选段：
+    # 前者的 `<task_id>` 是 Celery 的 uuid，后者是「投递」这个动作。写成一个可选段的
+    # 正则，`pool/rebuild/` 与 `pool/rebuild/x/y/` 的匹配就变成一个需要读正则才说得清的
+    # 问题——而它们一个是 202、一个是 404，差别够大到值得两条路径。
+    #
+    # 顺序：带 `<task_id>` 的那条写在 `pool/rebuild/` **之前**，理由与
+    # `pool/generations/` 排 `pool/` 之前同源（见模块 docstring）——让阅读顺序与匹配顺序
+    # 一致，将来有人把某条改成前缀式匹配时这个顺序仍然是对的。
+    path(
+        "pool/rebuild/<str:task_id>/",
+        views.pool_rebuild_status,
+        name="regime-pool-rebuild-status",
+    ),
+    path("pool/rebuild/", views.pool_rebuild_dispatch, name="regime-pool-rebuild"),
     path("pool/", views.pool, name="regime-pool"),
     path("briefing/<str:kind>/", views.briefing, name="regime-briefing"),
     path("switch/", views.switch, name="regime-switch"),

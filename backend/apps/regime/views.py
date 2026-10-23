@@ -115,6 +115,96 @@ COLD_STATE_DISPLAY = "库中还没有任何生效过的判定（冷启动）"
 DEFAULT_PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
 
+#: 投递之后**建议**多久来问一次（秒）。不是契约：真正的判据是状态读返回的 `done`。
+#: 60 与页面自己那条 60 秒轮询同源——不为这一页另造一个节奏。
+POLL_AFTER_SECONDS = 60
+
+#: Celery 的终态。三种：成功、失败、被撤销（重投前显式 revoke 过）。
+#: **`REVOKED` 算终态**：它不会自己再往下走了，等下去只等出一个永远不动的转圈。
+TERMINAL_STATES = frozenset({"SUCCESS", "FAILURE", "REVOKED"})
+
+#: 「投递成功但 worker 还没取走」那句话。**与「重算中」必须分开**：`
+#: `beat_health.py` 模块 docstring 记的缺口正是「这个任务不进任务健康检查的扫面」，所以
+#: 一个没人消费的任务看起来与一条在跑的任务一样——除非把这句话说出来。
+PENDING_DISPLAY = (
+    "任务已投递但还没有 worker 取走，或这次的结果已经过期（不是「重算中」）："
+    "检查 celery worker 是否在运行；若确实跑过，去看代际历史里那一代有没有落成"
+)
+
+
+def _no_store(response: Response) -> Response:
+    """状态读也 `no-store`：`building` 行每一秒都在变，缓存一次就是缓存一个错误的「现在」。
+
+    与 `briefing` / `switch` 同一条纪律的延伸——三者都在回答「此刻是什么状态」。
+    """
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+def _no_building() -> dict[str, Any]:
+    """「没有一代正在建」的形状。**`minutes` 是 `None`，不是 0**——见 `stale_building_payload`。"""
+    from apps.regime import pool_rebuild
+
+    return {
+        "stale": False,
+        "minutes": None,
+        "threshold_minutes": int(
+            pool_rebuild.STALE_BUILDING_AFTER.total_seconds() // 60
+        ),
+    }
+
+
+def _generation_from_summary(
+    summary: Mapping[str, Any],
+) -> RegimePoolRebuild | None:
+    """摘要里的 `rebuild_id` → 那一行。查不到就是 `None`（不猜、不造）。
+
+    查不到是真实情形：`reused` 那一轮的 id 是**旧代**的 id（它自己有），而它本来就在库里。
+    真查不到只可能是两次请求之间有人删了行——那时返回 `None` 比返回一个拼接出来的对象好。
+    """
+    rebuild_id = summary.get("rebuild_id")
+    if rebuild_id is None:
+        return None
+    return RegimePoolRebuild.objects.filter(pk=rebuild_id).first()
+
+
+def _current_building() -> RegimePoolRebuild | None:
+    """此刻正在建的那一代（`building` 且**还没被标成失败**）。
+
+    按 `-started_at` 取最近一条：并发触发时可能不止一条在 `building`，而页面要显示的是
+    「我按的那一次大概对应哪一代」。取最近一条而不是最早——最早那条更可能是已经死掉的。
+    """
+    return (
+        RegimePoolRebuild.objects.filter(status=RebuildStatus.BUILDING.value)
+        .order_by("-started_at", "-id")
+        .first()
+    )
+
+
+def _most_recent_generation(task_id: str) -> RegimePoolRebuild | None:
+    """任务失败时，库里最近那一代。
+
+    **只用它来取 `failure` 原文与状态，不用它断言「这次失败的就是它」**：任务与代之间没
+    有外键（`reused` 那条路径也没有行可挂），强认会在并发时张冠李戴。取不到就是 `None`，
+    那时失败原因退回 Celery 那条串。
+    """
+    return RegimePoolRebuild.objects.order_by("-started_at", "-id").first()
+
+
+def _failure_text(result) -> str:
+    """Celery 的结果里那条异常串。**没有就空串**，不强拼一个「未知错误」。
+
+    `result.result` 在 FAILURE 时是一个异常对象（或它的 `repr`），在其它状态下是别的
+    东西——所以这里只做一件事：能转成字符串就转，转不出来给空串。
+    """
+    try:
+        value = result.result
+    except Exception:  # noqa: BLE001 —— 结果后端挂了不该让状态读 500
+        return ""
+    if value is None:
+        return ""
+    return str(value)
+
 
 # --------------------------------------------------------------------------- #
 # 写入口：kind → 既有写方
@@ -180,6 +270,17 @@ def _server_error(message: str) -> Response:
     什么，退回成一个状态码就把那件事丢了。
     """
     return Response({"error": message}, status=500)
+
+
+def _not_dispatched(message: str) -> Response:
+    """503：**投递本身失败**（broker 不可用、序列化不了参数）。
+
+    它既不是 400（请求拼错了）也不是 500（我们自己的 bug）：请求是合法的，服务端逻辑也
+    跑通了，出问题的是那条到下层的通路。这个区分是给页面看的——503 该显示的文案是「没
+    投出去，稍后重试」，而 500 该显示「投出去了但结果不确定，先刷新看看」。混成 500 会让
+    人对着一个可能已经跑起来的重算再点一次。
+    """
+    return Response({"error": message}, status=503)
 
 
 def _int_param(request: Request, name: str) -> int | None:
@@ -724,3 +825,266 @@ def switch(request: Request) -> Response:
     # 事实。写入口一律 no-store。
     response["Cache-Control"] = "no-store"
     return response
+
+
+# --------------------------------------------------------------------------- #
+# 6. pool/rebuild/ —— 投递重算（P5 子票 #47）
+# --------------------------------------------------------------------------- #
+
+
+@api_view(["POST"])
+@permission_classes([IsStaffUser])
+def pool_rebuild_dispatch(request: Request) -> Response:
+    """投递一次池化表重算，**立刻返回**，不等结果（P5 子票 #47；ADR 0006）。
+
+    ## 为什么只重建池化、不跑全链
+
+    ADR 0006 的正文。一句话：`recompute_regime_slices` 三段串行、分钟级，塞进 HTTP 请求
+    就是「点了转圈五分钟然后 502」，而反代超时不由我们决定。
+
+    ## 立刻返回：202 + 一个 `task_id`
+
+    `202 Accepted` 而不是 `200 OK`：200 说的是「做完了」，而这里只说了「收下了」。这个
+    区别不是洁癖——前端要根据它决定**是去轮询还是直接读结果**。
+
+    `task_id` 是这次投递的**唯一凭据**：`reused` 那一轮不建任何行，事后除了这个 id 没有
+    别的办法把那一次重算找回来。所以它必须回在这里，不能等轮询端点再问一次。
+
+    响应里刻意**不带**任何「现在是什么状态」：这一刻任务可能还没被 worker 取走，
+    答什么都是猜。状态只有 `pool/rebuild/<task_id>/` 能答。
+
+    ## 不写并发预检
+
+    ADR 0006 明说「并发触发有现成的答案，不要另写锁」：`uniq_pool_rebuild_ready_fingerprint`
+    会让第二个完成者撞上约束，`rebuild_pool` 把自己那条记成带原因的 `failed` 行并如实返回
+    （`duplicate=True`）。加一道「已有 building 就先拒绝」的预检会做两件坏事：把那条约束
+    的收益藏起来（人再也看不到并发真的发生了），以及引入一个新的错误状态——「被预检拒了
+    所以什么都没记」。
+
+    所以连点两次是对的：第二次如实留下一条 `duplicate` 记录，页面按「并发触发」显示，
+    **不是红色失败**。
+
+    ## 权限是 `IsStaffUser`（不是 404）
+
+    与 `switch/` 同一条（ADR 0005）：匿名 401、普通用户 403。这一层是**界面纪律，不是安全
+    边界**——`manage.py recompute_regime_slices` 任何人能跑。
+
+    ## 投递失败是 503
+
+    `.delay()` 抛（broker 不可用、结果后端挂了）是**通路**故障：请求合法、逻辑跑通，坏的
+    是下层。500 会让人以为「可能已经跑起来了」，于是去刷新查一条不存在的记录；503 说的是
+    「没投出去，再按一次」——而那一次不会撞上第一次的指纹，因为第一次根本没发生。
+    """
+    from apps.regime import tasks
+
+    actor_name = request.user.username
+    try:
+        async_result = tasks.rebuild_regime_pool.delay(actor_name)
+    except Exception as exc:  # noqa: BLE001 —— 见 docstring「投递失败是 503」
+        logger.exception("[regime] 池化重算投递失败 actor=%s", actor_name)
+        return _not_dispatched(f"池化重算没有投递出去：{exc}")
+
+    logger.info(
+        "[regime] 池化重算已投递 task_id=%s actor=%s",
+        async_result.id,
+        actor_name,
+    )
+    response = Response(
+        {
+            "dispatched": True,
+            "task_id": async_result.id,
+            # 投递方**必须**同时知道什么时候回来问：只给一个 id，前端只能靠猜一个间隔。
+            # 这个数是建议值不是契约——真正的判据是状态读返回的 `done`。
+            "poll_after_seconds": POLL_AFTER_SECONDS,
+        },
+        status=202,
+    )
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def pool_rebuild_status(request: Request, task_id: str) -> Response:
+    """一次重算的收场，按 `task_id` 读（P5 子票 #47）。
+
+    ## 为什么必须有这一条：`reused` 在代际表里不存在
+
+    票面原本写「状态读复用 T2 的 `pool/generations/` 即可」，而那是**做不到**的：
+
+    - `reused=True` 是 `rebuild_pool` 的**最早**一个返回分支（指纹命中在它建行之前），
+      那一轮**不建代、不碰格子、不留任何审计行**（ADR 0006 把这条代价写明了）。轮询代际
+      表永远看不到它发生过；
+    - 更糟的是「投递成功但 worker 没跑」：没人建 `building` 行，于是它与「复用」在代际表里
+      **逐字节同形**——都是「什么都没变」。
+
+    五种收场里有两种只能靠这条端点回答，所以它不是一个「更方便的入口」，是唯一入口。
+
+    ## 五种收场
+
+    | `outcome` | 含义 | 页面该怎么显示 |
+    | --- | --- | --- |
+    | `new_generation` | 新代已就绪，带 `cells_changed` | 绿 |
+    | `reused` | 输入指纹未变，**本次没有产生新记录** | 中性色（不是失败） |
+    | `duplicate` | 并发撞上唯一约束，自己那条记成 `failed` | 中性色（**不是红色**） |
+    | `failed` | 真失败，带 `failure` 原文 | 红 |
+    | `building` | 还在跑 | 转圈 |
+
+    前四种由 `pool_rebuild.outcome_of()` **一处**判定（`reused` 先于 `status`，理由在那个
+    函数里）；`building` 是这一层加的：它来自「任务还在跑」或「有一代正在建」，两种都是
+    「再等等」。
+
+    ## 为什么还要读 Celery
+
+    `rebuild_pool` 的摘要落在 Celery 结果后端（保留 24 小时）。它是**唯一**能看见
+    `reused` 与「还没开始」的地方：
+
+    - 任务 `PENDING` 且库里没有新的 `building` 行 → 投递成功了，但 worker 还没取走。
+      此时**不能**报「重算中」——那会让人以为在跑，而真相是连开始都没开始。这叫
+      `pending`，页面该说「等待 worker」；
+    - 任务 `SUCCESS` → 读摘要拿 `outcome` 与 `cells_changed`；
+    - 任务 `FAILURE` → 真失败。**但失败原因优先取库里的 `failure` 原文**：那是
+      `rebuild_pool` 自己写下的、带业务含义的那句话（比如「同一输入指纹已有一代就绪」），
+      而 Celery 的异常串是一段 traceback。
+
+    ## 结果过期之后：**Celery 分不出「过期」与「还没开始」**
+
+    `CELERY_RESULT_EXPIRES=86400`，一天之后 Celery 不再认这个 id。但它对**未知 id** 与
+    **还没开始的任务**回的是同一件事：`PENDING`。这不是本仓能修的，是 Celery 结果后端的
+    性质（`apps/agent/tools/backtest.py` 有一段注释记着同一件事：「Celery AsyncResult alone
+    returns PENDING for both 'never submitted' and 'waiting to start', which is ambiguous」）。
+
+    所以本端点**不**假装能分开它们，也**不回 404**（回「没有这个任务」是在否认一件真的
+    发生过的事，而人手上那个 id 也没错）。它把这份同形写进 `display` 与 `state_ambiguous`
+    两处：一个过期一天的 id 看到的是「还没有 worker 取走，或结果已过期」，两条出路都写明
+    （检查 worker / 去看代际历史里那一代有没有落成），读的人不需要猜是哪一种。
+
+    ## 本端点不写任何东西
+
+    纯读。轮询它（60 秒一次、由前端的既有节奏决定）没有副作用。
+    """
+    from celery.result import AsyncResult
+
+    from celery_app import app as celery_app
+
+    result: AsyncResult = celery_app.AsyncResult(task_id)
+    state = result.state
+    payload: dict[str, Any] = {
+        "task_id": task_id,
+        "state": state,
+        "done": state in TERMINAL_STATES,
+    }
+
+    if state == "SUCCESS":
+        summary = result.result
+        if isinstance(summary, Mapping):
+            generation = _generation_from_summary(summary)
+            outcome = pool_rebuild.outcome_of(
+                reused=bool(summary.get("reused")),
+                duplicate=bool(summary.get("duplicate")),
+                status=RebuildStatus.READY.value,
+            )
+            payload.update(
+                {
+                    "outcome": ser.outcome_payload(
+                        outcome, generation=summary.get("rebuild_id")
+                    ),
+                    "generation": (
+                        None
+                        if generation is None
+                        else ser.generation_summary(generation)
+                    ),
+                    "stale_building": ser.stale_building_payload(generation)
+                    if generation is not None
+                    else _no_building(),
+                    # 复用那一轮的这几个数**不在任何行上**（没有建代），只能从摘要里取。
+                    # 这就是「轮询代际表看不出 reused」的具体表现：它连 N 都没有。
+                    "cells_changed": summary.get("cells_changed"),
+                    "cells_total": summary.get("cells_total"),
+                    "results_used": summary.get("results_used"),
+                    "candidates": summary.get("candidates"),
+                }
+            )
+            return _no_store(Response(payload))
+        # 结果不是映射：本该不可能（本任务恒返回 dict），但 Celery 后端可以配置成丢结果。
+        # 不猜，按「查不到」处理并说出来。
+        payload.update(
+            {
+                "outcome": ser.outcome_payload(pool_rebuild.OUTCOME_FAILED),
+                "generation": None,
+                "stale_building": _no_building(),
+                "error": "任务结果不在结果后端里（可能已被 CELERY_RESULT_EXPIRES 清掉）",
+            }
+        )
+        return _no_store(Response(payload))
+
+    if state in TERMINAL_STATES:
+        # FAILURE / REVOKED。**失败原因优先从库里取**：`rebuild_pool` 抛之前会把那一代标成
+        # `failed` 并写下带业务含义的原因；Celery 那条是 traceback，两层含义不同。
+        generation = _most_recent_generation(task_id)
+        # `generation.status` / `.failure` 是 `CharField` / `TextField` 描述符（本仓没装
+        # `django-stubs`，pyright 看到的是字段对象而不是运行时值）。用 `str(...)` 把「列在
+        # 运行时是什么」收在这一处——与 `serializers.iso` 的取向同源，不在每个调用点各写
+        # 一遍 `cast`。
+        row_status = "" if generation is None else str(generation.status)
+        failure = (
+            str(generation.failure)
+            if generation is not None
+            and generation.status == RebuildStatus.FAILED.value
+            else ""
+        )
+        outcome = pool_rebuild.outcome_of(
+            status=row_status or RebuildStatus.FAILED.value,
+            failure=failure,
+        )
+        payload.update(
+            {
+                "outcome": ser.outcome_payload(
+                    outcome, generation=generation.pk if generation else None
+                ),
+                "generation": (
+                    None if generation is None else ser.generation_summary(generation)
+                ),
+                "stale_building": _no_building(),
+                # Celery 那边的异常串**照原样透出**，但标成 `celery_error`，不冒充 failure：
+                # `failure` 是库里那一列（有业务含义），两者不是一回事。
+                "celery_error": _failure_text(result),
+                "failure": failure or _failure_text(result),
+            }
+        )
+        return _no_store(Response(payload))
+
+    # PENDING / STARTED / RETRY：还没到终局。**区分「在建」与「还没开始」**——把没开始的
+    # 说成「重算中」，就是让一个 worker 没跑的系统看起来在正常工作（ADR 0006 明令要说出
+    # 来的那个缺口）。
+    building = _current_building()
+    if building is None:
+        payload.update(
+            {
+                "outcome": None,
+                "generation": None,
+                "stale_building": _no_building(),
+                # 这一句是「投递成功但 worker 没跑」的唯一说辞：它不是重算中，是没开始。
+                # `state_ambiguous` 把 Celery 那条同形（未知 id 也回 PENDING）写出来，
+                # 免得一个过期一天的 id 被读成「worker 停了」。
+                "display": PENDING_DISPLAY,
+                "state_ambiguous": True,
+            }
+        )
+    else:
+        stale = ser.stale_building_payload(building)
+        payload.update(
+            {
+                "outcome": ser.outcome_payload(pool_rebuild.OUTCOME_BUILDING),
+                "generation": ser.generation_summary(building),
+                "stale_building": stale,
+                # 阈值到点就说人话。「超过 N 分钟仍在重算中，检查 worker」——N 由后端给，
+                # 前端不另写一份（`stale_building.threshold_minutes`）。
+                "display": (
+                    f"超过 {stale['threshold_minutes']} 分钟仍在重算中，检查 worker"
+                    if stale["stale"]
+                    else pool_rebuild.OUTCOME_DISPLAY[pool_rebuild.OUTCOME_BUILDING]
+                ),
+            }
+        )
+    return _no_store(Response(payload))
