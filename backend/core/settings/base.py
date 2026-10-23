@@ -43,6 +43,22 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # **必须在最外层（CORS 之前）**：`GZipMiddleware` 压缩的是**响应体**，而它的判据是
+    # 请求的 `Accept-Encoding`。放在 CORS 之后不会失效，但放在最外层能让 CORS 中间件
+    # 之后追加的响应头（`Vary`、错误页）也走同一条压缩路径，少一个「哪个中间件先跑」
+    # 的问题。
+    #
+    # 为什么现在必须有它：`GET api/regime/pool/` 的响应体随「同原型策略的全部切片摘要」
+    # 线性增长，并且同一份证据在 4 个阶段里各抄一遍（`pool._evidence` 的 `results` 与阶段
+    # 无关）。实测（2026-10-23，244 格 / 全库 4067 条回测的合成库，真实 HTTP）：
+    #   - 未压缩 86.9 MB；
+    #   - gzip 后 4.1 MB（4.7%）。
+    # 没有这一层，那个端点在任何带宽/内存受限的客户端上都是「读不出来」——浏览器要把
+    # 87 MB 先收完、再 `JSON.parse` 出 90 MB 的对象，然后才画第一格。
+    #
+    # 阈值取 Django 的默认 200 字节：本仓的接口响应绝大多数远小于它，压缩只会给它们
+    # 加一次无意义的判断（Django 在阈值之下直接透传，不压缩），所以不需要按路径白名单。
+    "django.middleware.gzip.GZipMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -115,7 +131,9 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TIMEZONE = "UTC"
 
 # ── Reliability: prevent task loss ──
-CELERY_TASK_ACKS_LATE = True  # Ack AFTER task completes — if worker crashes, task is re-delivered
+CELERY_TASK_ACKS_LATE = (
+    True  # Ack AFTER task completes — if worker crashes, task is re-delivered
+)
 CELERY_TASK_REJECT_ON_WORKER_LOST = True  # Re-queue if worker process is killed
 CELERY_RESULT_EXPIRES = 86400  # Keep results for 24h (seconds)
 CELERY_BROKER_TRANSPORT_OPTIONS = {
@@ -189,8 +207,10 @@ WEB_PROXY = os.environ.get("WEB_PROXY", "") or _default_proxy
 
 # 数据源：后端启动时自动建立 WS 实时行情供给（默认开启；
 # 非 Web 进程如 celery 可设 DATASOURCE_AUTO_WS=false 关闭）
-DATASOURCE_AUTO_WS = (
-    os.environ.get("DATASOURCE_AUTO_WS", "true").lower() not in ("0", "false", "no")
+DATASOURCE_AUTO_WS = os.environ.get("DATASOURCE_AUTO_WS", "true").lower() not in (
+    "0",
+    "false",
+    "no",
 )
 
 # ---------------------------------------------------------------------------

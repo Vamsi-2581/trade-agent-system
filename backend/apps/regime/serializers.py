@@ -31,6 +31,8 @@ display 就是空串，前端按「空则整段不渲染」处理（`regime_quer
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from typing import Any, Iterable, Mapping
 
@@ -405,12 +407,79 @@ def strategy_payload(row: Mapping[str, Any], info: Mapping[str, Any]) -> dict[st
     }
 
 
-def cell_payload(row: Mapping[str, Any], info: Mapping[str, Any]) -> dict[str, Any]:
-    """一格：策略 + 阶段 + 来源 + 状态 + 原因 + 待复核 + 依据原文。
+def evidence_key(evidence: Any) -> str:
+    """一份证据的内容指纹（`sha256` 十六进制）。**去重的键**。
+
+    按**内容**而不是 `(策略, 阶段)` 去重：证据是按原型分桶生成的，同一份会落在同桶的
+    几十条策略上（`pool._cell_for` 的兜底分支），而那正是重复的来源。按内容去重不需要
+    知道它是怎么生成的，也不怕将来换一种分桶方式。
+
+    `sort_keys=True` 是必须的：同一个 dict 的 `json.dumps` 在插入顺序不同时给出不同的
+    串，于是「内容相同」会被算成两份。而证据的键序在两条生成路径（本策略 / 原型兜底）
+    上确实不同（`_evidence` 先铺公共键再 `update(extra)`）。
+
+    `default=str` 兜住 JSON 列里可能出现的非 JSON 原生值（手工补录的脏行）：这里只求
+    「同样的内容给同样的键」，不要求键本身可逆。
+    """
+    payload = {} if evidence is None else evidence
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def evidence_dedupe(
+    rows: Iterable[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[tuple[Any, str], str]]:
+    """一次算完两件事：**去重后的证据表** + **每一格的证据键**。
+
+    存在的理由只有一个：`pool._cell_for` 的原型兜底分支让同一份 `results`（同原型全部
+    策略的全部切片摘要，与阶段无关）在 4 个阶段里各抄一遍、又被同桶的每条策略各抄一遍。
+    实测 244 格 / 4067 条回测的库里，99.4% 的 `results` 条目是重复的，244 格只有 2 种
+    不同的 evidence。把它们按内容合并成一份，是让那个端点「读得出来」的真正修法——压缩
+    只是让重复的字节传得快一点。
+
+    ## 为什么两件事一起返回
+
+    指纹是一次 `json.dumps(sort_keys=True)` + sha256，对一份 4067 条 `results` 的证据约
+    4ms。分开写（`evidence_dedupe()` 算一遍、`cell_payload()` 再算一遍）就是 244 格 × 2 次
+    ≈ 1 秒——实测把这 1 秒省下来，端点从 3.2s 回到 2.4s，而响应体积一模一样。
+
+    **两件事必须同源**：键在这里算，格子那边只查表。分开算就有了「表里的键」与「格子上的
+    键」两套算法，某一处改了排序参数而另一处没改时，页面上的表现是「每一格的证据都是空
+    的」——一个不会抛异常、只会静默丢数据的错。
+
+    返回 `(表, {(策略 id, 阶段): 键})`。表的顺序**按首次出现**（不按指纹排序）：前端只按
+    键查表，不依赖顺序；保序让「第一个格子的证据排在前面」这件事在抓包时可读。
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    keys: dict[tuple[Any, str], str] = {}
+    for row in rows:
+        evidence = row["evidence"] if row["evidence"] is not None else {}
+        key = evidence_key(evidence)
+        keys[(row["strategy_id"], row["regime"])] = key
+        if key not in seen:
+            seen[key] = {"key": key, **evidence}
+    return list(seen.values()), keys
+
+
+def cell_payload(
+    row: Mapping[str, Any],
+    info: Mapping[str, Any],
+    *,
+    key: str | None = None,
+) -> dict[str, Any]:
+    """一格：策略 + 阶段 + 来源 + 状态 + 原因 + 待复核 + 证据的**引用**。
 
     `evidence` **原样透出，一个键都不改**：它是这张表的存在理由（哪几个回测、各多少笔、
     覆盖什么区间、合并成交数、品种、原型归一化留痕）。任何「顺手整理一下」的加工都会让
     「依据哪几个回测」在传输层变成一个派生值，而审计要的是原文。
+
+    **但原样透出不等于每格一份副本**（2026-10-23）：证据按内容去重后放进响应顶层的
+    `evidence` 表，格子上只留 `evidence_key`。原文一个字都没改——它只是从「每格一份」
+    变成「整份响应一份」，前端用 `evidence_key` 查表拿到的是**逐字节相同**的那份。
+
+    `key` 由调用方传时**不再重算指纹**：`evidence_dedupe()` 已经为整批算过一次，而一次
+    指纹是 4ms（4067 条 `results` 的一份证据），244 格重复算就是约 1 秒。不传时自己算，
+    让单格调用（测试、将来的按格端点）仍然自洽。
 
     `info` 是那一行策略的三件事（名字 / 在册状态 / 最近一次启停流水），由调用方**一次
     查询**取回整批（`views._strategy_info`）——逐格再查一次的话，一张 40 行的表要发 40
@@ -423,7 +492,7 @@ def cell_payload(row: Mapping[str, Any], info: Mapping[str, Any]) -> dict[str, A
         "state": state_payload(row["state"]),
         "reason": reason_payload(row["reason"]),
         "needs_review": bool(row["needs_review"]),
-        "evidence": row["evidence"] if row["evidence"] is not None else {},
+        "evidence_key": evidence_key(row["evidence"]) if key is None else key,
     }
 
 

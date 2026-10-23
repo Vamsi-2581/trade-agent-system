@@ -89,8 +89,22 @@ function Section({
   );
 }
 
-export default function PoolCellDetail({ cell }: { cell: RegimePoolCell }) {
-  const evidence = asRecord(cell.evidence) ?? {};
+/**
+ * 一格的证据。
+ *
+ * `evidence` **由调用方从 `pool.evidence` 那张去重表里查好传进来**（2026-10-23），不是
+ * 从 `cell` 上读：同一份证据在响应里只发一次（244 格只有 2 种不同的 evidence，见
+ * `RegimePool` 的 docstring），格子上只有 `evidence_key`。这里拿到的仍然是**逐字节相同**
+ * 的那份原文——去重发生在传输层，没有裁剪任何一个键。
+ */
+export default function PoolCellDetail({
+  cell,
+  evidence: rawEvidence,
+}: {
+  cell: RegimePoolCell;
+  evidence: Record<string, unknown>;
+}) {
+  const evidence = asRecord(rawEvidence) ?? {};
   const results = evidenceResults(evidence.results);
   const threshold = asRecord(evidence.threshold);
   const archetype = asRecord(evidence.archetype);

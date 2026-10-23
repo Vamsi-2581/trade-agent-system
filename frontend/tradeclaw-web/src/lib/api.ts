@@ -1274,7 +1274,12 @@ export interface RegimePoolCell {
   state: Labelled;
   reason: Labelled;
   needs_review: boolean;
-  evidence: Record<string, unknown>;
+  /**
+   * 证据在 `pool.evidence` 那张去重表里的键。**不是证据本身**——原文一个键都没少，
+   * 只是同一份只发一次（见 `RegimePool` 的 docstring）。用
+   * `evidenceOf(evidenceIndex(pool), cell)` 取。
+   */
+  evidence_key: string;
 }
 
 /**
@@ -1364,11 +1369,49 @@ export interface RegimeStrategyFlipResult {
  * 与 `RegimePoolState` 交叉而不是 `extends`：后者对联合类型（有代 / 冷启动两支）不成立，
  * 交叉之后两支各自仍然带着 `regimes` / `cells`——冷启动时是空 `cells` + 那句 `display`，
  * **不是空白表格**。
+ *
+ * **`evidence` 是一张去重后的表，不是每格一份副本**（2026-10-23）。后端把证据按内容
+ * 合并后放在顶层，格子上只留 `evidence_key`：实测 244 格 / 4067 条回测的库里，99.4% 的
+ * `results` 条目是同一批字节的副本，244 格只有 2 种不同的 evidence——不合并的话响应是
+ * 87 MB，浏览器 `JSON.parse` 之后就是「读不出来」。**原文一个键都没少**，只是从「每格
+ * 一份」变成「整份响应一份」；用 `evidenceOf(evidenceIndex(pool), cell)` 取。
  */
 export type RegimePool = RegimePoolState & {
   regimes: Labelled[];
+  /** 去重后的证据表，每一项 `{key, ...原证据}`。顺序按首次出现，不保证有序。 */
+  evidence: RegimeEvidenceEntry[];
   cells: RegimePoolCell[];
 };
+
+/** 证据表的一项：`key` 是内容指纹，其余键就是 `pool._evidence` 的原文。 */
+export interface RegimeEvidenceEntry {
+  key: string;
+  [key: string]: unknown;
+}
+
+/**
+ * 取一格的证据原文（去掉 `key` 之后的那份，与合并前逐字节相同）。
+ *
+ * `index` 由 `evidenceIndex(pool)` 建一次、传给每一格：每格各建一次 Map 就是
+ * O(格数 × 表长)，而一张 61 行的表有 244 格。查不到时给 `{}` 而不是 `undefined`——
+ * 格子的证据缺失是脏库的形状，页面上应当显示「证据里没有回测结果」而不是崩掉。
+ */
+export function evidenceOf(
+  index: Map<string, RegimeEvidenceEntry>,
+  cell: RegimePoolCell
+): Record<string, unknown> {
+  const entry = index.get(cell.evidence_key);
+  if (entry === undefined) return {};
+  // `key` 是去重表的键，不是证据的一部分——剔除它，返回的才是原文。
+  const { key, ...evidence } = entry;
+  void key;
+  return evidence;
+}
+
+/** `pool.evidence` → `Map<key, entry>`。页面按一次请求建一次。 */
+export function evidenceIndex(pool: RegimePool): Map<string, RegimeEvidenceEntry> {
+  return new Map(pool.evidence.map((entry) => [entry.key, entry]));
+}
 
 export interface RegimeDiffCell {
   key: string;

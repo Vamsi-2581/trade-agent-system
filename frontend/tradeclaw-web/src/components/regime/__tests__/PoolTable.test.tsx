@@ -17,6 +17,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type {
   Labelled,
+  RegimeEvidenceEntry,
   RegimeGeneration,
   RegimePool,
   RegimePoolCell,
@@ -60,33 +61,16 @@ const generation: RegimeGeneration = {
   stale_building: { stale: false, minutes: null, threshold_minutes: 30 },
 };
 
-function cell(
-  strategyId: string,
-  strategyName: string,
-  regime: Labelled,
-  state: Labelled,
-  over: Partial<RegimePoolCell> = {}
-): RegimePoolCell {
-  return {
-    key: `${strategyId}|${regime.value}`,
-    strategy: {
-      id: strategyId,
-      name: strategyName,
-      lifecycle: ACTIVE_LIFECYCLE,
-      latest_change: null,
-    },
-    regime,
-    source: labelled("strategy", "本策略切片"),
-    state,
-    reason: labelled("", ""),
-    needs_review: false,
-    evidence: {},
-    ...over,
-  };
-}
-
-const fitCell = cell("7", "rsi_cross", REGIMES[0], labelled("fit"), {
-  evidence: {
+/**
+ * 证据原文，按「内容指纹」登记。
+ *
+ * 后端自 2026-10-23 起把证据**按内容去重**放进 `pool.evidence`，格子上只留
+ * `evidence_key`（同一份证据在响应里只发一次：实测 244 格只有 2 种不同的 evidence，
+ * 不合并的话响应 87 MB）。所以夹具也跟着变成「原文登记在一张表里、格子引用键」——
+ * 与线上形状一致，否则组件里那条查表路径一行都测不到。
+ */
+const EVIDENCE = {
+  fit: {
     pool_version: 4,
     results: [
       {
@@ -109,12 +93,7 @@ const fitCell = cell("7", "rsi_cross", REGIMES[0], labelled("fit"), {
     full_sample: { sharpe: 0.4 },
     conflict: null,
   },
-});
-
-const reviewCell = cell("8", "volume_reclaim", REGIMES[1], labelled("unfit"), {
-  needs_review: true,
-  reason: labelled("direction_conflict", "方向冲突"),
-  evidence: {
+  review: {
     trades: 44,
     months: 7,
     regime_days: 90,
@@ -129,12 +108,7 @@ const reviewCell = cell("8", "volume_reclaim", REGIMES[1], labelled("unfit"), {
       symbol_results: [201],
     },
   },
-});
-
-const archetypeCell = cell("9", "mean_revert", REGIMES[2], labelled("neutral"), {
-  source: labelled("archetype", "原型兜底"),
-  reason: labelled("archetype_evidence", "借用原型样本"),
-  evidence: {
+  archetype: {
     trades: 344,
     months: 12,
     regime_days: 200,
@@ -150,28 +124,103 @@ const archetypeCell = cell("9", "mean_revert", REGIMES[2], labelled("neutral"), 
       trades: 0,
       months: 0,
       regime_days: 3,
-      results: [{ result_id: 301, symbol: "BTC/USDT", window: { start: "2026-03-01", end: "2026-04-01" } }],
+      results: [
+        {
+          result_id: 301,
+          symbol: "BTC/USDT",
+          window: { start: "2026-03-01", end: "2026-04-01" },
+        },
+      ],
     },
   },
+} as const;
+
+/** 键名 → 键。与后端一样，键是内容的指纹；夹具里直接用登记名，可读且稳定。 */
+const evidenceKeyOf = (name: keyof typeof EVIDENCE | null): string =>
+  name === null ? "empty" : `key-${name}`;
+
+/** 登记表 → `pool.evidence`（只包含被引用到的那些，与后端的去重结果同形）。 */
+function evidenceTable(keys: Iterable<string>): RegimeEvidenceEntry[] {
+  const seen = new Set<string>();
+  const table: RegimeEvidenceEntry[] = [];
+  for (const key of keys) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (key === "empty") {
+      table.push({ key });
+      continue;
+    }
+    const name = key.replace(/^key-/, "") as keyof typeof EVIDENCE;
+    table.push({ key, ...EVIDENCE[name] });
+  }
+  return table;
+}
+
+function cell(
+  strategyId: string,
+  strategyName: string,
+  regime: Labelled,
+  state: Labelled,
+  over: Partial<Omit<RegimePoolCell, "evidence_key">> & {
+    /** 引用哪一份登记的证据；`null` = 空证据（后端也给一份，不每格一个 `{}`）。 */
+    evidenceName?: keyof typeof EVIDENCE | null;
+  } = {}
+): RegimePoolCell {
+  const { evidenceName = null, ...rest } = over;
+  return {
+    key: `${strategyId}|${regime.value}`,
+    strategy: {
+      id: strategyId,
+      name: strategyName,
+      lifecycle: ACTIVE_LIFECYCLE,
+      latest_change: null,
+    },
+    regime,
+    source: labelled("strategy", "本策略切片"),
+    state,
+    reason: labelled("", ""),
+    needs_review: false,
+    evidence_key: evidenceKeyOf(evidenceName),
+    ...rest,
+  };
+}
+
+const fitCell = cell("7", "rsi_cross", REGIMES[0], labelled("fit"), {
+  evidenceName: "fit",
+});
+
+const reviewCell = cell("8", "volume_reclaim", REGIMES[1], labelled("unfit"), {
+  needs_review: true,
+  reason: labelled("direction_conflict", "方向冲突"),
+  evidenceName: "review",
+});
+
+const archetypeCell = cell("9", "mean_revert", REGIMES[2], labelled("neutral"), {
+  source: labelled("archetype", "原型兜底"),
+  reason: labelled("archetype_evidence", "借用原型样本"),
+  evidenceName: "archetype",
 });
 
 const unknownCell = cell("10", "newborn", REGIMES[3], labelled("unknown"));
 const blanketCell = cell("11", "blanket_guard", REGIMES[0], labelled("blanket"));
+
+const poolCells: RegimePoolCell[] = [
+  fitCell,
+  reviewCell,
+  archetypeCell,
+  unknownCell,
+  blanketCell,
+  // 同一策略的第二格：验证同一行里多格可各自展开
+  cell("7", "rsi_cross", REGIMES[3], labelled("neutral")),
+];
 
 const pool: RegimePool = {
   has_generation: true,
   display: "",
   generation,
   regimes: REGIMES,
-  cells: [
-    fitCell,
-    reviewCell,
-    archetypeCell,
-    unknownCell,
-    blanketCell,
-    // 同一策略的第二格：验证同一行里多格可各自展开
-    cell("7", "rsi_cross", REGIMES[3], labelled("neutral")),
-  ],
+  evidence: evidenceTable(poolCells.map((c) => c.evidence_key)),
+  cells: poolCells,
 };
 
 // ── 矩阵与五态颜色 ──
@@ -327,6 +376,47 @@ describe("行内展开", () => {
     const raw = within(screen.getByTestId("pool-evidence-raw"));
     expect(raw.getByText(/"pool_version": 4/)).toBeTruthy();
   });
+
+  it("证据走 pool.evidence 查表：同一份被两格共用时两格都显示得出来", () => {
+    // 线上最常见的形状：同一份证据（同原型兜底）落在同一条策略的 4 个阶段上。
+    // 后端只发一份、格子各带同一个 `evidence_key`——两格展开必须都能拿到原文。
+    const shared = cell("7", "rsi_cross", REGIMES[3], labelled("neutral"), {
+      evidenceName: "fit",
+    });
+    const sharing: RegimePool = {
+      ...pool,
+      evidence: evidenceTable([fitCell.evidence_key]),
+      cells: [fitCell, shared],
+    };
+
+    render(
+      <PoolTable
+        pool={sharing}
+        initialExpanded={new Set([fitCell.key, shared.key])}
+      />
+    );
+
+    // 两格各一份 detail，且都渲染出了同一份原文里的回测 id。
+    expect(screen.getByTestId(`pool-cell-detail-${fitCell.key}`)).toBeTruthy();
+    expect(screen.getByTestId(`pool-cell-detail-${shared.key}`)).toBeTruthy();
+    expect(screen.getAllByText("#101").length).toBe(2);
+  });
+
+  it("查不到 evidence_key 时降级成「没有证据」，不崩", () => {
+    // 脏库/半更新时的形状：格子的 key 在表里不存在。页面必须仍然画得出来。
+    const orphaned: RegimePool = {
+      ...pool,
+      evidence: [],
+      cells: [fitCell],
+    };
+
+    render(
+      <PoolTable pool={orphaned} initialExpanded={new Set([fitCell.key])} />
+    );
+
+    const evidence = within(screen.getByTestId("pool-cell-evidence"));
+    expect(evidence.getByText("证据里没有回测结果。")).toBeTruthy();
+  });
 });
 
 // ── 冷启动与空态 ──
@@ -341,6 +431,8 @@ describe("空态", () => {
             "还没有任何一代池化表：先跑一次池化重算（POST /api/regime/pool/rebuild/ 或 recompute_regime_slices）",
           generation: null,
           regimes: REGIMES,
+          // 冷启动时没有格子，所以证据表也是空的（后端同样给空数组，不是 null）。
+          evidence: [],
           cells: [],
         }}
       />

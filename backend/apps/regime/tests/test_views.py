@@ -32,6 +32,7 @@
 
 from __future__ import annotations
 
+import gzip
 import itertools
 from datetime import timedelta
 from typing import Any
@@ -336,12 +337,22 @@ class TestGenerationRead(_Fixture):
         self.assertEqual(body["cells"][0]["reason"], {"value": "", "display": ""})
 
     def test_evidence_and_needs_review_are_passed_through_verbatim(self):
-        cells = {cell["strategy"]["name"]: cell for cell in self.pool().json()["cells"]}
+        """证据**逐字节原样**透出——只是不再每格一份副本（见 `TestPoolDoesNotRepeatEvidence`）。
+
+        这条断言的字面内容与 2026-10-23 之前完全一样（`{"trades": 3, "results": ["r1"],
+        "symbols": ["BTC/USDT"]}` 一个键都不少），变的是**从哪里取**：格子上给的是
+        `evidence_key`，原文在响应顶层的 `evidence` 表里。把这条改成「断言一个子集」
+        就会让「证据被悄悄裁剪」这件事再也测不出来。
+        """
+        body = self.pool().json()
+        cells = {cell["strategy"]["name"]: cell for cell in body["cells"]}
+        table = {item["key"]: item for item in body["evidence"]}
 
         beta = cells["BetaStem"]
         self.assertTrue(beta["needs_review"])
+        evidence = table[beta["evidence_key"]]
         self.assertEqual(
-            beta["evidence"],
+            {k: v for k, v in evidence.items() if k != "key"},
             {"trades": 3, "results": ["r1"], "symbols": ["BTC/USDT"]},
         )
         self.assertEqual(beta["source"]["value"], POOL_SOURCE_ARCHETYPE)
@@ -453,6 +464,157 @@ class TestDisplayVocabularyIsSingleSourced(TestCase):
                     ser.status_payload(status.value),
                     {"value": status.value, "display": status.display},
                 )
+
+
+# --------------------------------------------------------------------------- #
+# 性质 4.4：同一份证据在响应里只出现一次
+# --------------------------------------------------------------------------- #
+
+
+class TestPoolDoesNotRepeatEvidence(_Fixture):
+    """`GET api/regime/pool/` 的 `evidence` **按内容去重**，格子上引用它的键。
+
+    **这是「读不出来」的根因，不是体积洁癖**。`pool._cell_for` 的原型兜底分支给每一格
+    写的是「同原型全部策略的全部切片摘要」，而 `pool._summarise` 与阶段无关——于是同一
+    份 `results` 在 4 个阶段里各抄一遍，又因为兜底按原型分桶，同一份还会被同桶的每一条
+    策略各抄一遍。实测（2026-10-23，244 格 / 全库 4067 条回测的合成库）：
+
+        results 条目 732,700 条，去重后 4,067 条 —— **重复率 99.4%**
+        244 格里只有 **2 种**不同的 evidence，最高频那份出现 **180 次**
+
+    87 MB 的响应里 99.9% 是这同一批字节的第 N 份副本。压缩（`GZipMiddleware`）能把它
+    压到 4.1 MB，但那只是让传输好看：浏览器仍要 `JSON.parse` 出 90 MB 的对象，服务端仍
+    要为每一份副本做一次序列化。真正的修法是**只发一份**。
+
+    ## 形状
+
+    响应顶层多一个 `evidence` 数组，每一格带 `evidence_key` 指向它：
+
+        {"evidence": [{"key": "<sha256>", ...}, ...],
+         "cells": [{"key": "7|range", "evidence_key": "<sha256>", ...}, ...]}
+
+    `evidence` 的每一项就是**原来那份 `evidence` 原文**（`pool._evidence` 的产物，一个
+    键都不改、一个键都不少）——所以「依据哪几个回测、多少笔、什么区间」这条审计要求
+    没有被削弱，只是从「每格一份副本」变成「整份响应一份」。
+
+    去重的键是**内容的 sha256**而不是 `(策略, 阶段)`：证据是按原型分桶生成的，同一份会
+    落在同桶的几十条策略上，而那正是重复的来源。按内容去重不需要知道它是怎么生成的。
+    """
+
+    def _evidence(self, tag: str) -> dict:
+        return {"trades": 3, "results": [f"r-{tag}"], "symbols": ["BTC/USDT"]}
+
+    def test_the_same_evidence_is_sent_once_and_referenced_by_key(self):
+        shared = self._evidence("shared")
+        generation = self.make_gen(
+            cells=(
+                (self.alpha, DOWNTREND, {"evidence": shared}),
+                (self.alpha, RANGE, {"evidence": shared}),
+                (self.beta, DOWNTREND, {"evidence": self._evidence("beta")}),
+            )
+        )
+
+        body = self.pool(generation=generation.pk).json()
+
+        # 三格、两种不同的证据 ⇒ 证据表只有两项。
+        self.assertEqual(len(body["cells"]), 3)
+        self.assertEqual(len(body["evidence"]), 2)
+
+        # 每一项就是原来那份原文（逐键相等，不是「够用的子集」）。
+        by_key = {item["key"]: item for item in body["evidence"]}
+        alpha_down, alpha_range, beta_down = body["cells"]
+        self.assertEqual(by_key[alpha_down["evidence_key"]]["results"], ["r-shared"])
+        self.assertEqual(
+            by_key[alpha_down["evidence_key"]],
+            by_key[alpha_range["evidence_key"]],
+        )
+        self.assertNotEqual(
+            by_key[alpha_down["evidence_key"]],
+            by_key[beta_down["evidence_key"]],
+        )
+
+        # 原来的 `results` / `symbols` / `trades` 一个都没丢。
+        shared_item = by_key[alpha_down["evidence_key"]]
+        self.assertEqual(shared_item["trades"], 3)
+        self.assertEqual(shared_item["symbols"], ["BTC/USDT"])
+
+    def test_the_cell_no_longer_carries_its_own_copy(self):
+        """格子上**不再有** `evidence` 内联：留着它，去重就只是「多给一份」。"""
+        generation = self.make_gen(
+            cells=((self.alpha, DOWNTREND, {"evidence": self._evidence("a")}),)
+        )
+
+        cell = self.pool(generation=generation.pk).json()["cells"][0]
+
+        self.assertNotIn("evidence", cell)
+        self.assertIn("evidence_key", cell)
+
+    def test_cells_without_evidence_share_one_empty_entry(self):
+        """没有证据的格子（`evidence={}`）**共用一个空项**，不是各自一个 `{}`。
+        冷启动与「一格都没有」时，重复的空对象同样是 N 份副本。"""
+        generation = self.make_gen(
+            cells=(
+                (self.alpha, DOWNTREND, {"evidence": {}}),
+                (self.beta, RANGE, {"evidence": {}}),
+            )
+        )
+
+        body = self.pool(generation=generation.pk).json()
+
+        self.assertEqual(len(body["evidence"]), 1)
+        self.assertEqual(
+            body["cells"][0]["evidence_key"], body["cells"][1]["evidence_key"]
+        )
+        self.assertEqual(body["evidence"][0], {"key": body["evidence"][0]["key"]})
+
+
+# --------------------------------------------------------------------------- #
+# 性质 4.5：池化表的响应体在传输层是压缩的
+# --------------------------------------------------------------------------- #
+
+
+class TestPoolResponseIsCompressed(_Fixture):
+    """`GET api/regime/pool/` 必须走 gzip。
+
+    **这条守的不是性能，是「读得出来」**。`pool` 的每一格都带 `evidence`，而
+    `evidence.results` 是「同原型全部策略的全部切片摘要」——它与阶段无关，所以同一份
+    在 4 个阶段里各抄一遍（`pool._cell_for` 的兜底分支 + `pool._evidence`）。实测
+    （2026-10-23，244 格、全库 4067 条回测的合成库）：**未压缩 86.9 MB**，浏览器要把
+    87 MB 收完、再 `JSON.parse` 出 90 MB 的对象，然后才画第一格——在普通带宽上就是
+    「读不出来」。gzip 后 4.1 MB（4.7%）。
+
+    所以这条断言**不是**「体积小于 N 字节」（那会把「证据有多少」变成一条随时该红的
+    用例），而是「请求声明了 `Accept-Encoding: gzip` 时，响应头里确实有
+    `Content-Encoding: gzip`」——`core/settings/base.py` 的 `MIDDLEWARE` 里少掉那一行，
+    这条当场变红，而其它 1700 多条用例一条都不会响。
+
+    `gzip` 解回来必须与不压缩时逐字节相同：中间件装错位置（比如装在 CORS 里面导致
+    预检失败）或压了不该压的（流式响应）时，页面上看到的是「表格一片空白」而不是
+    一个错误。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.make_gen(cells=((self.alpha, DOWNTREND, {"state": sl.STATE_FIT}),))
+
+    def test_the_response_is_gzipped_when_the_client_asks_for_it(self):
+        plain = self.client.get(POOL)
+        packed = self.client.get(POOL, HTTP_ACCEPT_ENCODING="gzip")
+
+        self.assertEqual(plain.status_code, 200)
+        self.assertEqual(packed.status_code, 200)
+        self.assertEqual(packed.headers.get("Content-Encoding"), "gzip")
+        # 解回来必须与不压缩时是同一份 JSON（压缩是无损的，不是另一套序列化）。
+        self.assertEqual(gzip.decompress(packed.content), plain.content)
+
+    def test_a_client_that_does_not_ask_still_gets_plain_json(self):
+        """不声明 `Accept-Encoding` 的客户端（curl 默认、服务端到服务端调用）不许收到
+        gzip 体——它们不会解，收到的是一堆乱码。"""
+        plain = self.client.get(POOL)
+
+        self.assertEqual(plain.status_code, 200)
+        self.assertIsNone(plain.headers.get("Content-Encoding"))
+        self.assertIsInstance(plain.json(), dict)
 
 
 # --------------------------------------------------------------------------- #

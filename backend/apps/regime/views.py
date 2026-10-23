@@ -563,15 +563,28 @@ def pool(request: Request) -> Response:
     names = {strategy_id: row["name"] for strategy_id, row in info.items()}
     ordered = ser.ordered_cell_keys(cells, names)
 
+    # **证据去重后单独一张表**（2026-10-23）。理由见 `ser.evidence_dedupe` 与
+    # `TestPoolDoesNotRepeatEvidence`：同一份证据在 4 个阶段里各抄一遍、又被同原型的每条
+    # 策略各抄一遍，实测 99.4% 的条目是重复的。格子上只留 `evidence_key`。
+    #
+    # 指纹与表**一次算完**：分开算就是 244 次多余的 sha256（实测约 1 秒），而两处各算
+    # 一遍还会造出「表里的键」与「格子上的键」两套算法。
+    evidence, evidence_keys = ser.evidence_dedupe(cells.values())
+
     return Response(
         {
             **_pool_state(generation),
             # 矩阵的列序由后端给（`serializers.ORDERED_REGIMES`），前端按数组排。
             "regimes": [ser.regime_payload(regime) for regime in ser.ORDERED_REGIMES],
+            "evidence": evidence,
             "cells": [
                 {
                     "key": ser.cell_key(*key),
-                    **ser.cell_payload(cells[key], _info_for(info, key[0])),
+                    **ser.cell_payload(
+                        cells[key],
+                        _info_for(info, key[0]),
+                        key=evidence_keys[key],
+                    ),
                 }
                 for key in ordered
             ],

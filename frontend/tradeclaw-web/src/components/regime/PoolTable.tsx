@@ -22,7 +22,15 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import type { Labelled, RegimePool, RegimePoolCell, RegimeStrategyRef } from "@/lib/api";
+import {
+  evidenceIndex,
+  evidenceOf,
+  type Labelled,
+  type RegimeEvidenceEntry,
+  type RegimePool,
+  type RegimePoolCell,
+  type RegimeStrategyRef,
+} from "@/lib/api";
 import { formatMoment, formatNumber } from "@/lib/format";
 import PoolCellDetail from "./PoolCellDetail";
 
@@ -159,6 +167,8 @@ export default function PoolTable({
 
   const columns = useMemo(() => columnsOf(pool), [pool]);
   const rows = useMemo(() => rowsOf(pool), [pool]);
+  // 证据去重表建**一次**，传给每一格：每格各建一次就是 O(格数 × 表长)。
+  const evidence = useMemo(() => evidenceIndex(pool), [pool]);
 
   const toggle = (key: string) => {
     setExpanded((prev) => {
@@ -234,6 +244,7 @@ export default function PoolTable({
                   expanded={expanded}
                   onToggle={toggle}
                   renderStrategyAction={renderStrategyAction}
+                  evidence={evidence}
                   colSpan={colSpan}
                 />
               );
@@ -254,6 +265,7 @@ function RowGroup({
   expanded,
   onToggle,
   renderStrategyAction,
+  evidence,
   colSpan,
 }: {
   row: StrategyRow;
@@ -262,6 +274,8 @@ function RowGroup({
   expanded: Set<string>;
   onToggle: (key: string) => void;
   renderStrategyAction?: (strategy: RegimeStrategyRef) => ReactNode;
+  /** 证据去重表（`evidenceIndex(pool)`），由页面建一次传下来。 */
+  evidence: Map<string, RegimeEvidenceEntry>;
   colSpan: number;
 }) {
   return (
@@ -323,7 +337,7 @@ function RowGroup({
           className="border-b border-[rgba(255,255,255,0.04)]"
         >
           <td colSpan={colSpan} className="p-0">
-            <PoolCellDetail cell={cell} />
+            <PoolCellDetail cell={cell} evidence={evidenceOf(evidence, cell)} />
           </td>
         </tr>
       ))}
