@@ -152,3 +152,23 @@ export function capitalEfficiencyCards(
   ];
   return cards.filter((m) => m.value !== "—");
 }
+
+/**
+ * **机制读面的时刻格式**（P5 #49）：后端给 ISO 串；没有就是「—」。
+ *
+ * `—` 不是空串也不是「刚刚」：池化表可能一代都没有（冷启动）、判定可能还没生效过——
+ * 那两件事要求人做的动作完全不同，而「刚刚」会把「从来没有」说成一个新鲜的事实。
+ * 与 `components/regime/GenerationHistory` 的本地实现同一个展示口径（月-日 时:分，24h）。
+ */
+export function formatMoment(moment: string | null | undefined): string {
+  if (!moment) return "—";
+  const parsed = new Date(moment);
+  if (Number.isNaN(parsed.getTime())) return moment;
+  return parsed.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}

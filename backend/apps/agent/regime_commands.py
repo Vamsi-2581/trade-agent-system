@@ -594,9 +594,11 @@ def _mech_exit(actor: str, now: datetime) -> str:
         "",
         f"✅ 机制整体已出 Shadow：{MechanismMode(row.from_mode).display} → "
         f"{MechanismMode(row.to_mode).display}（{events.format_moment(row.at)}）",
-        "⚠️ **这一档不是执行开关**：出 Shadow 的效果是**留一条记录**（第①段的判定与切片"
-        "被验证过了），它没有打开任何东西。要真拦人，两个执行开关各自开各自的："
-        "/regime on（事件熔断）、/regime gate on（行情阶段停用）。",
+        # 与确认页正文、Web 档位卡片同一处字面量（`mechanism_switch.NOT_EXECUTION_SWITCH`）：
+        # 三个入口各写一份时，改词必然漏掉一份。
+        mechanism_switch.NOT_EXECUTION_SWITCH,
+        "真要动作：/regime on（事件熔断）、/regime gate on（行情阶段停用）——"
+        "这两个才拦人。",
     ]
     note = mechanism_switch.unmet_note(briefing.data)
     if note is not None:

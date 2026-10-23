@@ -216,6 +216,25 @@ class TestColdStart(_Fixture):
                 self.assertIsNone(row["latest"])
                 self.assertTrue(row["never_switched"])
 
+    def test_only_the_mechanism_card_carries_the_not_an_execution_switch_note(self):
+        """P5 #49：档位卡片上那句「出 Shadow 只是留一条记录」必须来自后端，且只有机制
+        整体那一档有它。
+
+        断言的是**同一个常量**（`mechanism_switch.NOT_EXECUTION_SWITCH`）而不是抄一遍
+        句子：抄一遍之后，改词时用例照样绿、页面却还是旧话。另两个开关没有这句——它们
+        才是真正拦人的那两个，在它们的卡片上写「不是执行开关」是一句反话。
+        """
+        notes = {
+            row["kind"]["value"]: row["note"]
+            for row in self.overview().json()["switches"]
+        }
+
+        self.assertEqual(
+            notes[MechanismKind.MECHANISM.value], mechanism_switch.NOT_EXECUTION_SWITCH
+        )
+        self.assertIsNone(notes[MechanismKind.EVENT_BREAKER.value])
+        self.assertIsNone(notes[MechanismKind.REGIME_GATE.value])
+
     def test_pool_returns_no_cells_without_an_error(self):
         resp = self.pool()
 

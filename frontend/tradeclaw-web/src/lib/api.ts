@@ -1211,6 +1211,12 @@ export interface RegimeSwitch {
   latest: RegimeSwitchRow | null;
   /** `true` = 从没切换过。**是布尔不是文案**：怎么排版属于前端。 */
   never_switched: boolean;
+  /**
+   * 这一档的**常驻说明**，只有机制整体那一档有：那句「这一档不是执行开关、出 Shadow
+   * 只是留一条记录」。**后端渲染的原样文本**，与确认页正文、chat 回执同一处字面量，
+   * 前端一个字都不改写（map #40 的渲染分界）。
+   */
+  note: string | null;
 }
 
 /** 一代池化表（`generation_summary`）。 */

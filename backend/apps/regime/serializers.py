@@ -231,13 +231,31 @@ def switch_payload(
 
     `never_switched` 是给前端的一个**布尔**，不是一句文案：「从未切换过」怎么排版属于
     前端，而「有没有切换过」是数据。
+
+    `note` 是**这一档的常驻说明**，只有机制整体那一档有（`mechanism_switch` 的
+    `NOT_EXECUTION_SWITCH`）：那句话说的是「出 Shadow 只是留一条记录」，它必须与确认页
+    正文、slash 回执同一处字面量，否则改词时会漏掉一份。前端原样显示，一个字不改。
+
+    **它是卡片说明，不是这次动作的回执**：回执（翻没翻、从哪到哪）在 `switch/` 的响应里。
+    把它放在这里而不是每次切换回一次，是因为「这一档不是执行开关」在切换**之前**就要被
+    读到——人得先知道按下去会发生什么，再决定按不按。
     """
+    # 延迟 import：`mechanism_switch` 会拖进 config / 事件日历 / 日报那一串模块，而本文件
+    # 被几乎所有 regime 用例 import（包括只测池化表的那些）。与 `_stale_limit()` 里延迟
+    # import `pool_rebuild` 同一条理由。
+    from apps.regime import mechanism_switch
+
     mode = _mode_of(latest)
     return {
         "kind": kind_payload(kind),
         "mode": mode_payload(mode),
         "latest": None if latest is None else _switch_row(latest),
         "never_switched": latest is None,
+        "note": (
+            mechanism_switch.NOT_EXECUTION_SWITCH
+            if kind is MechanismKind.MECHANISM
+            else None
+        ),
     }
 
 

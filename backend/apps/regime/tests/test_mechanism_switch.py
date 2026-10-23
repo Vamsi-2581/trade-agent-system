@@ -584,9 +584,15 @@ class TestTheBackRecord(_Fixture):
 class TestTheHonestLines(_Fixture):
     def test_the_page_says_this_is_not_an_execution_switch(self):
         """`MechanismKind.MECHANISM` 今天**没有任何执行路径在读它**（`HALT_TRIGGER_SWITCH`
-        只把另外两档映射到两个下游开关）。不说这句话，人敲完 `exit` 就以为机制上线了。"""
+        只把另外两档映射到两个下游开关）。不说这句话，人敲完 `exit` 就以为机制上线了。
+
+        正文里必须是**那个常量本身**：Web 档位卡片（P5 #49）与 chat 回执都引它，各抄一份
+        之后改词注定漏掉一份，而漏掉的那份就是「同一件事两个说法」。
+        """
         self.start(days_ago=MIN_DAYS - 1)
-        self.assertIn(NOT_A_SWITCH, self.body())
+        body = self.body()
+        self.assertIn(NOT_A_SWITCH, body)
+        self.assertIn(mechanism_switch.NOT_EXECUTION_SWITCH, body)
 
     def test_the_page_points_at_the_two_real_switches(self):
         self.start(days_ago=MIN_DAYS - 1)

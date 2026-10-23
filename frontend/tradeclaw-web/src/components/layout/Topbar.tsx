@@ -11,6 +11,8 @@ const NAV_ITEMS = [
   { key: "agents", label: "智能体" },
   { key: "backtest", label: "回测" },
   { key: "trading", label: "交易" },
+  // 机制读面（P5 map #40）。放在「交易」之后：它是运维读面，先看仓、再看机制为什么拦。
+  { key: "regime", label: "机制" },
   { key: "workflows", label: "工作流" },
   { key: "logs", label: "日志" },
   { key: "settings", label: "配置" },

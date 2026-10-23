@@ -130,6 +130,19 @@ logger = logging.getLogger(__name__)
 #: 顺手翻一个还没接线的开关（与 `breaker_switch.KIND` 同一条理由）。
 KIND = MechanismKind.MECHANISM
 
+#: 「这一档不是执行开关、出 Shadow 只是留一条记录」那句话。**只留这一处字面量。**
+#:
+#: 今天有三个出口要说它：确认页正文（`_render_body`，见模块 docstring 第 3 段）、chat
+#: 回执（`regime_commands._mech_exit`），以及 P5 #49 的 Web 档位卡片（经
+#: `serializers.switch_payload` 的 `note` 字段透出，前端原样显示）。三处各抄一份时，
+#: 改词必然漏掉一份，而漏掉的那一份正是本仓反复在防的「同一件事两个说法」。这句话要防
+#: 的形态比它本身重要：不说它，人会以为按一下机制就上线了，而它什么都没打开。
+NOT_EXECUTION_SWITCH = (
+    "⚠️ 这一档**不是执行开关**：拦人的是另外两个开关，它们各自开各自的——"
+    "出 Shadow 的效果是**留一条记录**（第①段的判定与切片被验证过了），"
+    "不是打开了什么。"
+)
+
 #: 判定源。与 `judgement.SYMBOL` 同一个取值（那边也是从 `config.CANDLES` 读的），这里直接
 #: 读配置而不是 import 判定模块：import 它会把整条判定链路（含资讯通道的网络依赖）拖进来，
 #: 而本模块只查两张表。
@@ -550,9 +563,7 @@ def _render_body(data: Confirmation) -> str:
             "机制自熔断（连续 3 个月频率 > 20%）：此刻必然无结论——它是**切过去之后继续"
             "监控**的条款，不构成出 Shadow 的准入门槛（第 160 / 167 条）。",
             "",
-            "⚠️ 这一档**不是执行开关**：拦人的是另外两个开关，它们各自开各自的——"
-            "出 Shadow 的效果是**留一条记录**（第①段的判定与切片被验证过了），"
-            "不是打开了什么。",
+            NOT_EXECUTION_SWITCH,
             "真要动作：/regime on（事件熔断）、/regime gate on（行情阶段停用）——"
             "这两个才拦人。",
             "真值录入：/regime label add <起> <终> <档位> [备注…]"
