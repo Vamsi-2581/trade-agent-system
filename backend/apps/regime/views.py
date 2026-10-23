@@ -7,6 +7,20 @@
 | `GET api/regime/pool/generations/` | 代际历史分页 + 指定代与上一代的逐格差异 | 「这一代谁何时算的、变了什么」 |
 | `GET api/regime/briefing/<kind>/` | 三张确认页之一（正文 + 审计串 + 排版用的数） | **重请求，按需拉**——不在轮询里 |
 | `POST api/regime/switch/` | 翻一个开关的档位（body `{kind, mode}`） | **写入口**：`is_staff` 才放行，`reason` 与页面同源 |
+| `GET api/regime/strategies/<id>/` | 一条策略的启停确认页（退役 / 恢复启用**两个方向一次都给**） | 读对所有登录用户开放；`available=false` 那侧就是「本来就是这一档」 |
+| `POST api/regime/strategies/<id>/retire/` | **删除策略**：把 `Strategy.is_active` 翻成 `False`（退役） | **写入口**：`is_staff` 才放行；不删任何数据，落一条启停流水 |
+| `POST api/regime/strategies/<id>/restore/` | 恢复启用：翻回 `True` | 同一条权限；它是「永不被**自动**恢复」那句里唯一的人工出口 |
+
+## 「删除策略」为什么落在这一层
+
+它改的是 `Strategy.is_active`——一个**交易域**的字段，而写入口在机制这一层。这不是放错
+了地方：这个字段的读者是机制（`gate_run._warrant` 的归属判据、`replay_run` 的选取），
+而 `/regime` 页面正是人看见「哪些策略在被管」的地方（池化表的行就是策略）。把按钮放在
+人做判断的那一页、把叙述留给后端渲染，与三个开关的写入口同形。
+
+`POST api/regime/strategies/<id>/retire/` **不是** `DELETE`：它一行都不删。用 POST 是因为
+它是一次动作（翻一个开关 + 落一条流水），而不是对某个资源的删除——叫 DELETE 会让下一个
+人以为库里那行没了。
 
 ## 为什么 `overview` 不装确认页的正文、而 `briefing` 单独一条
 
@@ -60,6 +74,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any, Mapping
+from uuid import UUID
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -71,6 +86,7 @@ from apps.regime import briefing as briefing_module
 from apps.regime import breaker_switch, deactivation_run, gate_switch, mechanism_switch
 from apps.regime import pool_rebuild
 from apps.regime import serializers as ser
+from apps.regime import strategy_lifecycle
 from apps.regime.models import (
     ActorKind,
     MechanismKind,
@@ -346,6 +362,42 @@ def _strategy_names(ids: list[Any]) -> dict[Any, str]:
     return dict(Strategy.objects.filter(id__in=ids).values_list("id", "name"))
 
 
+def _strategy_info(ids: list[Any]) -> dict[Any, dict[str, Any]]:
+    """策略 id → `{name, is_active, change}`。**两次查询**（策略表一次 + 启停流水一次），
+    不按格子重复查：池化表一行有四格，逐格查一次就是四倍。
+
+    `change` 是最近一次启停流水（没有就是 `None`）。它与 `is_active` 是两件事，一起回显
+    是因为页面既要显示「它此刻在不在册」，也要显示「上一次是谁、为什么动的」——而后者
+    只有流水表知道。
+
+    查不到的策略（格子指着一条已经不存在的策略行）回一个**名字为空、状态为「已退役」**的
+    占位：那是脏库的形状，而脏值的方向应当是「不被机制管」，不是「在册」。
+    """
+    if not ids:
+        return {}
+    info = {
+        strategy_id: {"name": name, "is_active": bool(is_active), "change": None}
+        for strategy_id, name, is_active in Strategy.objects.filter(
+            id__in=ids
+        ).values_list("id", "name", "is_active")
+    }
+    for strategy_id, change in strategy_lifecycle.changes_for(ids).items():
+        row = info.get(strategy_id)
+        if row is not None:
+            row["change"] = change
+    return info
+
+
+def _info_for(
+    info: Mapping[Any, Mapping[str, Any]], strategy_id: Any
+) -> dict[str, Any]:
+    """取一条策略的读面三件事；查不到时用那个 fail-closed 占位（见 `_strategy_info`）。"""
+    row = info.get(strategy_id)
+    if row is None:
+        return {"name": "", "is_active": None, "change": None}
+    return dict(row)
+
+
 # --------------------------------------------------------------------------- #
 # 一代与它的上一代
 # --------------------------------------------------------------------------- #
@@ -505,7 +557,10 @@ def pool(request: Request) -> Response:
 
     # 配对读取：同一个 `generation` 对象既给 id 又给格子（见 docstring）。
     cells = pool_rebuild.current_cells(generation)
-    names = _strategy_names(ser.strategy_ids(cells))
+    info = _strategy_info(ser.strategy_ids(cells))
+    # 行序仍按名字（`ordered_cell_keys` 的判据没变）；`info` 多带的是每一行的在册状态与
+    # 最近一次启停流水，那一份由 `cell_payload` 挂到格子的 `strategy` 上。
+    names = {strategy_id: row["name"] for strategy_id, row in info.items()}
     ordered = ser.ordered_cell_keys(cells, names)
 
     return Response(
@@ -516,7 +571,7 @@ def pool(request: Request) -> Response:
             "cells": [
                 {
                     "key": ser.cell_key(*key),
-                    **ser.cell_payload(cells[key], names.get(key[0], "")),
+                    **ser.cell_payload(cells[key], _info_for(info, key[0])),
                 }
                 for key in ordered
             ],
@@ -1096,3 +1151,195 @@ def pool_rebuild_status(request: Request, task_id: str) -> Response:
             }
         )
     return _no_store(Response(payload))
+
+
+# --------------------------------------------------------------------------- #
+# 7. strategies/ —— 策略的「机制在册」总开关（删除策略 / 恢复启用）
+# --------------------------------------------------------------------------- #
+
+
+def _lifecycle_page_payload(page: strategy_lifecycle.Page) -> dict[str, Any]:
+    """**确认页**（`GET`）的传输形状。**回执（`POST`）不复用它**——那个形状见
+    `_flip_strategy`：回执说的是「按下之后」，而这里的 `counts` / `body` 说的是「按下
+    之前」，两套事实混进同一个对象，读的人分不清哪几个数属于哪个时刻。要那一页，GET
+    那一条随时给。
+
+    `available` 是**布尔数据**不是文案：「这一次会不会真的写东西」是事实，而「本来就是
+    这一档」那句人话由 `body` 给（前者给前端做按钮态，后者给人读）。
+    """
+    return {
+        "strategy": {"id": str(page.strategy_id), "name": page.name},
+        "action": {
+            "value": "restore" if page.to_active else "retire",
+            "display": page.action_display,
+        },
+        "available": page.available,
+        "body": page.body,
+        "summary": page.summary,
+        "counts": {
+            "active_sessions": page.counts.active_sessions,
+            "declarations": page.counts.declarations,
+            "decisions": page.counts.decisions,
+            "pool_cells": page.counts.pool_cells,
+        },
+    }
+
+
+def _strategy_or_404(strategy_id: UUID) -> tuple[Strategy | None, Response | None]:
+    """按 id 取策略；取不到就给出那一条 404。**返回 `(对象, 响应)` 而不是抛异常**：
+    本模块的错误形状是 `{"error"}`，让 `Strategy.DoesNotExist` 冒成 Django 的 404 白页
+    就把那句「哪一条不存在」丢掉了。
+    """
+    strategy = Strategy.objects.filter(pk=strategy_id).first()
+    if strategy is None:
+        return None, _not_found(f"没有 id={strategy_id} 的这一条策略")
+    return strategy, None
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def strategy_lifecycle_page(request: Request, strategy_id: UUID) -> Response:
+    """一条策略的启停确认页（`GET api/regime/strategies/<id>/`）。
+
+    **两个方向一次都给**（退役 / 恢复启用）：这一页是给人做决定用的，而人会先看到「它
+    此刻在册」再决定往哪边翻；分成两条路由只会让前端先猜方向、再为一个本来就已知的
+    事实多打一次请求。
+
+    `available=false` 的那一侧仍然带完整的 `body`/`summary`（不是空壳）：它就是那句
+    「本来就是这一档」，前端原样显示即可，不必自己写第二份。
+
+    读对所有登录用户开放（与 `briefing` 同一条），写才是 `is_staff`（ADR 0005）。
+    """
+    strategy, missing = _strategy_or_404(strategy_id)
+    if missing is not None:
+        return missing
+
+    retire = strategy_lifecycle.page(strategy, to_active=False)
+    restore = strategy_lifecycle.page(strategy, to_active=True)
+    response = Response(
+        {
+            "strategy": {
+                "id": str(strategy.pk),
+                "name": str(strategy.name),
+                "lifecycle": ser.lifecycle_payload(bool(strategy.is_active)),
+                "latest_change": ser.lifecycle_change_payload(
+                    strategy_lifecycle.changes_for([strategy.pk]).get(strategy.pk)
+                ),
+            },
+            "retire": _lifecycle_page_payload(retire),
+            "restore": _lifecycle_page_payload(restore),
+        }
+    )
+    # 与 `briefing` 同一取向：这一页答的是「此刻是什么状态」，缓存它就会有一条可以复现
+    # 的假事实（别人刚翻过，而页面还在说旧状态）。
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+def _flip_strategy(request: Request, strategy_id: UUID, *, to_active: bool) -> Response:
+    """退役 / 恢复启用**共用的那一段**：取策略 → 翻 → 回执。两个视图只差 `to_active`。
+
+    写的是 `Strategy.is_active` 与一条 `StrategyLifecycleChange` 流水，**没有别的动作**：
+    不停会话、不写声明表、不删任何数据（理由见 `strategy_lifecycle` 的模块 docstring）。
+    """
+    strategy, missing = _strategy_or_404(strategy_id)
+    if missing is not None:
+        return missing
+
+    try:
+        outcome = strategy_lifecycle.flip(
+            strategy,
+            to_active=to_active,
+            actor_kind=ActorKind.WEB,
+            actor_name=request.user.username,
+        )
+    except ValueError as exc:
+        # 「触发方不能为空」这类可自愈的提示，原样透出（与 `switch` 同一条）。
+        return _bad_request(str(exc))
+
+    page = outcome.page
+    payload = {
+        "strategy": {
+            "id": str(page.strategy_id),
+            "name": page.name,
+            # **翻转之后**的档位（`flip` 把内存里那一份也改了）。页面据此立刻换掉按钮态，
+            # 不必为这一个布尔再打一次 GET。
+            "lifecycle": ser.lifecycle_payload(bool(strategy.is_active)),
+        },
+        "action": {
+            "value": "restore" if to_active else "retire",
+            "display": page.action_display,
+        },
+        "changed": outcome.changed,
+        # 回执那句话：真的翻了就是「已退役 / 已恢复启用」，没翻就是「本来就是这一档」。
+        "display": outcome.display,
+        # 落库的那一串恒回显——它是人核对「页面上看到的那一页」与「流水里记下的那句」
+        # 是否一致的唯一凭据。没写流水时回显的是本次求值那一份（它没落库）。
+        "reason": page.summary,
+        "at": ser.iso(outcome.row.at) if outcome.row is not None else None,
+    }
+    # 回执照 `switch` 的形状（`{changed, display, reason, at}`）而不是确认页的形状：
+    # 确认页那几个键（`available` / `body` / `counts`）说的是「按下去之前是什么世界」，
+    # 放进回执里就成了动作之后的第二次求值——两个时刻的事实混在一个对象里，读的人分不清
+    # 哪几个数是按下前的。要那一页，GET 那一条随时给。
+    response = Response(payload)
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+@api_view(["POST"])
+@permission_classes([IsStaffUser])
+def retire_strategy(request: Request, strategy_id: UUID) -> Response:
+    """**删除策略**（`POST api/regime/strategies/<id>/retire/`）：把它退役。
+
+    ## 这个按钮叫「删除」，做的却是退役——页面必须说清楚
+
+    它翻的是 `Strategy.is_active`（CONTEXT.md 第 106 条：`False` = 已退役，永不被自动
+    停用、也永不被自动恢复）。**一行数据都不删**：回测、切片、池化格子、停用决策、豁免
+    全部保留（`strategy_lifecycle` 的模块 docstring 有那张对照表）。页面上「删除」这个词
+    与「删数据」不是一回事，所以确认页正文由后端渲染、逐条写明做与不做。
+
+    ## 它会放开一条正在跑的策略
+
+    交易链路不看 `is_active`，所以退役**不会**停止任何会话；而机制会因此不再拦它——下一轮
+    gate 对账按既有判据（`gate_run._warrant`：不在被管集合里或 `is_active=False` ⇒
+    `GONE`）解除它的 `strategy:<id>` 声明。**解除之后，正在跑它的会话可以重新开新仓。**
+    这是「删除」与用户直觉相反的那一面，正文里明写了（含活跃会话条数）。
+
+    ## 四种收场
+
+    | 情形 | 状态码 | 说明 |
+    | --- | --- | --- |
+    | 真退役 | 200 | `changed: true` + `at`（落了一条流水） |
+    | **本来就是退役状态** | **200** | `changed: false` + 一句「本来就是」 |
+    | 未知策略 id | 404 | `{"error"}`，`id` 不是 uuid 时由路由给 404 |
+    | 非 staff | 403 | `IsStaffUser`（匿名 401） |
+
+    「本来就是这一档」用 200 而不是 400：与 `switch` 的「本来就是这一档」同源——它不是
+    客户端的错，是一次成功但无变化的动作，用错误码回报会让人以为失败而再点一次。
+
+    ## 权限是 `IsStaffUser`（ADR 0005：界面纪律，不是安全边界）
+
+    这一层挡不住任何人：管理命令与 slash 通路没跟着收紧。页面文案与 docstring 都要把
+    这句话说出来，否则下一个人会以为权限已经收口。
+    """
+    return _flip_strategy(request, strategy_id, to_active=False)
+
+
+@api_view(["POST"])
+@permission_classes([IsStaffUser])
+def restore_strategy(request: Request, strategy_id: UUID) -> Response:
+    """**恢复启用**（`POST api/regime/strategies/<id>/restore/`）：把退役翻回去。
+
+    为什么需要一个反面按钮：`is_active=False` 的语义里写着「永不被**自动**恢复」，于是
+    退役之后**没有任何自动路径**能把它放回来；页面上只给一个单向按钮，等于一次误点要
+    人去数据库里改回来。这里给的是**人**按下才算数的那条路（机制依然一个方向都不做）。
+
+    **它不产生任何豁免**：豁免是「人工恢复」那条通路（`DeactivationExemption`，键为
+    策略 × 阶段、带生效期），与启停不是一回事。恢复启用只是把策略放回被管集合——下一轮
+    gate 对账若仍判它在当前阶段不适用，它会**再次被停**（确认页正文写明了这一条，免得
+    人以为按一下就有了通行证）。
+
+    收场与 `retire_strategy` 同形：本来就是启用状态 → 200 + `changed: false`。
+    """
+    return _flip_strategy(request, strategy_id, to_active=True)

@@ -3,7 +3,7 @@
 /**
  * 池化表矩阵：策略 × 阶段。
  *
- * 这一块只做**展示**，数据一律由页面传进来（`GET /api/regime/pool/`）。三件事在这里定死：
+ * 这一块只做**展示**，数据一律由页面传进来（`GET /api/regime/pool/`）。四件事在这里定死：
  *
  *   1. **列序由后端的 `regimes` 数组给**（`serializers.ORDERED_REGIMES`：高波动 → 下行 →
  *      上行 → 箱体）。前端按数组排，不另写一份顺序——两份顺序各自「看起来都对」时，
@@ -12,14 +12,18 @@
  *      那句中文的家在后端（`slice.STATE_DISPLAY`），前端再写一份就是第二个说法。
  *   3. **冷启动不是空表格**：`has_generation=false` 时整张表不渲染，改为后端那句
  *      `display`（「还没有任何一代池化表：先跑一次池化重算……」）加一条重算指引。
+ *   4. **行状态与「删除策略」按钮都由页面注入**（`renderStrategyAction`）：这一块不拥有
+ *      写逻辑，也不自己判 `is_active`——它只把后端给的 `strategy.lifecycle` 排版出来
+ *      （已退役角标）并把页面递进来的那个按钮放进「操作」列。写入口住在页面里
+ *      （`StrategyLifecycleButton`），与 `RebuildButton` 同一条分工。
  *
  * 行内展开照 `components/backtest/BacktestTreeTable.tsx` 的 `Set<string>`：一格一个
  * `key`（后端给的 `"<策略 id>|<阶段>"`），展开的内容是那一格的证据（`PoolCellDetail`）。
  */
 
-import { useMemo, useState } from "react";
-import type { Labelled, RegimePool, RegimePoolCell } from "@/lib/api";
-import { formatNumber } from "@/lib/format";
+import { useMemo, useState, type ReactNode } from "react";
+import type { Labelled, RegimePool, RegimePoolCell, RegimeStrategyRef } from "@/lib/api";
+import { formatMoment, formatNumber } from "@/lib/format";
 import PoolCellDetail from "./PoolCellDetail";
 
 type Tone = "green" | "red" | "amber" | "muted" | "blue";
@@ -65,6 +69,8 @@ function columnsOf(pool: RegimePool): Labelled[] {
 interface StrategyRow {
   id: string;
   name: string;
+  /** 那一行策略的完整读面对象（格子里的 `strategy`）。行状态与按钮都从它取。 */
+  ref: RegimeStrategyRef;
   cells: Map<string, RegimePoolCell>;
 }
 
@@ -73,12 +79,37 @@ function rowsOf(pool: RegimePool): StrategyRow[] {
   for (const cell of pool.cells) {
     let row = rows.get(cell.strategy.id);
     if (!row) {
-      row = { id: cell.strategy.id, name: cell.strategy.name, cells: new Map() };
+      row = {
+        id: cell.strategy.id,
+        name: cell.strategy.name,
+        ref: cell.strategy,
+        cells: new Map(),
+      };
       rows.set(cell.strategy.id, row);
     }
     row.cells.set(cell.regime.value, cell);
   }
   return [...rows.values()];
+}
+
+/** 已退役的行在策略名旁边多一个角标（说的仍是后端给的 `display`）。 */
+function RetiredBadge({ strategy }: { strategy: RegimeStrategyRef }) {
+  if (strategy.lifecycle.value !== "retired") return null;
+  const change = strategy.latest_change;
+  const title = change
+    ? `机制不再管它：${change.actor_kind.display}·${change.actor_name} 于 ${formatMoment(
+        change.at
+      )} 退役；${change.reason}`
+    : "机制不再管它（is_active=False）。";
+  return (
+    <span
+      data-testid={`retired-badge-${strategy.id}`}
+      title={title}
+      className="ml-1 bg-bg3 text-text3 px-1 rounded text-[9px] whitespace-nowrap"
+    >
+      {strategy.lifecycle.display}
+    </span>
+  );
 }
 
 function CellBadges({ cell }: { cell: RegimePoolCell }) {
@@ -110,9 +141,18 @@ export interface PoolTableProps {
   pool: RegimePool;
   /** 初始展开的格子 key（测试与深链接用；默认全收起）。 */
   initialExpanded?: Set<string>;
+  /**
+   * 每一行的动作槽（「删除策略」/「恢复启用」）。**由页面注入**，本组件不碰 API：
+   * 给了它就多渲染一列「操作」，不给就与从前逐像素一致（所以读面与写面各自可以单独测）。
+   */
+  renderStrategyAction?: (strategy: RegimeStrategyRef) => ReactNode;
 }
 
-export default function PoolTable({ pool, initialExpanded }: PoolTableProps) {
+export default function PoolTable({
+  pool,
+  initialExpanded,
+  renderStrategyAction,
+}: PoolTableProps) {
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(initialExpanded ?? [])
   );
@@ -156,6 +196,10 @@ export default function PoolTable({ pool, initialExpanded }: PoolTableProps) {
     );
   }
 
+  const hasActions = renderStrategyAction !== undefined;
+  // 展开行要横跨整行：策略列 + 阶段列（+ 操作列，有动作时）。
+  const colSpan = columns.length + 1 + (hasActions ? 1 : 0);
+
   return (
     <div className="space-y-3">
       <div className="bg-bg1 border border-[rgba(255,255,255,0.07)] rounded-xl overflow-hidden">
@@ -171,6 +215,9 @@ export default function PoolTable({ pool, initialExpanded }: PoolTableProps) {
                   {regime.display}
                 </th>
               ))}
+              {hasActions && (
+                <th className="text-left py-2.5 px-2 font-semibold">操作</th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -186,6 +233,8 @@ export default function PoolTable({ pool, initialExpanded }: PoolTableProps) {
                   expandedCells={expandedCells}
                   expanded={expanded}
                   onToggle={toggle}
+                  renderStrategyAction={renderStrategyAction}
+                  colSpan={colSpan}
                 />
               );
             })}
@@ -204,12 +253,16 @@ function RowGroup({
   expandedCells,
   expanded,
   onToggle,
+  renderStrategyAction,
+  colSpan,
 }: {
   row: StrategyRow;
   columns: Labelled[];
   expandedCells: RegimePoolCell[];
   expanded: Set<string>;
   onToggle: (key: string) => void;
+  renderStrategyAction?: (strategy: RegimeStrategyRef) => ReactNode;
+  colSpan: number;
 }) {
   return (
     <>
@@ -220,6 +273,7 @@ function RowGroup({
         <th scope="row" className="text-left py-2 px-3 font-semibold text-text">
           {row.name}
           <span className="text-text3 font-normal"> #{row.id}</span>
+          <RetiredBadge strategy={row.ref} />
         </th>
         {columns.map((regime) => {
           const cell = row.cells.get(regime.value);
@@ -256,6 +310,11 @@ function RowGroup({
             </td>
           );
         })}
+        {renderStrategyAction !== undefined && (
+          <td className="py-2 px-2" data-testid={`pool-row-action-${row.id}`}>
+            {renderStrategyAction(row.ref)}
+          </td>
+        )}
       </tr>
       {expandedCells.map((cell) => (
         <tr
@@ -263,7 +322,7 @@ function RowGroup({
           data-testid={`pool-cell-detail-${cell.key}`}
           className="border-b border-[rgba(255,255,255,0.04)]"
         >
-          <td colSpan={columns.length + 1} className="p-0">
+          <td colSpan={colSpan} className="p-0">
             <PoolCellDetail cell={cell} />
           </td>
         </tr>

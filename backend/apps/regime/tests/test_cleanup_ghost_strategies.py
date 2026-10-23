@@ -10,8 +10,9 @@
    停用」）读起来是两个判据，实际落成的是「**零引用**才删」——比并集更保守一档。方向
    是刻意选的：多留一行看得见，多删一行看不见。所以「有引用」那一条**不是**「有会话
    引用」，而是任何一张表指着它。
-2. **引用清单是反射出来的，不是手抄的**。`Strategy._meta.related_objects` 上一共七条
-   反向关系，其中四条是 `CASCADE`——手抄一张「LiveSession + BacktestResult」的清单
+2. **引用清单是反射出来的，不是手抄的**。`Strategy._meta.related_objects` 上一共九条
+   反向关系，其中五条是 `CASCADE`（最近一条是策略启停流水
+   `StrategyLifecycleChange`）——手抄一张「LiveSession + BacktestResult」的清单
    （CONTEXT.md 的散文就是这么写的）会在写下它的当天漏掉 `GridSearchJob` 与
    `RegimePoolCell`，而漏掉的代价是**静默级联删除**：回测数据是这个仓库里更贵的资产。
    本文件因此对**每一条**反向关系各有一条用例，再加一条钉住「工厂表与反射逐字相符」——
@@ -216,6 +217,28 @@ def _make_candidate(user, strategy):
         strategy=strategy,
         name=f"Probe_{uuid.uuid4().hex[:8]}",
         origin=StrategyCandidateOrigin.AGENT.value,
+    )
+
+
+@_factory(("regime", "strategylifecyclechange"))
+def _make_lifecycle_change(user, strategy):
+    """一条启停流水（`/regime` 页面上的「删除策略」写的那张表）。
+
+    **它算不算引用？算**——这是新增这张表时那条「工厂表与反射逐字相符」用例逼出来的
+    问题，而答案是「算」：一条被人退役过的策略不该被清理命令静默删掉。命令的判据是
+    「零引用才删」，多留一行的方向是安全的（`cleanup_ghost_strategies` 的 docstring
+    里写着「多留一行看得见，多删一行看不见」）。
+    """
+    from apps.regime.models import StrategyLifecycleChange
+
+    return StrategyLifecycleChange.objects.create(
+        strategy=strategy,
+        from_active=True,
+        to_active=False,
+        at=NOW,
+        actor_kind="web",
+        actor_name="测试",
+        reason="测试：从页面上退役",
     )
 
 

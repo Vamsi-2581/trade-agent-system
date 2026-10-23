@@ -31,10 +31,19 @@
 
 ## 读与写
 
-前四条是**读**（`IsAuthenticated`：所有登录用户都能看），最后一条 `switch/` 是**写**
-（`IsStaffUser`：`is_staff` 才放行）。两者不是「同一件事的两个精度」，而是两套权限
-（ADR 0005）——所以它们各占一条路由，而不是在一条路由里按方法分权：那样 `GET` 与 `POST`
-的权限会写在同一处，改动其中一个时很容易连带另一个。
+前四条是**读**（`IsAuthenticated`：所有登录用户都能看），`switch/` 与两条
+`strategies/<id>/{retire,restore}/` 是**写**（`IsStaffUser`：`is_staff` 才放行）。两者不是
+「同一件事的两个精度」，而是两套权限（ADR 0005）——所以它们各占一条路由，而不是在一条
+路由里按方法分权：那样 `GET` 与 `POST` 的权限会写在同一处，改动其中一个时很容易连带
+另一个。
+
+`strategies/<id>/`（读，确认页）与 `strategies/<id>/retire/`（写）因此也是两条：前者是
+「这一页说的会发生什么」，后者是「动手」。**这不是同一条路由的 GET/POST**——ADR 0005 的
+那句话要求读对所有人开放、写只对 `is_staff`，而按方法分权正好把这两套权限塞回同一处。
+
+**`retire/` 不是 `DELETE`**：它一行都不删，翻的是 `Strategy.is_active`（退役）。用 POST
+是因为它是一次动作（翻开关 + 落一条启停流水），不是对某个资源的删除；叫 DELETE 会让
+下一个人以为库里那行没了。
 """
 
 from django.urls import path
@@ -59,6 +68,33 @@ urlpatterns = [
     ),
     path("pool/rebuild/", views.pool_rebuild_dispatch, name="regime-pool-rebuild"),
     path("pool/", views.pool, name="regime-pool"),
+    # 策略的「机制在册」总开关（`/regime` 页面上的「删除策略」）。三条路由而不是一条：
+    # 读（确认页，所有登录用户）与两个写（退役 / 恢复启用，`is_staff`）各有各的权限，
+    # 与 `pool/rebuild/<task_id>/` + `pool/rebuild/` 同源的理由——权限不同的事不写在同一
+    # 条路由里按方法分权，改其中一个时就不会连带另一个。
+    #
+    # 两个写分别一条而不是一条带 `to_active` 参数：`<uuid>` 后那段是**动作**，动作的名字
+    # 应当出现在 URL 里（与 `sessions/<pk>/stop/`、`/pause/` 同形），而不是藏进请求体——
+    # 否则排障时一条 POST 记录答不出它到底翻了哪个方向。
+    #
+    # 顺序：三条都带 `<uuid:strategy_id>`，读那条更短（`strategies/<id>/`），写在后面。
+    # Django 按序匹配，短的不会吃掉长的（两条写各自多一段路径），把读排前面只是让阅读
+    # 顺序与匹配顺序一致——与 `pool/generations/` 排 `pool/` 之前同源。
+    path(
+        "strategies/<uuid:strategy_id>/",
+        views.strategy_lifecycle_page,
+        name="regime-strategy-lifecycle",
+    ),
+    path(
+        "strategies/<uuid:strategy_id>/retire/",
+        views.retire_strategy,
+        name="regime-strategy-retire",
+    ),
+    path(
+        "strategies/<uuid:strategy_id>/restore/",
+        views.restore_strategy,
+        name="regime-strategy-restore",
+    ),
     path("briefing/<str:kind>/", views.briefing, name="regime-briefing"),
     path("switch/", views.switch, name="regime-switch"),
 ]

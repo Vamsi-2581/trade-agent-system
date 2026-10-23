@@ -27,6 +27,7 @@ import DashboardShell from "@/components/layout/DashboardShell";
 import GenerationHistory from "@/components/regime/GenerationHistory";
 import PoolTable from "@/components/regime/PoolTable";
 import RebuildButton from "@/components/regime/RebuildButton";
+import StrategyLifecycleButton from "@/components/regime/StrategyLifecycleButton";
 import SwitchCard from "@/components/regime/SwitchCard";
 import { useAuth } from "@/context/AuthContext";
 import { useRegimeOverview } from "@/hooks/useRegimeOverview";
@@ -108,7 +109,7 @@ export default function RegimePage() {
         </p>
         {!isStaff && (
           <p data-testid="write-permission-hint" className="text-[11px] text-text3">
-            翻开关与重算池化表需要管理员权限。（这是界面纪律，不是安全边界：服务端同样会挡。）
+            翻开关、重算池化表与删除策略（退役）需要管理员权限。（这是界面纪律，不是安全边界：服务端同样会挡。）
           </p>
         )}
       </header>
@@ -165,8 +166,25 @@ export default function RegimePage() {
           </p>
         )}
 
-        {/* 冷启动由 `PoolTable` 自己说那句后端的话（不画空表格）。 */}
-        {pool !== null && <PoolTable pool={pool} />}
+        {/* 冷启动由 `PoolTable` 自己说那句后端的话（不画空表格）。
+            行尾的「删除策略 / 恢复启用」只在有写权限时注入——非 staff 的表与从前逐像素
+            一致（`renderStrategyAction` 不给就不多那一列）。 */}
+        {pool !== null && (
+          <PoolTable
+            pool={pool}
+            renderStrategyAction={
+              isStaff
+                ? (strategy) => (
+                    <StrategyLifecycleButton
+                      strategy={strategy}
+                      isStaff
+                      onChanged={() => void loadPool()}
+                    />
+                  )
+                : undefined
+            }
+          />
+        )}
       </section>
 
       <section className="space-y-2">

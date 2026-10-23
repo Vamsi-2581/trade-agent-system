@@ -30,6 +30,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
+from typing import Iterable
 
 from django.db import models
 
@@ -820,6 +821,95 @@ class ArchetypeOverride(models.Model):
 
     def __str__(self) -> str:
         return f"{self.strategy_id} → {self.archetype}"
+
+
+class StrategyLifecycleChange(models.Model):
+    """`Strategy.is_active` 这个人工总开关的每一次**人工**翻转，只增不改。
+
+    形状照 `RegimeMechanismSwitch`（同一套留痕四件事：什么时候、谁、从哪档到哪档、为什么），
+    因为它们是同一类动作：一次由人做出的、改变全局行为的决定。区别只在被翻的开关是「机制
+    整体 / 事件熔断 / 行情阶段 gate」还是「某一条策略还在不在被管集合里」。
+
+    **为什么必须有这张表**：`is_active` 是 CONTEXT.md 第 106 条赋予真语义的人工总开关
+    （`False` = 已退役，永不被自动停用、也永不被自动恢复），而它此前只是一列布尔——
+    页面与日报答得出「它退役了」，答不出「谁在什么时候退的、为什么」。`cleanup_ghost_strategies`
+    那条管理命令是唯一的既有写方，它连一行记录都不留（只有 stdout）。Web 写入口（`/regime`
+    页面上的「删除策略」）把这件事交到人手上，留痕就从「可以以后补」变成「现在就要有」：
+    人点一下是几秒的事，而没有记录之后「这条策略为什么不见了」只能靠翻日志碰运气。
+
+    **`from_active` / `to_active` 是两个布尔而不是一个 `kind` 枚举**：与
+    `RegimeMechanismSwitch` 的 `from_mode` / `to_mode` 同源——「从哪一档到哪一档」是这个
+    对象的全部信息，多存一个 `kind` 就是同一件事的第二个说法（两份取值迟早会互相矛盾，
+    比如 `kind="retire"` 而 `to_active=True`）。
+
+    **它是流水，不是当前状态**：当前状态是 `Strategy.is_active` 自己。一行状态表加一张流水
+    表就是两份可以互相矛盾的真相，而它们的分歧恰好出现在一次翻转写了一半的时候。
+
+    **它同时是 ghost 清理的「引用」之一**：`cleanup_ghost_strategies` 用
+    `Strategy._meta.related_objects` 反射全部反向关系，本表因此自动被算进来——一条被人
+    退役过的策略不会再被那条命令静默删掉（它的判据是「零引用才删」）。这是刻意的：人做过
+    决定的行，保留比清掉好，而方向与那条命令自己的 docstring 一致（保守的方向是安全的方向）。
+
+    **`reason` 必填**，与 `RegimeMechanismSwitch` 同一条：允许留空的字段拦不住「忘了写原因」，
+    而这张表的全部价值就是回答「为什么」。
+    """
+
+    strategy = models.ForeignKey(
+        "trading.Strategy",
+        on_delete=models.CASCADE,
+        related_name="regime_lifecycle_changes",
+        verbose_name="策略",
+    )
+    from_active = models.BooleanField("切换前是否在册")
+    to_active = models.BooleanField("切换后是否在册")
+
+    at = models.DateTimeField("切换时刻（UTC）", db_index=True)
+
+    # 复用 `ActorKind`：这里的「谁」与三个开关的「谁」是同一组口径（命令行 / 定时任务 /
+    # 聊天渠道 / 网页），再开一个枚举会让「谁干的」出现两套词汇。
+    actor_kind = models.CharField(
+        "触发方类别", max_length=16, choices=ActorKind.choices()
+    )
+    actor_name = models.CharField("触发方", max_length=128)
+
+    reason = models.TextField("切换原因（必填）")
+
+    created_at = models.DateTimeField("创建时间", auto_now_add=True)
+
+    class Meta:
+        db_table = "regime_strategy_lifecycle_changes"
+        verbose_name = "策略启停流水"
+        verbose_name_plural = "策略启停流水"
+        ordering = ["-at", "-id"]
+        indexes = [
+            models.Index(fields=["strategy", "-at"], name="reg_lifecycle_strategy_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.strategy_id} {self.from_active}→{self.to_active} by {self.actor_name}"
+
+    @classmethod
+    def latest_per_strategy(cls, strategy_ids: Iterable) -> dict:
+        """一批策略各自最近一次启停流水（没有流水的策略不在返回值里）。
+
+        **按 `at` 而不是按 id 排**：与 `RegimeMechanismSwitch.latest` 同一条理由——`at` 是
+        可回填的既有事实（补录一次历史翻转），而 id 只反映写入顺序，两者在补录时会给出相反
+        的答案。
+
+        一次查询取回整批再在 Python 里取每个策略的第一行：这批 id 是**一代池化表里出现过的
+        策略**，量级是几十，而逐个 `latest()` 是几十次查询（池化读面有查询数纪律）。
+        """
+        ids = list(strategy_ids)
+        if not ids:
+            return {}
+        latest: dict = {}
+        rows = cls.objects.filter(strategy_id__in=ids).order_by(
+            "strategy_id", "-at", "-id"
+        )
+        for row in rows:
+            # `order_by` 已经把每个策略最近的一行排在最前，所以第一次见到就收下。
+            latest.setdefault(row.strategy_id, row)
+        return latest
 
 
 # --------------------------------------------------------------------------- #

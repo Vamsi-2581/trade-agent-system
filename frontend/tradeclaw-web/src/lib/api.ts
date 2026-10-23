@@ -1268,13 +1268,94 @@ export interface RegimeOverview {
 export interface RegimePoolCell {
   /** `"<策略 id>|<阶段>"`。前端拿它做 key 与行内展开的锚。 */
   key: string;
-  strategy: { id: string; name: string };
+  strategy: RegimeStrategyRef;
   regime: Labelled;
   source: Labelled;
   state: Labelled;
   reason: Labelled;
   needs_review: boolean;
   evidence: Record<string, unknown>;
+}
+
+/**
+ * 格子里那个 `strategy` 对象：id + 名字 + **机制在册状态** + 最近一次启停流水。
+ *
+ * `lifecycle` 与 `latest_change` 是「删除策略」那两个按钮的判据：前者说它此刻在不在册
+ * （决定按钮是「删除策略」还是「恢复启用」），后者说上一次是谁为什么动的（退役过的行
+ * 要显示得出来，否则「删除」看起来没生效）。
+ *
+ * 两个方向的取值与人话都在后端（`strategy_lifecycle.LIFECYCLE_DISPLAY`）：前端判
+ * `value`、显示 `display`，不把 `false` 翻成「已退役」。
+ */
+export interface RegimeStrategyRef {
+  id: string;
+  name: string;
+  lifecycle: Labelled;
+  latest_change: RegimeLifecycleChange | null;
+}
+
+/** 一次启停流水（`StrategyLifecycleChange`）：什么时候、谁、从哪档到哪档、为什么。 */
+export interface RegimeLifecycleChange {
+  at: string | null;
+  actor_kind: Labelled;
+  actor_name: string;
+  from_active: Labelled;
+  to_active: Labelled;
+  reason: string;
+}
+
+/** `GET api/regime/strategies/<id>/`：一条策略的启停确认页。 */
+export interface RegimeStrategyLifecyclePage {
+  strategy: {
+    id: string;
+    name: string;
+    lifecycle: Labelled;
+    latest_change: RegimeLifecycleChange | null;
+  };
+  /** 退役那一侧。`available: false` 时 `body` 就是那句「本来就是退役状态」。 */
+  retire: RegimeLifecycleAction;
+  /** 恢复启用那一侧。 */
+  restore: RegimeLifecycleAction;
+}
+
+/** 确认页的一侧（两个方向同形）。 */
+export interface RegimeLifecycleAction {
+  action: { value: "retire" | "restore"; display: string };
+  /**
+   * 这一次动作**会不会**真的写东西。`false` = 本来就是这一档（`body` 是那句话）。
+   * 它是数据不是文案：按钮态由它决定，说法由 `body` 给。
+   */
+  available: boolean;
+  /** 后端渲染的确认页正文。前端原样显示，一个字不改。 */
+  body: string;
+  /** 确认之后会落进流水 `reason` 的那句话（与这一页同源）。 */
+  summary: string;
+  /** 排版用的数：活跃会话 / 待解除的停用声明 / 停用决策 / 当前代池化格。 */
+  counts: {
+    active_sessions: number;
+    declarations: number;
+    decisions: number;
+    pool_cells: number;
+  };
+}
+
+/**
+ * `POST api/regime/strategies/<id>/{retire,restore}/` 的回执。
+ *
+ * **形状与确认页不同**（照 `RegimeSwitchResult` 那条取向）：回执说的是「按下之后」，
+ * 确认页那几个键（`available` / `body` / `counts`）说的是「按下之前」，两套事实混进
+ * 一个对象会让读的人分不清哪几个数属于哪个时刻。
+ */
+export interface RegimeStrategyFlipResult {
+  strategy: { id: string; name: string; lifecycle: Labelled };
+  action: { value: "retire" | "restore"; display: string };
+  /** 真翻了 `true`；「本来就是这一档」是 **200 + `false`**，不是错误。 */
+  changed: boolean;
+  /** 回执那句话：真的翻了就是「已退役 / 已恢复启用」，没翻就是「本来就是这一档」。 */
+  display: string;
+  /** 落库的那一串（没写流水时是本次求值那一份）。 */
+  reason: string;
+  at: string | null;
 }
 
 /**
@@ -1448,5 +1529,45 @@ export const regimeApi = {
   getRebuildStatus: (taskId: string) =>
     request<RegimeRebuildStatus>(
       `/api/regime/pool/rebuild/${encodeURIComponent(taskId)}/`
+    ),
+
+  /**
+   * 一条策略的启停确认页（`GET api/regime/strategies/<id>/`）。**读对所有登录用户开放。**
+   *
+   * 两个方向一次都给（退役 / 恢复启用），各自的 `body` 是后端渲染的正文：页面上那句
+   * 「删除不删数据」「退役不停会话」的家在这里，前端不重拼。`available=false` 的那一侧
+   * `body` 就是「本来就是这一档」，原样显示即可。
+   *
+   * 便宜（四条计数查询），但**不进轮询**：它只在人点开确认弹窗时拉一次。
+   */
+  getStrategyLifecycle: (strategyId: string) =>
+    request<RegimeStrategyLifecyclePage>(
+      `/api/regime/strategies/${encodeURIComponent(strategyId)}/`
+    ),
+
+  /**
+   * **删除策略**：把这条策略退役（`Strategy.is_active` → `false`）。
+   *
+   * 名字里的「删除」是页面上那个按钮的说法，实际做的事由后端渲染的确认页正文写清楚
+   * （不删任何数据、不停任何会话、下一轮对账解除它的停用声明之后可以重新开仓）。
+   *
+   * 幂等：「本来就是退役状态」是 **200 + `changed:false`**，不是错误。
+   */
+  retireStrategy: (strategyId: string) =>
+    request<RegimeStrategyFlipResult>(
+      `/api/regime/strategies/${encodeURIComponent(strategyId)}/retire/`,
+      "POST"
+    ),
+
+  /**
+   * **恢复启用**：把退役翻回去。它**不产生豁免**——下一轮对账若仍判它不适用会再次停它。
+   *
+   * 它存在的理由：`is_active=False` 的语义里写着「永不被**自动**恢复」，所以退役之后没有
+   * 任何自动路径能把它放回来；只给一个单向按钮等于一次误点要去改数据库。
+   */
+  restoreStrategy: (strategyId: string) =>
+    request<RegimeStrategyFlipResult>(
+      `/api/regime/strategies/${encodeURIComponent(strategyId)}/restore/`,
+      "POST"
     ),
 };

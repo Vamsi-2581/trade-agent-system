@@ -31,6 +31,10 @@ const labelled = (value: string, display?: string): Labelled => ({
   display: display ?? `后端渲染：${value}`,
 });
 
+/** 后端 `strategy_lifecycle.LIFECYCLE_DISPLAY` 的两句原样文本（前端**不许**另写一份）。 */
+const ACTIVE_LIFECYCLE = labelled("active", "在册（机制会管它）");
+const RETIRED_LIFECYCLE = labelled("retired", "已退役（机制不再管它）");
+
 const REGIMES = [
   labelled("high_vol", "高波动"),
   labelled("downtrend", "下行趋势"),
@@ -65,7 +69,12 @@ function cell(
 ): RegimePoolCell {
   return {
     key: `${strategyId}|${regime.value}`,
-    strategy: { id: strategyId, name: strategyName },
+    strategy: {
+      id: strategyId,
+      name: strategyName,
+      lifecycle: ACTIVE_LIFECYCLE,
+      latest_change: null,
+    },
     regime,
     source: labelled("strategy", "本策略切片"),
     state,
@@ -369,5 +378,104 @@ describe("排除计数", () => {
     ).toContain("0");
     expect(exclusions.getByTestId("pool-exclusion-no_payload").textContent).toContain("1");
     expect(exclusions.getByText("no_merge_inputs")).toBeTruthy();
+  });
+});
+
+// ── 行状态（已退役）与「删除策略」动作槽 ──
+
+/** 一条退役流水（`StrategyLifecycleChange` 的读面形状）。 */
+const RETIREMENT = {
+  at: "2026-10-23T08:00:00Z",
+  actor_kind: labelled("web", "网页"),
+  actor_name: "ops",
+  from_active: ACTIVE_LIFECYCLE,
+  to_active: RETIRED_LIFECYCLE,
+  reason: "人工退役（从机制里删除）：rsi_cross",
+};
+
+/** 同一张表，但 rsi_cross 那一行已经退役。 */
+function retiredPool(): RegimePool {
+  const retired = cell("7", "rsi_cross", REGIMES[0], labelled("neutral"), {
+    strategy: {
+      id: "7",
+      name: "rsi_cross",
+      lifecycle: RETIRED_LIFECYCLE,
+      latest_change: RETIREMENT,
+    },
+  });
+  return { ...pool, cells: [retired, ...pool.cells.filter((c) => c.strategy.id !== "7")] };
+}
+
+describe("行状态", () => {
+  it("在册的行没有角标", () => {
+    render(<PoolTable pool={pool} />);
+
+    expect(screen.queryByTestId("retired-badge-7")).toBeNull();
+  });
+
+  it("已退役的行带角标，且角标文本取后端的 display", () => {
+    render(<PoolTable pool={retiredPool()} />);
+
+    const badge = screen.getByTestId("retired-badge-7");
+    expect(badge.textContent).toBe(RETIRED_LIFECYCLE.display);
+    // 谁、何时、为什么 —— 角标上挂得住，人 hover 得出来（否则「删除了」是一条无主记录）
+    expect(badge.getAttribute("title")).toContain("ops");
+    expect(badge.getAttribute("title")).toContain("网页");
+    expect(badge.getAttribute("title")).toContain(RETIREMENT.reason);
+  });
+
+  it("退役的行仍然在表里（记录保留），不是从这一代里消失", () => {
+    render(<PoolTable pool={retiredPool()} />);
+
+    expect(screen.getByTestId("pool-row-7")).toBeTruthy();
+    expect(screen.getByTestId(`pool-cell-${"7"}|${REGIMES[0].value}`)).toBeTruthy();
+  });
+});
+
+describe("操作列", () => {
+  it("不给动作槽时与从前逐像素一致：没有「操作」列", () => {
+    render(<PoolTable pool={pool} />);
+
+    const headers = within(screen.getByTestId("pool-table"))
+      .getAllByRole("columnheader")
+      .map((node) => node.textContent ?? "");
+    expect(headers).toEqual(["策略", "高波动", "下行趋势", "上行趋势", "箱体"]);
+    expect(screen.queryByTestId("pool-row-action-7")).toBeNull();
+  });
+
+  it("给了动作槽就多一列，且每一行都渲染", () => {
+    render(
+      <PoolTable
+        pool={pool}
+        renderStrategyAction={(strategy) => (
+          <button data-testid={`fake-action-${strategy.id}`}>{strategy.name}</button>
+        )}
+      />
+    );
+
+    const headers = within(screen.getByTestId("pool-table"))
+      .getAllByRole("columnheader")
+      .map((node) => node.textContent ?? "");
+    expect(headers).toEqual(["策略", "高波动", "下行趋势", "上行趋势", "箱体", "操作"]);
+
+    // 5 个策略行各一个（`rowsOf` 按策略归并）
+    expect(screen.getByTestId("fake-action-7")).toBeTruthy();
+    expect(screen.getByTestId("fake-action-8")).toBeTruthy();
+    expect(screen.getByTestId("fake-action-11")).toBeTruthy();
+  });
+
+  it("行内展开的 colSpan 跟着多出来的那一列走", () => {
+    const open = new Set([fitCell.key]);
+    render(
+      <PoolTable
+        pool={pool}
+        initialExpanded={open}
+        renderStrategyAction={() => <span />}
+      />
+    );
+
+    const detail = screen.getByTestId(`pool-cell-detail-${fitCell.key}`);
+    const cellNode = detail.querySelector("td");
+    expect(cellNode?.getAttribute("colspan")).toBe("6"); // 1 策略 + 4 阶段 + 1 操作
   });
 });

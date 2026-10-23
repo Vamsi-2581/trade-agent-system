@@ -356,15 +356,68 @@ def ser_outcome_of(generation: RegimePoolRebuild) -> str:
     )
 
 
-def cell_payload(row: Mapping[str, Any], strategy_name: str) -> dict[str, Any]:
+def lifecycle_payload(is_active: Any) -> dict[str, str]:
+    """策略的「机制在册」状态。**表在 `strategy_lifecycle`**（那是判据的家），这里只查表。
+
+    与 `state_payload` 同一条纪律：前端不把 `False` 翻成「已退役」——那句话的家在后端，
+    再写一份就是同一件事的第二个说法。
+    """
+    from apps.regime import strategy_lifecycle
+
+    value = strategy_lifecycle.lifecycle_state(is_active)
+    return _labelled(value, strategy_lifecycle.LIFECYCLE_DISPLAY[value])
+
+
+def lifecycle_change_payload(row: Any) -> dict[str, Any] | None:
+    """最近一次启停流水。**没有流水就是 `None`**（不是空对象、不是空串）。
+
+    回显四件事：什么时候、谁、从哪档到哪档、为什么。与 `_switch_row` 同一形状，理由也
+    同源——这四件就是 `StrategyLifecycleChange` 存在的理由，省掉任一件，页面上就答不出
+    「这条策略为什么不见了、是谁弄的」。
+    """
+    if row is None:
+        return None
+    return {
+        "at": iso(row.at),
+        "actor_kind": actor_kind_payload(row.actor_kind),
+        "actor_name": row.actor_name,
+        "from_active": lifecycle_payload(row.from_active),
+        "to_active": lifecycle_payload(row.to_active),
+        "reason": row.reason,
+    }
+
+
+def strategy_payload(row: Mapping[str, Any], info: Mapping[str, Any]) -> dict[str, Any]:
+    """格子里那个 `strategy` 对象：id + 名字 + 机制在册状态 + 最近一次启停流水。
+
+    **状态与流水挂在格子上，而不是另开一个 `strategies` 数组**：池化表的行是前端按
+    `strategy.id` 归并格子得来的，状态跟着格子走，行状态就不必再做一次 join。
+
+    `latest_change` 在**没退役过**时是 `None`（不是编一条空流水）：页面据此只显示在册，
+    而不是显示「上一次谁动过它」。历史上退役过、后来恢复了的策略，那一条流水仍然回显
+    （它是事实），由它的 `to_active` 自己说明方向。
+    """
+    return {
+        "id": str(row["strategy_id"]),
+        "name": info["name"],
+        "lifecycle": lifecycle_payload(info["is_active"]),
+        "latest_change": lifecycle_change_payload(info.get("change")),
+    }
+
+
+def cell_payload(row: Mapping[str, Any], info: Mapping[str, Any]) -> dict[str, Any]:
     """一格：策略 + 阶段 + 来源 + 状态 + 原因 + 待复核 + 依据原文。
 
     `evidence` **原样透出，一个键都不改**：它是这张表的存在理由（哪几个回测、各多少笔、
     覆盖什么区间、合并成交数、品种、原型归一化留痕）。任何「顺手整理一下」的加工都会让
     「依据哪几个回测」在传输层变成一个派生值，而审计要的是原文。
+
+    `info` 是那一行策略的三件事（名字 / 在册状态 / 最近一次启停流水），由调用方**一次
+    查询**取回整批（`views._strategy_info`）——逐格再查一次的话，一张 40 行的表要发 40
+    次查询，而本读面有查询数纪律。
     """
     return {
-        "strategy": {"id": str(row["strategy_id"]), "name": strategy_name},
+        "strategy": strategy_payload(row, info),
         "regime": regime_payload(row["regime"]),
         "source": source_payload(row["source"]),
         "state": state_payload(row["state"]),

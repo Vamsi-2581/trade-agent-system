@@ -30,6 +30,7 @@ from apps.regime.models import (
     RegimePoolRebuild,
     RegimeReducePause,
     RegimeTruthInterval,
+    StrategyLifecycleChange,
 )
 
 #: 带 `ActorKind` choices 的字段，`(模型, 字段名)`。**这张清单是断言的锚**：新增一处
@@ -43,7 +44,17 @@ ACTOR_KIND_FIELDS = [
     (RegimeReducePause, "actor_kind"),
     (RegimeTruthInterval, "actor_kind"),
     (RegimeTruthInterval, "retracted_by_kind"),
+    # 策略启停流水：`/regime` 页面上的「删除策略」由网页上的 staff 触发，
+    # 它与三个开关的「谁干的」是同一组口径（`ActorKind.WEB`）。
+    (StrategyLifecycleChange, "actor_kind"),
 ]
+
+#: `ACTOR_KIND_FIELDS` 里**不经过 0015 那次 `AlterField`** 的那几条：它们所在的表在
+#: 0015 之后才建出来，`choices` 从建表那天起就带 `web`。下面那条「0015 一次改完当时
+#: 存在的每一处」用它把 `N` 算出来，而不是把 `N` 写死。
+FIELDS_INTRODUCED_AFTER_0015 = {
+    (StrategyLifecycleChange, "actor_kind"),
+}
 
 
 class TestWebIsAMember(SimpleTestCase):
@@ -117,7 +128,17 @@ class TestEveryActorKindFieldKnowsWeb(SimpleTestCase):
 
 
 class TestTheMigrationIsOnePass(SimpleTestCase):
-    """一次迁移改完全部七处（票面「**一次迁移**，不是两次」）。"""
+    """一次迁移改完当时存在的**每一处**字段（票面「**一次迁移**，不是两次」）。"""
+
+    @staticmethod
+    def _mentions_web(text: str) -> bool:
+        """这段迁移文本里出现 `web` 这个 choices 取值了吗。
+
+        **两种引号都认**：`makemigrations` 生成的字面量用单引号，而本项目里手写的迁移
+        用的是双引号（0015 就是手写风格）。只认一种的话，这条判据会随生成器的排版习惯
+        悄悄失守——而它守的正是「web 只该在一次迁移里出现」。
+        """
+        return '("web"' in text or "'web'" in text
 
     @staticmethod
     def _migrations_dir():
@@ -134,21 +155,43 @@ class TestTheMigrationIsOnePass(SimpleTestCase):
         assert spec is not None and spec.origin is not None
         return Path(spec.origin).parent / "migrations"
 
-    def test_0015_is_the_only_migration_that_knows_web(self):
-        """`web` 只该在 `0015_*` 里出现。它出现在更早的迁移里说明有人重写了历史；
-        出现在更晚的迁移里说明这次是分两次落的——中间那一刻库里有「一半表认识 web、
-        一半不认识」，而那是个没有测试会经过的状态。"""
-        knowing = sorted(
-            p.name
-            for p in self._migrations_dir().glob("[0-9]*.py")
-            if '("web"' in p.read_text("utf-8")
-        )
-        assert knowing == ["0015_alter_haltdeclaration_actor_kind_and_more.py"]
+    def test_web_only_arrives_by_the_one_pass_or_by_a_brand_new_table(self):
+        """`web` 只允许两种到达方式：
 
-    def test_0015_touches_all_seven_fields(self):
-        """一条迁移里七处 `AlterField`：这是「一次迁移」的字面形态。少一处就会有一条
-        路径认识 `web`、另一条不认识。"""
+        1. `0015_*` 那一次「一个迁移改完当时存在的每一处字段」；
+        2. 一条**新建表**的迁移（`CreateModel` 自带完整 `choices`）——`0016` 的策略启停
+           流水就是这一档：那张表在 0016 才存在，所以「一半表认识 web」的中间态无从谈起。
+
+        除此之外再出现一条认识 `web` 的迁移，说明这次是分两次落的 AlterField——中间
+        那一刻库里有「一半表认识 web、一半不认识」，而那是个没有测试会经过的状态。
+        """
+        offenders = []
+        for path in sorted(self._migrations_dir().glob("[0-9]*.py")):
+            text = path.read_text("utf-8")
+            if not self._mentions_web(text):
+                continue
+            if path.name.startswith("0015"):
+                continue
+            if "migrations.CreateModel(" in text:
+                continue
+            offenders.append(path.name)
+
+        assert offenders == [], (
+            f"这些迁移既不是 0015、也不是建表迁移，却认识 web：{offenders}"
+        )
+
+    def test_0015_touches_every_field_that_existed_then(self):
+        """一条迁移里 `N` 处 `AlterField`（`N` = 当时存在的 `actor_kind` 字段数）：
+        这是「一次迁移」的字面形态。少一处就会有一条路径认识 `web`、另一条不认识。
+
+        `ACTOR_KIND_FIELDS` 今天比 `N` 多一条——策略启停流水是 `0016` 的 `CreateModel`
+        带进来的（它不经过 `AlterField`，见上一条）。所以这里减掉**在 0015 之后才出现的
+        字段**，而不是把那个数写成字面量：写成字面量之后，加下一处字段时这条用例会红在
+        一个与它无关的原因上。
+        """
         source = (
             self._migrations_dir() / "0015_alter_haltdeclaration_actor_kind_and_more.py"
         ).read_text("utf-8")
-        assert source.count("migrations.AlterField(") == len(ACTOR_KIND_FIELDS)
+        assert source.count("migrations.AlterField(") == len(ACTOR_KIND_FIELDS) - len(
+            FIELDS_INTRODUCED_AFTER_0015
+        )
