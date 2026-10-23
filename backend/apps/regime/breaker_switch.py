@@ -84,6 +84,10 @@ class Confirmation:
     nearest: object | None
     #: 事件库最近一次入库距今多少天；从未录入过为 `None`。
     staleness_days: int | None
+    #: 求值那一刻的档位。**由 `confirmation()` 记下来，渲染层不再各读一次**：正文印
+    #: 「当前档位」，而 `closing_summary` 印的是「关掉的那一刻」——两处各读一次的话，
+    #: 中间落一次切换就会让同一份快照说出两个档位。一次求值里只读一次，值随快照走。
+    mode: MechanismMode
 
 
 def confirmation(*, now: datetime | None = None) -> Confirmation:
@@ -114,6 +118,8 @@ def confirmation(*, now: datetime | None = None) -> Confirmation:
 
     return Confirmation(
         now=at,
+        # 档位与其它数取自同一次求值。
+        mode=RegimeMechanismSwitch.current(KIND),
         until=until,
         horizon_days=horizon_days,
         library_total=len(library),
@@ -236,11 +242,11 @@ def _render_body(data: Confirmation) -> str:
     「动手的能力接通了没有」——分成三条消息发，就会有人只看到其中一条。
     """
     at = data.now
-    mode = RegimeMechanismSwitch.current(KIND)
 
     lines = [
         "事件熔断 · 上线确认（这一步本身不改变任何东西）",
-        f"当前档位：{mode.display}",
+        # 档位随快照走（`Confirmation.mode`），不在这里再读一次。
+        f"当前档位：{data.mode.display}",
         f"未来 {data.horizon_days} 天（{events.format_moment(at)} 起，"
         f"截至 {events.format_moment(data.until)}）：",
         f"  熔断窗口与这段相交的高影响事件：{data.overlapping} 条",

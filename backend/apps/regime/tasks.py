@@ -528,3 +528,71 @@ def check_beat_health() -> dict:
     finally:
         # 反复调度的任务必须自己收掉 DB 连接，否则连接会攒在 worker 上
         close_old_connections()
+
+
+@app.task(acks_late=True)
+def rebuild_regime_pool(actor_name: str = "") -> dict:
+    """只重建池化表，产出一代新的 `ready`（P5 子票 #47；ADR 0006）。
+
+    **只包 `pool_rebuild.rebuild_pool` 一个调用**，不包 `manage.py recompute_regime_slices`
+    那条全链（切片 → 池化 → 差异重放）：它的三段各有各的参数面与失败语义，给网页暴露一个
+    参数子集等于在命令之上再造一层「哪些参数对网页有效」的判断，而那层判断迟早与命令
+    漂移（ADR 0006 的 Considered Options 逐条记着这件事）。
+
+    `actor_kind` 恒为 `ActorKind.WEB`：这一条只会由网页端点投递。走 `ActorKind(....).value`
+    而不是 `str(...)`（`ActorKind` 是 `str` 的子类，`str(ActorKind.WEB)` 给的是
+    `"ActorKind.WEB"`，写进库里就是一列认不出来的触发方）。
+
+    ## 不重试，也不吞异常
+
+    与 `sync_halt_windows` / `sync_gate` / `expire_candidates` 同一条纪律：**人工再按一次
+    就是重试**。这里多一层结构性保证：本任务**不是 `bind=True`**，函数体拿不到 `self`，
+    于是 `self.retry()` 在这个作用域里根本不存在——「没加重试」不是靠评审看住的，是调不到。
+    （`max_retries` 属性上仍能看到 Celery 的默认值 3，但没有任何代码路径会去用它。）
+
+    自动重试在这里还有一条额外的坏处：重试会撞上自己第一次留下的指纹，于是把一个「重试」
+    显示成「并发触发」（`duplicate`），把人引去查一个不存在的并发。
+
+    异常照旧往上抛：`rebuild_pool` 在抛之前会把那一代标成 `failed` 并写 `failure` 原文，
+    那是人唯一能读到的失败原因；吞掉它会让这次故障连 `failed` 行都没有。任务标 FAILURE
+    那条记录今天也没有读者（见模块 docstring 的「跑了没」那一节），这一点在 `#47` 里是被
+    明确接受的代价。
+
+    ## 返回值
+
+    `rebuild_pool` 的摘要原样返回，外加 `outcome`（`pool_rebuild.outcome_of` 判出的五种收场
+    之一）。`outcome` 由**任务**算出而不是让调用方算：投递方拿不到返回值，它只能靠这条
+    摘要（Celery 结果后端，保留 24 小时）回答「刚才那次怎么了」。
+
+    `reused=True` 那一轮**没有建行**——所以那条路径上没有任何 `RegimePoolRebuild` 可查，
+    它的可见性完全落在这条返回值里。页面因此必须读任务状态，不能只轮询代际表。
+    """
+    from django.db import close_old_connections
+
+    from apps.regime import pool_rebuild
+    from apps.regime.models import ActorKind, RebuildStatus
+
+    try:
+        summary = pool_rebuild.rebuild_pool(
+            actor_kind=ActorKind(ActorKind.WEB).value,
+            actor_name=actor_name,
+        )
+        # 走到这里只可能是三种成功收场之一：真失败在 `rebuild_pool` 里抛（那一代已标
+        # `failed` 并写了 `failure` 原文）。所以状态只可能是 `ready`，而「复用」与
+        # 「并发」由两个布尔决定——**仍交给 `outcome_of` 判**，不在这个任务里另写一份
+        # 优先级（`reused` 必须先于 `status` 看，理由见那个函数的 docstring）。
+        summary["outcome"] = pool_rebuild.outcome_of(
+            reused=bool(summary.get("reused")),
+            duplicate=bool(summary.get("duplicate")),
+            status=RebuildStatus.READY.value,
+        )
+        logger.info(
+            "[regime] 网页触发的池化重算完成 outcome=%s rebuild=%s 变化=%s",
+            summary["outcome"],
+            summary.get("rebuild_id"),
+            summary.get("cells_changed"),
+        )
+        return summary
+    finally:
+        # 任务必须自己收掉 DB 连接（本函数含 iterator 扫全表），否则连接会攒在 worker 上
+        close_old_connections()

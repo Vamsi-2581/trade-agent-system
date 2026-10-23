@@ -50,7 +50,7 @@ import json
 import logging
 from collections import Counter
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Mapping, Sequence
 
 from django.db import IntegrityError, transaction
@@ -83,6 +83,62 @@ EXCLUSION_KEYS = (
     pool.EXCLUDED_NO_MERGE_INPUTS,
     pool.EXCLUDED_UNUSABLE_CAPITAL,
 )
+
+#: 并发触发的第二方在 `failed` 行上留下的原因原文（P5 子票 #47）。
+#:
+#: **它是一份契约，不是一个提示语**：`outcome_of()` 靠逐字比对它，把「撞上
+#: `uniq_pool_rebuild_ready_fingerprint`」从「真失败」里摘出来。写成两处字面量，改一处
+#: 就会静默地把并发触发显示成红色失败——而那正是 ADR 0006 明令禁止的读法（「这是那条
+#: 约束在起作用，不是故障」）。所以写入方（`rebuild_pool` 的 `IntegrityError` 分支）与
+#: 读取方（`outcome_of`）都只认这一个名字。
+DUPLICATE_FAILURE_REASON = "同一输入指纹已有一代就绪：本次为重复触发，未替换当前代"
+
+#: `building` 停留多久算「卡住」：跨过它就说明 worker 大概率没在跑。
+#:
+#: 这个缺口是 `beat_health.py` 模块 docstring 记下的那条：本任务是**人工投递**而非 beat
+#: 调度，所以它不进 `check_task_health` 的扫面——投递成功而 worker 没跑时，没有任何东西
+#: 会响。页面靠这个阈值把那句话说出来（「超过 N 分钟仍在重算中，检查 worker」）。
+#:
+#: **不进 `config.py`**：那一组是机制阈值（frozen dataclass，进 `GROUPS` 就进了判定记录
+#: 内嵌的参数快照）。这是一个运维超时，改了不影响任何一格池化结论；混进配置面会让
+#: 「哪些数决定机制行为」这条边界变糊。
+#:
+#: 30 分钟的出处：`rebuild_pool` 要 `iterator(chunk_size=READ_CHUNK_SIZE)` 扫**全表**
+#: `BacktestResult` 并逐条算 sha256，规模随回测数线性增长；ADR 0006 记的实测参照是同一批
+#: 数据的陈旧扫描在 `.defer()` 修复前 **283 秒**，而池化本身不含回测执行。留约 6 倍余量，
+#: 同时短于「人回头看一眼这个页面」的粒度——再长，一个卡死的 `building` 行会有半天看起来
+#: 像在正常工作。
+STALE_BUILDING_AFTER = timedelta(minutes=30)
+
+#: 一次重算的收场。**五种，由 `outcome_of()` 一处判定**，不散在视图/序列化/页面里各判
+#: 一次：它们要求人做的事完全不同（看新表 / 什么都不用做 / 不用管 / 去修 / 再等等），
+#: 判错一次就会把「没写进审计的复用」显示成「已完成」。
+OUTCOME_NEW_GENERATION = "new_generation"
+OUTCOME_REUSED = "reused"
+OUTCOME_DUPLICATE = "duplicate"
+OUTCOME_FAILED = "failed"
+OUTCOME_BUILDING = "building"
+
+OUTCOMES = (
+    OUTCOME_NEW_GENERATION,
+    OUTCOME_REUSED,
+    OUTCOME_DUPLICATE,
+    OUTCOME_FAILED,
+    OUTCOME_BUILDING,
+)
+
+#: 五种收场各自的展示名。**由后端给**（map #40 的渲染分界：枚举 display 不重拼）。
+#: `reused` 那句必须写明「本次没有产生新记录」——复用分支不建代、不碰格子、不留任何审计
+#: 行，把它显示成「已完成」就是让一个没写进审计的动作看起来像写过。复用那一代的编号由
+#: `outcome_display()` 补在末尾（编号是数据，不是词表的一部分）。
+#: `duplicate` 那句不说「失败」：那是唯一约束在起作用。
+OUTCOME_DISPLAY = {
+    OUTCOME_NEW_GENERATION: "新代已就绪",
+    OUTCOME_REUSED: "输入未变，本次没有产生新记录",
+    OUTCOME_DUPLICATE: "并发触发：已有另一代先一步就绪，本次未替换当前代（不是故障）",
+    OUTCOME_FAILED: "重算失败",
+    OUTCOME_BUILDING: "重算中",
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -126,6 +182,100 @@ def current_cells(
         "strategy_id", "regime", "source", "state", "reason", "evidence", "needs_review"
     )
     return {(row["strategy_id"], row["regime"]): row for row in rows}
+
+
+# --------------------------------------------------------------------------- #
+# 一次重算的收场
+# --------------------------------------------------------------------------- #
+
+
+def outcome_of(
+    *,
+    reused: bool = False,
+    duplicate: bool = False,
+    status: str | None = None,
+    failure: str = "",
+) -> str:
+    """把 `rebuild_pool` 的返回值（或一行记录）折成**五种收场之一**。
+
+    这是全仓唯一一处「这次重算到底怎么了」的判定。散在视图/序列化/页面里各判一次，
+    就会出现「同一个 `failed` 行在曲线上是红色、在文案里是并发触发」这种自相矛盾。
+
+    顺序**有含义**，不是随便排的：
+
+    1. `reused` 先判。复用那一轮**连一条 `building` 行都没有**（指纹命中在 `rebuild_pool`
+       建行之前返回），所以此时 `status` 可能带着**上一代**的 `ready`——先看 `status`
+       会把一次复用误报成「新代已就绪」，而那正是 ADR 0006 要求分开显示的那一对。
+    2. `duplicate` 次判。它在库里记成 `status=failed`，靠**原因原文**区分
+       （`DUPLICATE_FAILURE_REASON`）——那是约束在起作用，不是故障。
+    3. 剩下的按状态走：`ready` 是新代、`building` 是还在跑、其余是失败。
+    4. `status` 为 `None`：`rebuild_pool` 没给定状态，只可能是它真的没建行也没复用——
+       那不该被猜成任何一种收场，按失败收（**fail-closed**：宁可显示「去查」也不显示
+       「好了」）。
+    """
+    if reused:
+        return OUTCOME_REUSED
+    if duplicate or failure == DUPLICATE_FAILURE_REASON:
+        return OUTCOME_DUPLICATE
+    if status == RebuildStatus.READY.value:
+        return OUTCOME_NEW_GENERATION
+    if status == RebuildStatus.BUILDING.value:
+        return OUTCOME_BUILDING
+    return OUTCOME_FAILED
+
+
+def outcome_display(outcome: str, *, generation: int | None = None) -> str:
+    """收场的展示名。复用那一档补上「第 N 代」——编号是数据，词表在 `OUTCOME_DISPLAY`。"""
+    display = OUTCOME_DISPLAY.get(outcome, outcome)
+    if outcome == OUTCOME_REUSED and generation is not None:
+        return f"输入未变，复用第 {generation} 代：本次没有产生新记录"
+    return display
+
+
+def _started_at(generation: RegimePoolRebuild) -> datetime:
+    """这一代的开始时刻，**收掉「模型列在运行时是什么」**。
+
+    本仓没装 `django-stubs`，pyright 看到 `generation.started_at` 是 `DateTimeField`
+    描述符而不是 `datetime`，所以直接相减会报「`-` 不支持」——那是全仓的既有现象
+    （`serializers.iso` 的 docstring 记着同一条），不是本模块引入的新形状。
+
+    与 `iso()` 不同的是这里**不兜底**：读不出时刻就不能算「跑了多久」，猜一个（比如 0）会
+    把一个卡死的行说成「刚跑」。判据由测试钉住。
+    """
+    moment = generation.started_at
+    if isinstance(moment, datetime):
+        return moment
+    raise TypeError(
+        f"started_at 不是 datetime（{type(moment).__name__}）："
+        "这一行的开始时刻读不出来，「重算了多久」也就无从算起"
+    )
+
+
+def building_minutes(generation: RegimePoolRebuild, *, now=None) -> int:
+    """这一代 `building` 了多久（整分钟，向下取整，不早于 0）。
+
+    读 `started_at` 而不是 `created_at`：前者是重算真正开始的时刻（`rebuild_pool` 显式
+    传入的同一个 `now`），后者是 auto_now_add 的落库时刻，两者在正常路径上几乎相同，
+    但只有前者在测试里可注入、也只有前者是「这一代从什么时候开始算」的答案。
+    """
+    moment = now or timezone.now()
+    elapsed = moment - _started_at(generation)
+    return max(0, int(elapsed.total_seconds() // 60))
+
+
+def is_stale_building(
+    generation: RegimePoolRebuild, *, now=None, threshold: timedelta | None = None
+) -> bool:
+    """这一代是不是「卡住的重算中」——跨过 `STALE_BUILDING_AFTER` 仍在 `building`。
+
+    **只在 `building` 上为真**：`ready` / `failed` 停多久都不是「卡住」，它们已经收场了。
+    这条判据只说得出「worker 可能没在跑」，说不出「任务失败了」——两者的处置不同
+    （检查 worker vs 查 `failure`），所以它们是两个字段，不是一个。
+    """
+    if generation.status != RebuildStatus.BUILDING.value:
+        return False
+    limit = STALE_BUILDING_AFTER if threshold is None else threshold
+    return (now or timezone.now()) - _started_at(generation) > limit
 
 
 # --------------------------------------------------------------------------- #
@@ -532,11 +682,9 @@ def rebuild_pool(
         _mark_ready(rebuild, changed, now)
     except IntegrityError:
         # 并发触发的第二方：同一指纹已有一代就绪。约束按设计拦下了它。
-        _mark_failed(
-            rebuild,
-            "同一输入指纹已有一代就绪：本次为重复触发，未替换当前代",
-            now,
-        )
+        # 原因原文走 `DUPLICATE_FAILURE_REASON`——`outcome_of()` 逐字比对它来区分
+        # 「约束在起作用」与「真失败」，两处各写一份字面量会让这个区分静默失效。
+        _mark_failed(rebuild, DUPLICATE_FAILURE_REASON, now)
         logger.warning(
             "[regime] 池化重算撞上同一指纹的就绪代，本次未替换 #%s", rebuild.pk
         )

@@ -130,6 +130,19 @@ logger = logging.getLogger(__name__)
 #: 顺手翻一个还没接线的开关（与 `breaker_switch.KIND` 同一条理由）。
 KIND = MechanismKind.MECHANISM
 
+#: 「这一档不是执行开关、出 Shadow 只是留一条记录」那句话。**只留这一处字面量。**
+#:
+#: 今天有三个出口要说它：确认页正文（`_render_body`，见模块 docstring 第 3 段）、chat
+#: 回执（`regime_commands._mech_exit`），以及 P5 #49 的 Web 档位卡片（经
+#: `serializers.switch_payload` 的 `note` 字段透出，前端原样显示）。三处各抄一份时，
+#: 改词必然漏掉一份，而漏掉的那一份正是本仓反复在防的「同一件事两个说法」。这句话要防
+#: 的形态比它本身重要：不说它，人会以为按一下机制就上线了，而它什么都没打开。
+NOT_EXECUTION_SWITCH = (
+    "⚠️ 这一档**不是执行开关**：拦人的是另外两个开关，它们各自开各自的——"
+    "出 Shadow 的效果是**留一条记录**（第①段的判定与切片被验证过了），"
+    "不是打开了什么。"
+)
+
 #: 判定源。与 `judgement.SYMBOL` 同一个取值（那边也是从 `config.CANDLES` 读的），这里直接
 #: 读配置而不是 import 判定模块：import 它会把整条判定链路（含资讯通道的网络依赖）拖进来，
 #: 而本模块只查两张表。
@@ -284,6 +297,12 @@ class Confirmation:
     event_days: int
     #: 最近一次**退回 Shadow** 的那条流水（人工或自熔断），从没退回过是 `None`。
     last_back: RegimeMechanismSwitch | None
+    #: 求值那一刻的档位。**必须由 `confirmation()` 记下来，不许渲染层再去读一次**：
+    #: `_render_body` 印「当前档位」、`closing_summary` 印「退回前是执行态」，两者若各自
+    #: 读一次，中间落一次切换就会让同一份快照渲染出两句互相矛盾的档位——而那正是
+    #: `page()` 的 docstring 说它要防的事（「确认页上写的数与人点头之后落进 reason 的数
+    #: 必须是同一次快照」）。一次求值里档位只读一次，值随快照走。
+    mode: MechanismMode
     #: 第①条标准（一致率）的比对结果。**没有默认值**：给它一个 `Agreement()` 的默认值，
     #: 就是让「忘了算」在页面上长得与「一段真值都没录」一模一样，而这两件事一个要查代码
     #: 一个要录真值。构造这个对象的地方必须显式回答「一致率从哪来」。
@@ -364,6 +383,8 @@ def confirmation(*, now: datetime | None = None) -> Confirmation:
 
     return Confirmation(
         now=at,
+        # 档位与其它数取自同一次求值：渲染层的两句话都从这一个值说，不再各读一次。
+        mode=RegimeMechanismSwitch.current(KIND),
         achieved=achieved,
         trigger_days=trigger_days,
         deactivation_days=deactivation_days,
@@ -528,10 +549,11 @@ def _render_body(data: Confirmation) -> str:
     之所以是一整页：这一档决定的是「机制整体可不可信」，而它的三条依据分散在三张表里
     （判定、Shadow 记录、事件日历）。分成几条消息发，就会有人只看到其中一条。
     """
-    mode = RegimeMechanismSwitch.current(KIND)
     lines = [
         "机制整体 · 出 Shadow 体检（这一步本身不改变任何东西）",
-        f"当前档位：{mode.display}",
+        # 档位随快照走（`Confirmation.mode`），不在这里再读一次：同一页上「当前档位」与
+        # 摘要里那句「退回前是…」必须说同一件事。
+        f"当前档位：{data.mode.display}",
         "",
         *_start_line(data),
         "",
@@ -550,9 +572,7 @@ def _render_body(data: Confirmation) -> str:
             "机制自熔断（连续 3 个月频率 > 20%）：此刻必然无结论——它是**切过去之后继续"
             "监控**的条款，不构成出 Shadow 的准入门槛（第 160 / 167 条）。",
             "",
-            "⚠️ 这一档**不是执行开关**：拦人的是另外两个开关，它们各自开各自的——"
-            "出 Shadow 的效果是**留一条记录**（第①段的判定与切片被验证过了），"
-            "不是打开了什么。",
+            NOT_EXECUTION_SWITCH,
             "真要动作：/regime on（事件熔断）、/regime gate on（行情阶段停用）——"
             "这两个才拦人。",
             "真值录入：/regime label add <起> <终> <档位> [备注…]"
@@ -600,9 +620,10 @@ def closing_summary(data: Confirmation) -> str:
     那一刻留下了什么」。最要紧的是**退回不会解除任何东西**——机制档不是执行开关，停下它
     不动停止声明表、不动策略停用决策，也不动人工豁免（那些各有各的开关与到期）。
     """
-    mode = RegimeMechanismSwitch.current(KIND)
     where = (
-        "退回前是执行态" if mode is MechanismMode.EXECUTING else "退回前本来就是 Shadow"
+        "退回前是执行态"
+        if data.mode is MechanismMode.EXECUTING
+        else "退回前本来就是 Shadow"
     )
     age = (
         f"Shadow 已跑 {data.achieved.ran_days} 个自然日"

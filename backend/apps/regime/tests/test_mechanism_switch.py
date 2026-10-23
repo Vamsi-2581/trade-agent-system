@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import dataclasses
+from unittest.mock import patch
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
@@ -551,6 +552,17 @@ class TestTheBackRecord(_Fixture):
         self.assertIn("人工", body)
         self.assertIn("alice", body, "退回 Shadow 由谁做的必须写出来")
 
+    def test_a_web_back_is_rendered_as_web_not_as_a_command(self):
+        """`ActorKind.WEB` 是 P5 加的第四种（#43）。这条钉的是**读侧已经在等它**：
+        漏掉 `_ACTOR_KIND_DISPLAY` 的成员时 `ActorKind.WEB.display` 抛 `KeyError`，而它
+        只在「渲染那一条流水」时才炸——也就是在这一页上，而不是在写入时。同时它必须
+        **不是**「命令行」：两者的存在理由就是事后排查要区分网页点的与命令行敲的。"""
+        self.start(days_ago=MIN_DAYS - 1)
+        self.back(actor_kind=ActorKind.WEB, name="bob")
+        body = self.body()
+        self.assertIn("网页·bob", body)
+        self.assertNotIn("命令行·bob", body)
+
     def test_a_self_fused_back_asks_for_the_root_cause(self):
         """第 161 条：自熔断之后再回执行态要显式记录「这是自熔断后的恢复」并把根因摆出来。
 
@@ -573,9 +585,15 @@ class TestTheBackRecord(_Fixture):
 class TestTheHonestLines(_Fixture):
     def test_the_page_says_this_is_not_an_execution_switch(self):
         """`MechanismKind.MECHANISM` 今天**没有任何执行路径在读它**（`HALT_TRIGGER_SWITCH`
-        只把另外两档映射到两个下游开关）。不说这句话，人敲完 `exit` 就以为机制上线了。"""
+        只把另外两档映射到两个下游开关）。不说这句话，人敲完 `exit` 就以为机制上线了。
+
+        正文里必须是**那个常量本身**：Web 档位卡片（P5 #49）与 chat 回执都引它，各抄一份
+        之后改词注定漏掉一份，而漏掉的那份就是「同一件事两个说法」。
+        """
         self.start(days_ago=MIN_DAYS - 1)
-        self.assertIn(NOT_A_SWITCH, self.body())
+        body = self.body()
+        self.assertIn(NOT_A_SWITCH, body)
+        self.assertIn(mechanism_switch.NOT_EXECUTION_SWITCH, body)
 
     def test_the_page_points_at_the_two_real_switches(self):
         self.start(days_ago=MIN_DAYS - 1)
@@ -995,3 +1013,50 @@ class TestTheExpiryNotice(_Fixture):
         self.assertIsNotNone(before)
         _truth(TODAY - timedelta(days=1), TODAY)
         self.assertEqual(mechanism_switch.expiry_notice(now=NOW), before)
+
+
+# --------------------------------------------------------------------------- #
+# 性质 5：一次求值只读一次档位（修 #3 的另一半）
+# --------------------------------------------------------------------------- #
+
+
+class TestTheModeComesFromTheSnapshot(_Fixture):
+    """**档位随快照走，渲染函数自己不再去读一次。**
+
+    T3 的复核修整（`f2861ac`）把这条改对了：`Confirmation` 记下求值那一刻的 `mode`，
+    `_render_body` 与 `closing_summary` 都用它。但**当时声称补了回归用例，实际没有**——
+    所以它一直是可以悄悄回退的：把正文改回 `RegimeMechanismSwitch.current(KIND)`，
+    本文件此前全绿（实测）。
+
+    这一条要防的具体形态是**同一份快照说出两个档位**：正文说「当前档位：Shadow」、
+    摘要说「退回前是执行态」。两次读之间只要落一次切换就会出现，而页面上那句话正是
+    人据以决定按不按的东西。
+    """
+
+    def test_one_page_renders_one_mode(self):
+        """把第 2 次及以后的 `current()` 改成另一个档位，正文与摘要必须仍说同一个档位。"""
+        real = RegimeMechanismSwitch.current
+        calls = {"n": 0}
+
+        def flip_after_first(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return real(*args, **kwargs)
+            return MechanismMode.EXECUTING
+
+        with patch.object(
+            RegimeMechanismSwitch, "current", side_effect=flip_after_first
+        ):
+            data = mechanism_switch.confirmation(now=NOW)
+            body = mechanism_switch._render_body(data)
+            closing = mechanism_switch.closing_summary(data)
+
+        # 正文那一行说 Shadow（第 1 次读的结果，即快照里的档位）……
+        self.assertIn(
+            f"当前档位：{MechanismMode.SHADOW.display}",
+            body,
+            "正文必须用快照里的档位，不许自己再读一次",
+        )
+        # ……摘要也必须说同一个档位，而不是被第 2 次读带成「执行态」。
+        self.assertIn("退回前本来就是 Shadow", closing)
+        self.assertNotIn("退回前是执行态", closing)
