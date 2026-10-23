@@ -22,6 +22,70 @@ export function clearTokens() {
   localStorage.removeItem("tradeclaw_refresh");
 }
 
+// ── Errors ──
+
+/**
+ * 一次失败的 API 调用：**状态码 + 后端给的那句话**。
+ *
+ * 存在的理由只有一个：后端已经把「为什么不行」写成了人话
+ * （`apps/regime/views.py` 的 `{"error": "切换原因不能为空"}`），而 `request()` 此前把它
+ * 丢掉、只留一句 `API error: 400`。页面上要显示原文时，就只能靠猜状态码反推原因。
+ *
+ * **必须继承 `Error`**：全仓既有调用方写的是 `err instanceof Error ? err.message : ...`
+ * （`settings/page.tsx`、`hooks/useOrders.ts` 等几十处）。不继承，那些地方会静默退化成
+ * 「未知错误」——一个没有报错路径的错。
+ *
+ * `status` 是给**分支**用的（400 请求拼错 vs 403 权限 vs 503 通路故障），`message` 是给
+ * **人看**的。两者都要：只给 message，前端就得解析字符串才知道该不该显示「再试一次」。
+ */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/**
+ * 从失败响应里取那句话。**解析不出来就退回 `API error: <status>`**，绝不抛第二个错。
+ *
+ * 三条容错都是真实情形，不是防御性编程：
+ * - 后端 500 白页 / 反代 HTML 错误页 → `JSON.parse` 失败；
+ * - `204` 之类的空体 → 空串；
+ * - 结构化但不是 `{error}`（DRF 的字段校验错）→ 取不到字符串。
+ *
+ * 认 `error` 与 `detail` 两个键：本仓自己的视图一律回 `{"error"}`，而 DRF 的权限类
+ * （`IsStaffUser` 的 `message`）回的是 `{"detail"}`——403 那句「此操作需要管理员权限。」
+ * 只有认 `detail` 才到得了页面上。
+ */
+async function messageFrom(res: Response): Promise<string> {
+  const fallback = `API error: ${res.status}`;
+  let text: string;
+  try {
+    text = await res.text();
+  } catch {
+    return fallback;
+  }
+  if (!text) return fallback;
+
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+  if (body === null || typeof body !== "object") return fallback;
+
+  const record = body as Record<string, unknown>;
+  for (const key of ["error", "detail"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return fallback;
+}
+
 // ── Base Fetch ──
 
 async function request<T>(
@@ -49,7 +113,10 @@ async function request<T>(
     if (!refreshed) {
       clearTokens();
       window.location.href = "/login";
-      throw new Error("Unauthorized");
+      // 仍然是同一句话、同一个类型（`ApiError` 是 `Error` 的子类），只是多带了状态码。
+      // **刷新失败这条路径不读响应体**：这个 401 说的是「令牌过期了」，而后端对它的正文
+      // 通常是 `{"detail": "Given token not valid..."}`——把它显示给人只会盖住「请重新登录」。
+      throw new ApiError("Unauthorized", 401);
     }
     // Retry with new token
     const newToken = getAccessToken();
@@ -62,7 +129,7 @@ async function request<T>(
       body: body ? JSON.stringify(body) : undefined,
     });
     if (!retryRes.ok) {
-      throw new Error(`API error: ${retryRes.status}`);
+      throw new ApiError(await messageFrom(retryRes), retryRes.status);
     }
     if (retryRes.status === 204) {
       return undefined as T;
@@ -71,7 +138,7 @@ async function request<T>(
   }
 
   if (!res.ok) {
-    throw new Error(`API error: ${res.status}`);
+    throw new ApiError(await messageFrom(res), res.status);
   }
 
   // 204 No Content has no body
@@ -107,16 +174,26 @@ export interface LoginPayload {
   password: string;
 }
 
+/** 当前用户的可读档案（`/api/auth/me/` 与登录/注册响应里的 `user` 是同一个形状）。
+ *
+ *  `is_staff` 是 P5 加的（`docs/adr/0005-web-write-requires-staff.md`）：页面要按它决定
+ *  「翻开关 / 触发重算」这些按钮显不显示。**只有 `is_staff`，没有 `is_admin`**——两者是
+ *  同一个布尔，并排出现会让人以为有粒度。
+ */
+export interface UserProfile {
+  id: number;
+  email: string;
+  username: string;
+  is_active: boolean;
+  is_frozen: boolean;
+  /** 写入口的界面门槛。`true` 才显示写按钮；读对全部登录用户开放。 */
+  is_staff: boolean;
+  created_at: string;
+  last_login_at: string | null;
+}
+
 export interface LoginResponse {
-  user: {
-    id: number;
-    email: string;
-    username: string;
-    is_active: boolean;
-    is_frozen: boolean;
-    created_at: string;
-    last_login_at: string | null;
-  };
+  user: UserProfile;
   access: string;
   refresh: string;
 }
@@ -134,7 +211,7 @@ export const authApi = {
   register: (payload: RegisterPayload) =>
     request<LoginResponse>("/api/auth/register/", "POST", payload),
 
-  me: () => request<LoginResponse["user"]>("/api/auth/me/"),
+  me: () => request<UserProfile>("/api/auth/me/"),
 
   logout: () => {
     const refresh = getRefreshToken();
@@ -1100,4 +1177,270 @@ export const marketApi = {
     });
     return request<Ticker>(`/api/datasource/api/market/ticker/?${query.toString()}`);
   },
+};
+
+// ── Regime API（P5：机制的 Web 读面与写入口） ──
+
+/**
+ * 一个枚举取值的传输形状：**取值与展示名成对**。
+ *
+ * 前端一律读 `display` 显示、读 `value` 做分支，**不许自己把 slug 翻成中文**：
+ * `MechanismMode.display` 已经是「Shadow（只记录，不执行）」，前端再写一遍就是同一件事
+ * 的第二个说法（`apps/regime/serializers.py::_labelled` 的 docstring）。
+ */
+export interface Labelled {
+  value: string;
+  display: string;
+}
+
+/** 一行切换流水：什么时候、谁、从哪档到哪档、为什么。 */
+export interface RegimeSwitchRow {
+  at: string | null;
+  actor_kind: Labelled;
+  actor_name: string;
+  from_mode: Labelled;
+  to_mode: Labelled;
+  /** 落库的那一串。**不是**请求体里手写的——由服务端在同一次求值里取 `briefing.summary`。 */
+  reason: string;
+}
+
+/** 一个开关的当前档 + 最近一次切换（`switch_payload`）。 */
+export interface RegimeSwitch {
+  kind: Labelled;
+  mode: Labelled;
+  latest: RegimeSwitchRow | null;
+  /** `true` = 从没切换过。**是布尔不是文案**：怎么排版属于前端。 */
+  never_switched: boolean;
+}
+
+/** 一代池化表（`generation_summary`）。 */
+export interface RegimeGeneration {
+  id: number;
+  status: Labelled;
+  actor_kind: Labelled;
+  actor_name: string;
+  pool_version: number;
+  started_at: string | null;
+  finished_at: string | null;
+  candidates: number;
+  results_used: number;
+  cells_total: number;
+  cells_changed: number;
+  /** 三个键恒在（计数为 0 也在）：某个原因从没出现过 vs 这个键被改名了，要能分开。 */
+  exclusions: Record<string, number>;
+  failure: string;
+  /** 这一代自己的收场。`reused` **不在**这里——它连行都没有（见 `getRebuildStatus`）。 */
+  outcome: Labelled;
+  /** 布尔 + 分钟数成对；`minutes === null` 表示**根本不是 `building`**（不是「跑了 0 分钟」）。 */
+  stale_building: { stale: boolean; minutes: number | null; threshold_minutes: number };
+}
+
+/** 冷启动也是正常状态：`has_generation=false` + 一句后端渲染的 `display`。 */
+export type RegimePoolState =
+  | { has_generation: false; display: string; generation: null }
+  | { has_generation: true; display: string; generation: RegimeGeneration };
+
+export interface RegimeRegimeState {
+  regime: Labelled | null;
+  effective_at: string | null;
+  /** `true` = 库中还没有任何生效过的判定（冷启动），`display` 是那句话。 */
+  cold: boolean;
+  display: string;
+}
+
+/** 首屏（`GET api/regime/overview/`）。**只装廉价只读**，60 秒轮询它。 */
+export interface RegimeOverview {
+  /** 数组而不是三个具名键：三个开关结构完全同形，顺序由后端给（`SWITCH_KINDS`）。 */
+  switches: RegimeSwitch[];
+  pool: RegimePoolState;
+  regime_state: RegimeRegimeState;
+  // 「数据截止」不在这里：由前端从 `pool.generation.finished_at` 与
+  // `regime_state.effective_at` 取——后端不另造一个「现在」。
+}
+
+/** 池化表的一格（`cell_payload`）。`evidence` 原样透出，一个键都不加工。 */
+export interface RegimePoolCell {
+  /** `"<策略 id>|<阶段>"`。前端拿它做 key 与行内展开的锚。 */
+  key: string;
+  strategy: { id: string; name: string };
+  regime: Labelled;
+  source: Labelled;
+  state: Labelled;
+  reason: Labelled;
+  needs_review: boolean;
+  evidence: Record<string, unknown>;
+}
+
+/**
+ * `GET api/regime/pool/`。列序由后端的 `regimes` 数组给，前端按数组排。
+ *
+ * 与 `RegimePoolState` 交叉而不是 `extends`：后者对联合类型（有代 / 冷启动两支）不成立，
+ * 交叉之后两支各自仍然带着 `regimes` / `cells`——冷启动时是空 `cells` + 那句 `display`，
+ * **不是空白表格**。
+ */
+export type RegimePool = RegimePoolState & {
+  regimes: Labelled[];
+  cells: RegimePoolCell[];
+};
+
+export interface RegimeDiffCell {
+  key: string;
+  strategy: { id: string; name: string };
+  regime: Labelled;
+  kind: "changed" | "added" | "removed";
+  before: { state: Labelled; reason: Labelled; source: Labelled } | null;
+  after: { state: Labelled; reason: Labelled; source: Labelled } | null;
+}
+
+/** 代际历史（`GET api/regime/pool/generations/`）。分页形状照 `apps/logging_app/views.py`。 */
+export interface RegimeGenerations {
+  count: number;
+  page: number;
+  page_size: number;
+  has_next: boolean;
+  results: RegimeGeneration[];
+  /** 只在带 `?generation=<id>` 时出现。`changed+added+removed` 恒等于 `recorded_cells_changed`。 */
+  diff?: {
+    generation: number;
+    previous_generation: number | null;
+    previous_finished_at: string | null;
+    recorded_cells_changed: number;
+    counts: { changed: number; added: number; removed: number };
+    cells: RegimeDiffCell[];
+  };
+}
+
+/** 三张确认页之一（`GET api/regime/briefing/<kind>/`）。**重请求，按需拉，不进轮询。** */
+export interface RegimeBriefing {
+  kind: Labelled;
+  mode: Labelled;
+  /** 这一页对应的动作（与 `mode` 相反的那一档）。 */
+  to_mode: Labelled;
+  /** 叙述正文，后端渲染的原样文本。 */
+  body: string;
+  /** 这一动作会写进 `reason` 的审计串，与 `body` 同源。 */
+  summary: string;
+  /** 排版用的数。**不用于重拼 `body`**（重拼就是第二个说法）。 */
+  details: Record<string, unknown>;
+  /** 恒 `true`：这是一次重请求。 */
+  heavy: boolean;
+}
+
+export type RegimeKind = "mechanism" | "event_breaker" | "regime_gate";
+export type RegimeMode = "shadow" | "executing";
+
+/** 写入口的回执。**成功与「本来就是这一档」两条路径键集恒定。** */
+export interface RegimeSwitchResult {
+  kind: Labelled;
+  /** `false` = 本来就是这一档（200，不是 400）。 */
+  changed: boolean;
+  from_mode: Labelled;
+  to_mode: Labelled;
+  /** 操作者看到的那句话，与 CLI / slash 的回执同一批词。 */
+  display: string;
+  /** 真正落库的那一串（与页面同源）。 */
+  reason: string;
+  at: string | null;
+  /** 只有 gate 方向有：这一轮对账解除/跳过了几条声明。 */
+  sync?: Record<string, unknown>;
+}
+
+/** 一次重算的投递回执（`POST api/regime/pool/rebuild/`，202）。 */
+export interface RegimeRebuildDispatch {
+  dispatched: boolean;
+  /** 这次投递的唯一凭据：`reused` 那一轮不建行，事后只认这个 id。 */
+  task_id: string;
+  /** 建议多久回来问一次（秒）。**建议值不是契约**——判据是状态读的 `done`。 */
+  poll_after_seconds: number;
+}
+
+/**
+ * 一次重算的收场（`GET api/regime/pool/rebuild/<task_id>/`）。
+ *
+ * `outcome` **五档**：`new_generation` / `reused` / `duplicate` / `failed` / `building`。
+ * `outcome === null` 时读 `display`——那是「投递成功但 worker 没取走，或结果已过期」，
+ * **不是「重算中」**。
+ */
+export interface RegimeRebuildStatus {
+  task_id: string;
+  state: string;
+  done: boolean;
+  outcome?: Labelled | null;
+  generation?: RegimeGeneration | null;
+  stale_building: { stale: boolean; minutes: number | null; threshold_minutes: number };
+  /** `outcome === null` 时的那句话。 */
+  display?: string;
+  /** `true` = Celery 分不出「结果过期」与「还没开始」（未知 id 也回 PENDING）。 */
+  state_ambiguous?: boolean;
+  failure?: string;
+  celery_error?: string;
+  error?: string;
+  cells_changed?: number | null;
+  cells_total?: number | null;
+  results_used?: number | null;
+  candidates?: number | null;
+}
+
+/**
+ * 机制读面与写入口（P5 map #40）。风格照 `liveSessionApi`。
+ *
+ * **读与写是两套权限**（ADR 0005）：读对所有登录用户开放，写要 `is_staff`。所以
+ * `switchMode` / `rebuildPool` 调用方必须先用 `useAuth().isStaff` 决定按不按得动——
+ * 这一层是界面纪律，不是安全边界（服务端仍然会挡）。
+ */
+export const regimeApi = {
+  /** 首屏。**廉价只读**，60 秒轮询它。 */
+  getOverview: () => request<RegimeOverview>("/api/regime/overview/"),
+
+  /** 当前代（或 `?generation=<id>` 指定的一代）的全部格子。 */
+  getPool: (generation?: number) =>
+    request<RegimePool>(
+      `/api/regime/pool/${generation === undefined ? "" : `?generation=${generation}`}`
+    ),
+
+  /** 代际历史；带 `generation` 时附上那一代与上一代的逐格差异。 */
+  getGenerations: (params?: { page?: number; page_size?: number; generation?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.page) query.set("page", String(params.page));
+    if (params?.page_size) query.set("page_size", String(params.page_size));
+    if (params?.generation !== undefined) {
+      query.set("generation", String(params.generation));
+    }
+    const qs = query.toString();
+    return request<RegimeGenerations>(
+      `/api/regime/pool/generations/${qs ? `?${qs}` : ""}`
+    );
+  },
+
+  /**
+   * 三张确认页之一。**每一次调用都会重导入全部策略模块（gate）或全量重算历史标签
+   * （mechanism）**——所以只在人要做一个决定时拉一次，别放进轮询。
+   */
+  getBriefing: (kind: RegimeKind) =>
+    request<RegimeBriefing>(`/api/regime/briefing/${kind}/`),
+
+  /**
+   * 翻一个开关的档位。**请求体只有 `{kind, mode}`**：`reason` 由服务端在同一次求值里取，
+   * 客户端提交的任何 reason 一律被忽略（所以这个类型里没有那个字段——写上去就等于在说
+   * 「你可以指定理由」）。
+   *
+   * 「本来就是这一档」是 **200 + `changed:false`**，不是错误。
+   */
+  switchMode: (kind: RegimeKind, mode: RegimeMode) =>
+    request<RegimeSwitchResult>("/api/regime/switch/", "POST", { kind, mode }),
+
+  /**
+   * 投递一次池化表重算，**立刻返回**（202 + `task_id`），不等结果。
+   *
+   * 之后用 `getRebuildStatus(task_id)` 轮询：`reused` 那一轮不建代、不留审计行，
+   * 代际表里看不出它发生过。
+   */
+  rebuildPool: () =>
+    request<RegimeRebuildDispatch>("/api/regime/pool/rebuild/", "POST"),
+
+  /** 一次重算的收场，按 `task_id` 读。纯读，轮询它没有副作用。 */
+  getRebuildStatus: (taskId: string) =>
+    request<RegimeRebuildStatus>(
+      `/api/regime/pool/rebuild/${encodeURIComponent(taskId)}/`
+    ),
 };
