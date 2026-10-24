@@ -80,16 +80,19 @@ function AccountMiniCard({
   account: ExchangeAccountWithBalance;
   connected: boolean;
 }) {
-  const bal = account.balance;
-  const total = bal?.total ?? "0";
-  const available = bal?.available ?? "—";
-  const used = bal?.used ?? "—";
+  // `balance` 为 null = **这个数没取到**（`/api/trading/accounts/` 只在 OrderExecutor
+  // 跑着时才去问交易所，否则这个键就是 null）。它必须显示成「—」，**不能编成 $0**：
+  // `bal?.total ?? "0"` 把「不知道」渲染成了「你的实盘资产是 0 美元」，而这恰好就是
+  // 2026-10-24「binance 实盘没有同步现有资产」那张截图的样子——用户看到 $0，以为
+  // 系统没去同步，实际上系统压根没问过交易所。
+  const money = (v: string | undefined) =>
+    typeof v === "string" && v !== "" ? `$${formatNumber(v)}` : "—";
 
-  const indicatorColor = account.testnet_status
+  const indicatorColor = account.testnet
     ? "var(--color-blue)"
     : "var(--color-green)";
-  const badgeText = account.testnet_status ? "模拟" : "实盘";
-  const badgeColor = account.testnet_status
+  const badgeText = account.testnet ? "模拟" : "实盘";
+  const badgeColor = account.testnet
     ? "bg-blue-dim text-blue"
     : "bg-green-dim text-green";
 
@@ -121,18 +124,18 @@ function AccountMiniCard({
         <div className="grid grid-cols-2 gap-y-2 gap-x-3">
           <div>
             <div className="text-[9px] text-text3 uppercase tracking-wider font-semibold">总资产</div>
-            <div className="font-mono text-sm font-bold text-text mt-0.5">${formatNumber(total)}</div>
+            <div className="font-mono text-sm font-bold text-text mt-0.5">{money(account.balance?.total)}</div>
           </div>
           <div>
             <div className="text-[9px] text-text3 uppercase tracking-wider font-semibold">可用余额</div>
             <div className="font-mono text-[11px] font-semibold text-text2 mt-0.5">
-              ${typeof available === "string" ? formatNumber(available) : "—"}
+              {money(account.balance?.available)}
             </div>
           </div>
           <div>
             <div className="text-[9px] text-text3 uppercase tracking-wider font-semibold">已用保证金</div>
             <div className="font-mono text-[11px] font-semibold text-text2 mt-0.5">
-              ${typeof used === "string" ? formatNumber(used) : "—"}
+              {money(account.balance?.used)}
             </div>
           </div>
           <div>
@@ -167,7 +170,7 @@ function AccountPositions({
             <line x1="4" y1="3" x2="4" y2="9" stroke="var(--color-teal)" strokeWidth="1" />
             <line x1="8" y1="3" x2="8" y2="9" stroke="var(--color-teal)" strokeWidth="1" />
           </svg>
-          {account.exchange} · {account.label || (account.testnet_status ? "模拟" : "实盘")}
+          {account.exchange} · {account.label || (account.testnet ? "模拟" : "实盘")}
           <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-teal-dim text-teal">
             {positions.length} 个持仓
           </span>
@@ -234,7 +237,7 @@ function AccountOrders({
             <line x1="6" y1="3" x2="6" y2="6.5" stroke="var(--color-amber)" strokeWidth="1.2" strokeLinecap="round" />
             <line x1="6" y1="6.5" x2="8.5" y2="8" stroke="var(--color-amber)" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
-          {account.exchange} · {account.label || (account.testnet_status ? "模拟" : "实盘")}
+          {account.exchange} · {account.label || (account.testnet ? "模拟" : "实盘")}
           <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-amber-dim text-amber">
             {orders.length} 个活跃订单
           </span>
@@ -516,8 +519,8 @@ export default function TradingPage() {
   const isLoading = accLoading || posLoading || ordersLoading;
   const hasExecutor = frameStatus.order_executor === "running";
 
-  const liveAccounts = accounts.filter((a) => !a.testnet_status);
-  const paperAccounts = accounts.filter((a) => a.testnet_status);
+  const liveAccounts = accounts.filter((a) => !a.testnet);
+  const paperAccounts = accounts.filter((a) => a.testnet);
 
   // Group positions by exchange_account_id (using exchange name as fallback)
   const positionsByAccount = new Map<string, typeof positions.positions>();
@@ -598,8 +601,12 @@ export default function TradingPage() {
         </div>
       </div>
 
-      {/* Executor status warning */}
-      {!hasExecutor && !posLoading && accounts.length === 0 && (
+      {/* Executor status warning。
+          条件里**不能**再有 `accounts.length === 0`：账户是库里的行，跟执行器跑没跑
+          毫无关系。带上它以后，只要配置过账户，这条提示就永远不出现——而「余额/持仓
+          为什么是空的」恰恰是那时唯一需要被回答的问题（2026-10-24 用户看到卡片上
+          一排「—」却没有任何解释）。 */}
+      {!hasExecutor && !posLoading && (
         <div className="bg-amber-dim/20 border border-amber/30 rounded-lg px-4 py-3 flex items-center gap-3">
           <div className="w-2 h-2 rounded-full bg-amber" />
           <span className="text-xs text-amber">

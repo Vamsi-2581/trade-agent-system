@@ -336,13 +336,14 @@ export interface ExchangeAccountWithBalance {
   exchange: string;
   label: string;
   is_active: boolean;
-  testnet_status: boolean;
+  testnet: boolean;
   created_at: string;
+  /** `null` = 这次没问过交易所（`OrderExecutor` 没跑），**不是**「余额是 0」。 */
   balance?: {
     total: string;
     available: string;
     used: string;
-  };
+  } | null;
 }
 
 // ── Risk API ──
@@ -375,13 +376,14 @@ export interface ExchangeAccount {
   exchange: string;
   label: string;
   is_active: boolean;
-  testnet_status: boolean;
+  testnet: boolean;
   created_at: string;
+  /** `null` = 这次没问过交易所（`OrderExecutor` 没跑），**不是**「余额是 0」。 */
   balance?: {
     total: string;
     available: string;
     used: string;
-  };
+  } | null;
 }
 
 export interface CreateExchangeAccountPayload {

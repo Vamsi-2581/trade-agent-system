@@ -774,7 +774,7 @@ export default function BacktestDetailPage() {
                 <option value="">请选择...</option>
                 {accounts.map((acc) => (
                   <option key={acc.id} value={acc.id}>
-                    {acc.exchange} · {acc.label || acc.id.slice(0, 8)} {acc.testnet_status ? "(模拟)" : ""}
+                    {acc.exchange} · {acc.label || acc.id.slice(0, 8)} {acc.testnet ? "(模拟)" : ""}
                   </option>
                 ))}
               </select>
