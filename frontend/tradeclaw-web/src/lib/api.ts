@@ -1275,11 +1275,19 @@ export interface RegimePoolCell {
   reason: Labelled;
   needs_review: boolean;
   /**
-   * 证据在 `pool.evidence` 那张去重表里的键。**不是证据本身**——原文一个键都没少，
+   * 证据（去掉 `results`）在 `pool.evidence` 里的键。**不是证据本身**——原文一个键都没少，
    * 只是同一份只发一次（见 `RegimePool` 的 docstring）。用
    * `evidenceOf(evidenceIndex(pool), cell)` 取。
    */
   evidence_key: string;
+  /**
+   * 那一格的 `results` 在 `pool.results` 里的键。空串 = 那格没有 `results`。
+   *
+   * 单独一个键而不是并进 `evidence_key`：`results` 是 evidence 里唯一会跨格重复的大数组
+   * （占 98.7% 体积），而其余键每格都不同——合成一个键就等于把整份 evidence 当整体去重，
+   * 那在生产上等于没去（实测 248 格只降到 243 种）。
+   */
+  results_key: string;
 }
 
 /**
@@ -1370,47 +1378,92 @@ export interface RegimeStrategyFlipResult {
  * 交叉之后两支各自仍然带着 `regimes` / `cells`——冷启动时是空 `cells` + 那句 `display`，
  * **不是空白表格**。
  *
- * **`evidence` 是一张去重后的表，不是每格一份副本**（2026-10-23）。后端把证据按内容
- * 合并后放在顶层，格子上只留 `evidence_key`：实测 244 格 / 4067 条回测的库里，99.4% 的
- * `results` 条目是同一批字节的副本，244 格只有 2 种不同的 evidence——不合并的话响应是
- * 87 MB，浏览器 `JSON.parse` 之后就是「读不出来」。**原文一个键都没少**，只是从「每格
- * 一份」变成「整份响应一份」；用 `evidenceOf(evidenceIndex(pool), cell)` 取。
+ * ## 证据是**两级去重**的（2026-10-23，在 txy 生产库上实测后定的形状）
+ *
+ * 响应里没有一格带 `evidence` 原文，只有两个键；原文在顶层两张表里：
+ *
+ *     evidence: [{key: <证据键>, results_key: <results 键>, ...其余键}]
+ *     results:  [{key: <results 键>, results: [...]}]
+ *     cells:    [{evidence_key: <证据键>, results_key: <results 键>, ...}]
+ *
+ * **为什么是两级**：只按整份 evidence 去重等于没去。生产实测 248 格里
+ * `metrics` / `full_sample` / `own_sample` 是按阶段算的、每格都不同，整份去重只从 248
+ * 格降到 243 种（仍是 59 MB）。真正重复的是里面那个 `results` 大数组——它按原型分桶
+ * 生成、与阶段无关，占 evidence 体积的 **98.7%**，248 格里只有 **19 种**。
+ * 两级去重后 1.6 MB，省 35 倍。
+ *
+ * **原文一个键都没少**：`evidenceOf` 把两张表按两个键拼回来，拿到的是逐字节相同的那份
+ * （`results` 也回到它原来的位置）。
  */
 export type RegimePool = RegimePoolState & {
   regimes: Labelled[];
-  /** 去重后的证据表，每一项 `{key, ...原证据}`。顺序按首次出现，不保证有序。 */
+  /** 去重后的证据表（不含 `results`，那一份在 `results` 表里）。顺序按首次出现。 */
   evidence: RegimeEvidenceEntry[];
+  /** 去重后的 `results` 数组表。格子的 `results_key` 为空串时表示那格没有 `results`。 */
+  results: RegimeResultsEntry[];
   cells: RegimePoolCell[];
 };
 
-/** 证据表的一项：`key` 是内容指纹，其余键就是 `pool._evidence` 的原文。 */
+/** 证据表的一项：`key` 是内容指纹，`results_key` 指向 `pool.results`，其余是原文。 */
 export interface RegimeEvidenceEntry {
   key: string;
+  results_key: string;
   [key: string]: unknown;
 }
 
+/** `results` 表的一项。 */
+export interface RegimeResultsEntry {
+  key: string;
+  results: unknown[];
+}
+
+/** `GET api/regime/pool/cell/`：一格完整的依据（`results` 已在它原来的位置上）。 */
+export interface RegimeCellEvidence {
+  /** `"<策略 id>|<阶段>"`，与格子上的 `key` 同一个值。 */
+  key: string;
+  evidence: Record<string, unknown>;
+}
+
+/** 两张去重表建成的索引。页面按一次请求建一次，传给每一格。 */
+export interface RegimeEvidenceIndex {
+  evidence: Map<string, RegimeEvidenceEntry>;
+  results: Map<string, unknown[]>;
+}
+
 /**
- * 取一格的证据原文（去掉 `key` 之后的那份，与合并前逐字节相同）。
+ * 取一格的证据原文（把两张表拼回来，与去重前逐字节相同）。
  *
  * `index` 由 `evidenceIndex(pool)` 建一次、传给每一格：每格各建一次 Map 就是
- * O(格数 × 表长)，而一张 61 行的表有 244 格。查不到时给 `{}` 而不是 `undefined`——
+ * O(格数 × 表长)，而一张 61 行的表有 248 格。查不到时给 `{}` 而不是 `undefined`——
  * 格子的证据缺失是脏库的形状，页面上应当显示「证据里没有回测结果」而不是崩掉。
  */
 export function evidenceOf(
-  index: Map<string, RegimeEvidenceEntry>,
+  index: RegimeEvidenceIndex,
   cell: RegimePoolCell
-): Record<string, unknown> {
-  const entry = index.get(cell.evidence_key);
-  if (entry === undefined) return {};
-  // `key` 是去重表的键，不是证据的一部分——剔除它，返回的才是原文。
-  const { key, ...evidence } = entry;
+): Record<string, unknown> | undefined {
+  const entry = index.evidence.get(cell.evidence_key);
+  // **`undefined` 而不是 `{}`**：这一格的依据不在表里有两件完全不同的事——
+  // 列表用 `?evidence=0` 拉的时候（要按需去拉），或者库里那格真没有依据（不用拉）。
+  // 前者由 `cell.evidence_key === ""` 区分（`evidence=0` 时后端给空串键）。
+  if (entry === undefined) return undefined;
+  // `key` / `results_key` 是传输层的键，不属于证据原文——剔除它们。
+  const { key, results_key, ...evidence } = entry;
   void key;
+  void results_key;
+  // 空串 = 那格本来就没有 `results`（`pool._evidence` 一定带这个键，所以这里
+  // 只在手工补录的脏行上出现）。有键就给回去，没有就保持缺席。
+  if (cell.results_key !== "") {
+    evidence.results = index.results.get(cell.results_key) ?? [];
+  }
   return evidence;
 }
 
-/** `pool.evidence` → `Map<key, entry>`。页面按一次请求建一次。 */
-export function evidenceIndex(pool: RegimePool): Map<string, RegimeEvidenceEntry> {
-  return new Map(pool.evidence.map((entry) => [entry.key, entry]));
+/** `pool.evidence` / `pool.results` → 两个 Map。页面按一次请求建一次。 */
+export function evidenceIndex(pool: RegimePool): RegimeEvidenceIndex {
+  return {
+    evidence: new Map(pool.evidence.map((entry) => [entry.key, entry])),
+    results: new Map(pool.results.map((entry) => [entry.key, entry.results])),
+  };
 }
 
 export interface RegimeDiffCell {
@@ -1523,10 +1576,45 @@ export const regimeApi = {
   getOverview: () => request<RegimeOverview>("/api/regime/overview/"),
 
   /** 当前代（或 `?generation=<id>` 指定的一代）的全部格子。 */
-  getPool: (generation?: number) =>
-    request<RegimePool>(
-      `/api/regime/pool/${generation === undefined ? "" : `?generation=${generation}`}`
-    ),
+  /**
+   * 池化表矩阵。`evidence: false` 时**不带依据**（`?evidence=0`），一格一份都不发。
+   *
+   * 页面上用它：`/regime` 首屏只要矩阵（几十 KB），依据在展开某一格时用
+   * `getCellEvidence` 按需拉。生产实测（从开发机到 txy 的链路约 2 KB/s、20% 丢包）
+   * 带上依据的整份响应是 278 KB gzip，要 50 秒——那正是「一直转圈」的原因。
+   */
+  getPool: (params?: { generation?: number; evidence?: boolean }) => {
+    const query = new URLSearchParams();
+    if (params?.generation !== undefined) {
+      query.set("generation", String(params.generation));
+    }
+    if (params?.evidence === false) query.set("evidence", "0");
+    const qs = query.toString();
+    return request<RegimePool>(`/api/regime/pool/${qs ? `?${qs}` : ""}`);
+  },
+
+  /**
+   * **一格**的完整依据。`getPool({evidence:false})` 的配套。
+   *
+   * 与列表里带的那份**逐字节相同**（后端两条路径同源，`test_views` 有一条用例钉住），
+   * 所以「从哪个入口点开」不影响审计看到的东西。
+   */
+  getCellEvidence: (params: {
+    strategy: string;
+    regime: string;
+    generation?: number;
+  }) => {
+    const query = new URLSearchParams({
+      strategy: params.strategy,
+      regime: params.regime,
+    });
+    if (params.generation !== undefined) {
+      query.set("generation", String(params.generation));
+    }
+    return request<RegimeCellEvidence>(
+      `/api/regime/pool/cell/?${query.toString()}`
+    );
+  },
 
   /** 代际历史；带 `generation` 时附上那一代与上一代的逐格差异。 */
   getGenerations: (params?: { page?: number; page_size?: number; generation?: number }) => {

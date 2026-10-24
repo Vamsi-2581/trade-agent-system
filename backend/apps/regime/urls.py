@@ -67,6 +67,10 @@ urlpatterns = [
         name="regime-pool-rebuild-status",
     ),
     path("pool/rebuild/", views.pool_rebuild_dispatch, name="regime-pool-rebuild"),
+    # `pool/cell/` 排在 `pool/` 之前，理由与 `pool/generations/` 同源（见模块 docstring）：
+    # 让阅读顺序与匹配顺序一致。它是 `pool/?evidence=0` 的配套读面——列表只发矩阵，
+    # 一格的依据按需拉（详见 `views.pool_cell` 的 docstring）。
+    path("pool/cell/", views.pool_cell, name="regime-pool-cell"),
     path("pool/", views.pool, name="regime-pool"),
     # 策略的「机制在册」总开关（`/regime` 页面上的「删除策略」）。三条路由而不是一条：
     # 读（确认页，所有登录用户）与两个写（退役 / 恢复启用，`is_staff`）各有各的权限，

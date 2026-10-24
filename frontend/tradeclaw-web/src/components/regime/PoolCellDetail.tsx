@@ -16,6 +16,8 @@
  * `state` / `reason` / `source` 的中文一律取后端给的 `display`，前端不写第二份。
  */
 
+import { useEffect, useState } from "react";
+
 import type { RegimePoolCell } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
 
@@ -92,19 +94,68 @@ function Section({
 /**
  * 一格的证据。
  *
- * `evidence` **由调用方从 `pool.evidence` 那张去重表里查好传进来**（2026-10-23），不是
- * 从 `cell` 上读：同一份证据在响应里只发一次（244 格只有 2 种不同的 evidence，见
- * `RegimePool` 的 docstring），格子上只有 `evidence_key`。这里拿到的仍然是**逐字节相同**
- * 的那份原文——去重发生在传输层，没有裁剪任何一个键。
+ * 依据有两个来源，**同一份原文**：
+ *
+ *   1. 调用方从 `pool.evidence` / `pool.results` 两张去重表里查好传进来（列表明带了依据
+ *      时走这条）；
+ *   2. 没传（`?evidence=0` 的列表，页面上就是这条）时**按需拉**——`loadEvidence` 一次
+ *      只拉这一格。
+ *
+ * 为什么要有第二条（2026-10-23，在 txy 上实测后补的）：带上依据的整份响应是 278 KB
+ * gzip，在一条实测约 2 KB/s、20% 丢包的链路上要 50 秒，页面上就是一直转圈。而矩阵本身
+ * 只有几十 KB，人一次也只会展开一两格。
+ *
+ * `loadEvidence` **由页面注入**（与 `renderStrategyAction` 同一条分工）：本组件不碰 API，
+ * 只负责「要点数据、要到了就排版」。
  */
 export default function PoolCellDetail({
   cell,
   evidence: rawEvidence,
+  loadEvidence,
 }: {
   cell: RegimePoolCell;
-  evidence: Record<string, unknown>;
+  /** 已经从去重表里查好的依据；`undefined` = 这次没带，去拉。 */
+  evidence?: Record<string, unknown>;
+  /** 按需拉这一格的依据。缺省时不做任何请求（测试与「不带依据」的用法）。 */
+  loadEvidence?: (cell: RegimePoolCell) => Promise<Record<string, unknown>>;
 }) {
-  const evidence = asRecord(rawEvidence) ?? {};
+  const [fetched, setFetched] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // 已经给了就不拉；没给 loader 也不拉（调用方自己负责）。
+    if (rawEvidence !== undefined || loadEvidence === undefined) return;
+    let alive = true;
+    loadEvidence(cell)
+      .then((next) => {
+        if (alive) setFetched(next);
+      })
+      .catch((caught) => {
+        if (alive) setError(caught instanceof Error ? caught.message : String(caught));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [cell, rawEvidence, loadEvidence]);
+
+  const resolved = rawEvidence ?? fetched ?? undefined;
+
+  // **「还没拉」与「拉了但没有」是两件事**：
+  //   - 有 loader 而 `resolved` 还是 undefined ⇒ 正在拉（或拉失败），显示那句话；
+  //   - 没有 loader ⇒ 这次根本没打算拉（调用方直接给的依据里没有这一格，脏库的形状），
+  //     按「没有证据」渲染——给成永久 loading 会让一条脏行看起来像网络卡住。
+  if (resolved === undefined && loadEvidence !== undefined) {
+    return (
+      <div
+        data-testid="pool-cell-evidence-loading"
+        className="bg-bg2/50 border border-[rgba(255,255,255,0.07)] rounded-md m-1 p-3 text-[11px] font-mono text-text3"
+      >
+        {error === null ? "正在读取这一格的依据…" : `读取依据失败：${error}`}
+      </div>
+    );
+  }
+
+  const evidence = asRecord(resolved ?? {}) ?? {};
   const results = evidenceResults(evidence.results);
   const threshold = asRecord(evidence.threshold);
   const archetype = asRecord(evidence.archetype);

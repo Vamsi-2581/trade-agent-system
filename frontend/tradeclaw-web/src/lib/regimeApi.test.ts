@@ -75,22 +75,60 @@ describe("regimeApi", () => {
     expect(url).not.toContain("?");
   });
 
-  it("getPool(12) 带上 generation", async () => {
+  it("getPool({generation:12}) 带上 generation", async () => {
     const fetchMock = stub();
     const { regimeApi } = await import("@/lib/api");
 
-    await regimeApi.getPool(12);
+    await regimeApi.getPool({ generation: 12 });
 
     expect(String(fetchMock.mock.calls[0][0])).toContain("generation=12");
   });
 
-  it("getPool(0) 也带上 generation（0 是有效 id，不能被当成「没传」）", async () => {
+  it("getPool({generation:0}) 也带上（0 是有效 id，不能被当成「没传」）", async () => {
     const fetchMock = stub();
     const { regimeApi } = await import("@/lib/api");
 
-    await regimeApi.getPool(0);
+    await regimeApi.getPool({ generation: 0 });
 
     expect(String(fetchMock.mock.calls[0][0])).toContain("generation=0");
+  });
+
+  it("getPool({evidence:false}) 发 evidence=0：页面上少这 278 KB 才拉得动", async () => {
+    const fetchMock = stub();
+    const { regimeApi } = await import("@/lib/api");
+
+    await regimeApi.getPool({ evidence: false });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("evidence=0");
+    // 不带 generation 时同样不许留一个裸 `?`
+    expect(url).not.toContain("?&");
+  });
+
+  it("getPool() 默认不发 evidence：别的调用方不该被界面优化改掉", async () => {
+    const fetchMock = stub();
+    const { regimeApi } = await import("@/lib/api");
+
+    await regimeApi.getPool();
+
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("evidence=");
+  });
+
+  it("getCellEvidence 把 strategy / regime / generation 都带上", async () => {
+    const fetchMock = stub();
+    const { regimeApi } = await import("@/lib/api");
+
+    await regimeApi.getCellEvidence({
+      strategy: "abc-123",
+      regime: "range",
+      generation: 7,
+    });
+
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("/api/regime/pool/cell");
+    expect(url).toContain("strategy=abc-123");
+    expect(url).toContain("regime=range");
+    expect(url).toContain("generation=7");
   });
 
   it("getGenerations 组装分页与 generation 参数", async () => {

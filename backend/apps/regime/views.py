@@ -542,11 +542,28 @@ def pool(request: Request) -> Response:
     `?generation=<id>` 指定一代时**状态不限**（`building` / `failed` 的残骸也有格子可看
     ——那是「为什么会这样」的一半答案）。当前代那条路径只认 `ready`，与
     `current_generation()` 一致。
+
+    ## `?evidence=0`：只发矩阵，不发依据（2026-10-23）
+
+    默认 `evidence=1`（带上两张去重表：`evidence` + `results`）。传 `0` 时**两张表都不发**，
+    格子上只留 `evidence_key` / `results_key`，依据由 `pool/cell/` 按格拉。
+
+    **为什么需要它**：两级去重后整份响应仍有 1.7 MB（gzip 后 278 KB），因为依据里那个
+    `results` 数组本身就大。而在一条实测只有 ~2 KB/s、20% 丢包的链路上（从开发机到 txy），
+    278 KB 要 50 秒——页面上就是「一直转圈」。矩阵本身（248 格的元数据）只有几十 KB，
+    而人一次只会展开一两格：**把依据从「一次性全给」改成「展开那一格才给」**，首屏才真的
+    到得了。这与 `briefing/<kind>/`「按需拉」是同一条纪律。
+
+    默认仍是 `1`：别的调用方（脚本、将来的导出）要的是完整一份，不该被这条界面优化改掉。
     """
     try:
         generation_id = _int_param(request, "generation")
+        with_evidence = _int_param(request, "evidence")
     except ValueError:
-        return _bad_request("generation 必须是整数（一代重算记录的 id）")
+        return _bad_request("generation / evidence 必须是整数")
+    # `?evidence=0` 才关；`None`（没传）与任何非 0 都算开——默认必须是「发」，
+    # 否则今天已有的调用方会在一次无关的部署后突然拿不到依据。
+    with_evidence = with_evidence != 0
 
     if generation_id is None:
         generation = pool_rebuild.current_generation()
@@ -563,13 +580,24 @@ def pool(request: Request) -> Response:
     names = {strategy_id: row["name"] for strategy_id, row in info.items()}
     ordered = ser.ordered_cell_keys(cells, names)
 
-    # **证据去重后单独一张表**（2026-10-23）。理由见 `ser.evidence_dedupe` 与
-    # `TestPoolDoesNotRepeatEvidence`：同一份证据在 4 个阶段里各抄一遍、又被同原型的每条
-    # 策略各抄一遍，实测 99.4% 的条目是重复的。格子上只留 `evidence_key`。
+    # **两级去重，两张表**（2026-10-23）。理由见 `ser.evidence_dedupe` 与
+    # `TestPoolDoesNotRepeatEvidence`：重复的**不是**整份 evidence（`metrics` /
+    # `own_sample` 按阶段算，248 格去出 243 种），而是它内部那个 `results` 大数组
+    # （占 98.7% 体积，248 格只有 19 种）。所以 `results` 单独抽出来去重。
     #
-    # 指纹与表**一次算完**：分开算就是 244 次多余的 sha256（实测约 1 秒），而两处各算
+    # 实测（txy 生产库）：整份去重 59.0MB → 等于没省；两级去重 1.6MB，省 35 倍。
+    #
+    # 指纹与表**一次算完**：分开算就是 248 次多余的 sha256（实测约 2 秒），而两处各算
     # 一遍还会造出「表里的键」与「格子上的键」两套算法。
-    evidence, evidence_keys = ser.evidence_dedupe(cells.values())
+    # `?evidence=0` 时**连指纹都不算**（两张表直接给空，键位留空串）：算指纹要对每份
+    # evidence 做 `json.dumps` + sha256，248 格约 2 秒，而那正是这条路径要省的钱。
+    if with_evidence:
+        evidence, results, evidence_keys = ser.evidence_dedupe(cells.values())
+    else:
+        evidence, results = [], []
+        evidence_keys = {
+            (row["strategy_id"], row["regime"]): ("", "") for row in cells.values()
+        }
 
     return Response(
         {
@@ -577,6 +605,7 @@ def pool(request: Request) -> Response:
             # 矩阵的列序由后端给（`serializers.ORDERED_REGIMES`），前端按数组排。
             "regimes": [ser.regime_payload(regime) for regime in ser.ORDERED_REGIMES],
             "evidence": evidence,
+            "results": results,
             "cells": [
                 {
                     "key": ser.cell_key(*key),
@@ -588,6 +617,78 @@ def pool(request: Request) -> Response:
                 }
                 for key in ordered
             ],
+        }
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 2b. pool/cell —— 一格完整的依据（按需拉）
+# --------------------------------------------------------------------------- #
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def pool_cell(request: Request) -> Response:
+    """**一格**的完整依据。`GET api/regime/pool/?evidence=0` 的配套读面。
+
+    为什么要它：`pool/` 带上依据时整份响应是 1.7 MB（gzip 后 278 KB），因为依据里那个
+    `results` 数组本身就大。而矩阵（248 格的元数据）只有几十 KB，人一次也只会展开一两格。
+    实测从开发机到 txy 的链路约 2 KB/s、20% 丢包——278 KB 要 50 秒，页面上就是「一直
+    转圈」。所以列表只发矩阵，依据按格拉（与 `briefing/<kind>/`「按需拉」同一条纪律）。
+
+    ## 参数
+
+    - `strategy`（必填）：策略 id（与池化表格子 `strategy.id` 同一个值）；
+    - `regime`（必填）：阶段 slug；
+    - `generation`（选填）：哪一代，缺省是当前代——与 `pool/` 的判据一致。
+
+    阶段不合法（不在 `ORDERED_REGIMES` 里）→ **400**：那是请求拼错，不是「这一格不在」。
+    格子不存在 → **404**：策略没错、阶段没错，但这一代里没有这一格（样本不足、或策略
+    不在这一代里）。两者不混。
+
+    ## 返回
+
+    `{"key", "evidence"}`。`evidence` 就是 `pool._evidence` 的原文**逐字节**那一份
+    （`results` 已经拼回它原来的位置），所以审计要的「依据哪几个回测、多少笔、什么区间」
+    与列表里带的完全一致——两条路径给的是同一份东西，只是发的时机不同。
+    """
+    strategy_id = request.query_params.get("strategy")
+    regime = request.query_params.get("regime")
+    if not strategy_id or not regime:
+        return _bad_request("strategy 与 regime 都必填")
+    if regime not in ser.ORDERED_REGIMES:
+        allowed = " / ".join(ser.ORDERED_REGIMES)
+        return _bad_request(f"未知的 regime：{regime!r}（可选：{allowed}）")
+
+    try:
+        generation_id = _int_param(request, "generation")
+    except ValueError:
+        return _bad_request("generation 必须是整数（一代重算记录的 id）")
+
+    if generation_id is None:
+        generation = pool_rebuild.current_generation()
+    else:
+        generation = RegimePoolRebuild.objects.filter(pk=generation_id).first()
+        if generation is None:
+            return _not_found(f"没有 id={generation_id} 的这一代池化表")
+
+    # 只取这一行：`.filter(...).values(...).first()` 而不是 `current_cells()` 再挑——
+    # 后者会把这一代**全部**格子的 evidence 读进内存（正是这次要避免的开销）。
+    row = (
+        RegimePoolCell.objects.filter(
+            rebuild=generation, strategy_id=strategy_id, regime=regime
+        )
+        .values("strategy_id", "regime", "evidence")
+        .first()
+    )
+    if row is None:
+        return _not_found(f"这一代里没有「策略 {strategy_id} × {regime}」这一格")
+
+    evidence = row["evidence"] if row["evidence"] is not None else {}
+    return Response(
+        {
+            "key": ser.cell_key(row["strategy_id"], row["regime"]),
+            "evidence": evidence,
         }
     )
 

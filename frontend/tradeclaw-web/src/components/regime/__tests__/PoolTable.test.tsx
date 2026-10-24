@@ -14,13 +14,14 @@
  */
 
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   Labelled,
   RegimeEvidenceEntry,
   RegimeGeneration,
   RegimePool,
   RegimePoolCell,
+  RegimeResultsEntry,
 } from "@/lib/api";
 
 import PoolTable from "../PoolTable";
@@ -139,21 +140,37 @@ const EVIDENCE = {
 const evidenceKeyOf = (name: keyof typeof EVIDENCE | null): string =>
   name === null ? "empty" : `key-${name}`;
 
-/** 登记表 → `pool.evidence`（只包含被引用到的那些，与后端的去重结果同形）。 */
-function evidenceTable(keys: Iterable<string>): RegimeEvidenceEntry[] {
+/**
+ * 登记表 → 顶层两张去重表，与后端 `ser.evidence_dedupe` 的输出同形。
+ *
+ * 后端是**两级**去重：`evidence` 表装「去掉 `results` 之后的那些键」，`results` 表单独
+ * 装那个大数组。夹具照抄这个形状，否则组件里「按两个键拼回来」那条路径一行都测不到。
+ */
+function dedupeTables(keys: Iterable<string>): {
+  evidence: RegimeEvidenceEntry[];
+  results: RegimeResultsEntry[];
+} {
   const seen = new Set<string>();
-  const table: RegimeEvidenceEntry[] = [];
+  const evidence: RegimeEvidenceEntry[] = [];
+  const results: RegimeResultsEntry[] = [];
   for (const key of keys) {
     if (seen.has(key)) continue;
     seen.add(key);
     if (key === "empty") {
-      table.push({ key });
+      // 空证据：没有 `results` 可言，所以 results_key 是空串、也不建 results 表项。
+      evidence.push({ key, results_key: "" });
       continue;
     }
     const name = key.replace(/^key-/, "") as keyof typeof EVIDENCE;
-    table.push({ key, ...EVIDENCE[name] });
+    const { results: rows, ...rest } = EVIDENCE[name] as Record<string, unknown> & {
+      results?: unknown[];
+    };
+    // `key-<name>` 的证据用 `key-<name>-results` 作它的 results 键，可读且稳定。
+    const resultsKey = `${key}-results`;
+    evidence.push({ key, results_key: resultsKey, ...rest });
+    results.push({ key: resultsKey, results: rows ?? [] });
   }
-  return table;
+  return { evidence, results };
 }
 
 function cell(
@@ -161,12 +178,13 @@ function cell(
   strategyName: string,
   regime: Labelled,
   state: Labelled,
-  over: Partial<Omit<RegimePoolCell, "evidence_key">> & {
+  over: Partial<Omit<RegimePoolCell, "evidence_key" | "results_key">> & {
     /** 引用哪一份登记的证据；`null` = 空证据（后端也给一份，不每格一个 `{}`）。 */
     evidenceName?: keyof typeof EVIDENCE | null;
   } = {}
 ): RegimePoolCell {
   const { evidenceName = null, ...rest } = over;
+  const evidenceKey = evidenceKeyOf(evidenceName);
   return {
     key: `${strategyId}|${regime.value}`,
     strategy: {
@@ -180,7 +198,8 @@ function cell(
     state,
     reason: labelled("", ""),
     needs_review: false,
-    evidence_key: evidenceKeyOf(evidenceName),
+    evidence_key: evidenceKey,
+    results_key: evidenceKey === "empty" ? "" : `${evidenceKey}-results`,
     ...rest,
   };
 }
@@ -214,12 +233,15 @@ const poolCells: RegimePoolCell[] = [
   cell("7", "rsi_cross", REGIMES[3], labelled("neutral")),
 ];
 
+const poolTables = dedupeTables(poolCells.map((c) => c.evidence_key));
+
 const pool: RegimePool = {
   has_generation: true,
   display: "",
   generation,
   regimes: REGIMES,
-  evidence: evidenceTable(poolCells.map((c) => c.evidence_key)),
+  evidence: poolTables.evidence,
+  results: poolTables.results,
   cells: poolCells,
 };
 
@@ -377,15 +399,18 @@ describe("行内展开", () => {
     expect(raw.getByText(/"pool_version": 4/)).toBeTruthy();
   });
 
-  it("证据走 pool.evidence 查表：同一份被两格共用时两格都显示得出来", () => {
+  it("证据走两张去重表：同一份被两格共用时两格都显示得出来", () => {
     // 线上最常见的形状：同一份证据（同原型兜底）落在同一条策略的 4 个阶段上。
-    // 后端只发一份、格子各带同一个 `evidence_key`——两格展开必须都能拿到原文。
+    // 后端只发一份、格子各带同一个 `evidence_key` / `results_key`——两格展开都必须
+    // 拿到原文，**包括那个被抽到 `results` 表里的 `results`**。
     const shared = cell("7", "rsi_cross", REGIMES[3], labelled("neutral"), {
       evidenceName: "fit",
     });
+    const tables = dedupeTables([fitCell.evidence_key]);
     const sharing: RegimePool = {
       ...pool,
-      evidence: evidenceTable([fitCell.evidence_key]),
+      evidence: tables.evidence,
+      results: tables.results,
       cells: [fitCell, shared],
     };
 
@@ -402,11 +427,66 @@ describe("行内展开", () => {
     expect(screen.getAllByText("#101").length).toBe(2);
   });
 
+  it("results 从 results 表拼回来：抽出去的那一份不许丢", () => {
+    // 这条守的是两级去重最容易错的地方——`evidence` 表里**没有** `results`，
+    // 前端必须按 `results_key` 把它拼回去。忘了拼，页面表现是「依据的回测结果」一栏
+    // 显示「证据里没有回测结果」，而其它字段都正常——看起来像数据缺失，其实是漏拼。
+    render(<PoolTable pool={pool} initialExpanded={new Set([fitCell.key])} />);
+
+    const evidence = within(screen.getByTestId("pool-cell-evidence"));
+    expect(evidence.getByText("#101")).toBeTruthy();
+    expect(evidence.getByText("2026-01-01 ~ 2026-06-30")).toBeTruthy();
+  });
+
+  it("列表不带依据时（?evidence=0）按需拉：先 loading，再显示原文", async () => {
+    // 页面上走的就是这条：`getPool({evidence:false})` 只给矩阵，展开时才拉那一格。
+    // 后端实测——带上依据整份响应 278 KB gzip，在约 2 KB/s 的链路上要 50 秒。
+    const slim: RegimePool = { ...pool, evidence: [], results: [] };
+    const loadEvidence = vi.fn().mockResolvedValue(EVIDENCE.fit);
+
+    const { findByTestId } = render(
+      <PoolTable
+        pool={slim}
+        initialExpanded={new Set([fitCell.key])}
+        loadEvidence={loadEvidence}
+      />
+    );
+
+    // 拉回来之前先给出「正在读取」，而不是空白或「没有证据」。
+    expect(screen.getByTestId("pool-cell-evidence-loading")).toBeTruthy();
+    await findByTestId("pool-cell-evidence");
+
+    // 只拉被展开的那一格（不是每一格都拉）。
+    expect(loadEvidence).toHaveBeenCalledTimes(1);
+    expect(loadEvidence.mock.calls[0][0].key).toBe(fitCell.key);
+    // 拉回来的原文照常渲染，包括那个不在 evidence 表里的 `results`。
+    const evidence = within(screen.getByTestId("pool-cell-evidence"));
+    expect(evidence.getByText("#101")).toBeTruthy();
+    expect(evidence.getByText("11,693")).toBeTruthy();
+  });
+
+  it("按需拉失败时说出原因，不是永远转圈", async () => {
+    const slim: RegimePool = { ...pool, evidence: [], results: [] };
+    const loadEvidence = vi.fn().mockRejectedValue(new Error("boom"));
+
+    render(
+      <PoolTable
+        pool={slim}
+        initialExpanded={new Set([fitCell.key])}
+        loadEvidence={loadEvidence}
+      />
+    );
+
+    const loading = await screen.findByTestId("pool-cell-evidence-loading");
+    expect(loading.textContent).toContain("boom");
+  });
+
   it("查不到 evidence_key 时降级成「没有证据」，不崩", () => {
     // 脏库/半更新时的形状：格子的 key 在表里不存在。页面必须仍然画得出来。
     const orphaned: RegimePool = {
       ...pool,
       evidence: [],
+      results: [],
       cells: [fitCell],
     };
 
@@ -431,8 +511,9 @@ describe("空态", () => {
             "还没有任何一代池化表：先跑一次池化重算（POST /api/regime/pool/rebuild/ 或 recompute_regime_slices）",
           generation: null,
           regimes: REGIMES,
-          // 冷启动时没有格子，所以证据表也是空的（后端同样给空数组，不是 null）。
+          // 冷启动时没有格子，所以两张去重表也是空的（后端同样给空数组，不是 null）。
           evidence: [],
+          results: [],
           cells: [],
         }}
       />

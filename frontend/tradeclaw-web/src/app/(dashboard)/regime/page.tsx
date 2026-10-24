@@ -35,6 +35,7 @@ import {
   regimeApi,
   type RegimeGeneration,
   type RegimePool,
+  type RegimePoolCell,
 } from "@/lib/api";
 import { formatMoment } from "@/lib/format";
 
@@ -63,12 +64,18 @@ export default function RegimePage() {
   const [poolError, setPoolError] = useState<string | null>(null);
   const [poolLoading, setPoolLoading] = useState(true);
 
-  /** 当前代 + 代际历史。**按代变化，不进轮询**：重算收场时由 `RebuildButton` 回调刷新。 */
+  /**
+   * 当前代 + 代际历史。**按代变化，不进轮询**：重算收场时由 `RebuildButton` 回调刷新。
+   *
+   * **`evidence: false`**（2026-10-23，在 txy 上实测后定的）：只拉矩阵，不带依据。
+   * 带上依据的整份响应是 278 KB gzip，在实测约 2 KB/s、20% 丢包的链路上要 50 秒——
+   * 画面就是一直转圈。矩阵只有几十 KB，依据在展开某一格时由 `loadCellEvidence` 按需拉。
+   */
   const loadPool = useCallback(async () => {
     setPoolLoading(true);
     try {
       const [nextPool, nextGenerations] = await Promise.all([
-        regimeApi.getPool(),
+        regimeApi.getPool({ evidence: false }),
         regimeApi.getGenerations({ page_size: 20 }),
       ]);
       setPool(nextPool);
@@ -86,6 +93,25 @@ export default function RegimePage() {
   }, [loadPool]);
 
   const generation = overview?.pool.has_generation ? overview.pool.generation : null;
+
+  /**
+   * 展开某一格时拉它的依据。**`generation` 用页面当前显示的那一代**：不钉住的话，
+   * 展开的瞬间正好翻代会拿到「新一代的证据配旧一代的矩阵」——格子上的状态与新表的
+   * 依据对不上，而两者看起来都正常。
+   */
+  const loadCellEvidence = useCallback(
+    (cell: RegimePoolCell) => {
+      const [strategyId, regime] = cell.key.split("|");
+      return regimeApi
+        .getCellEvidence({
+          strategy: strategyId,
+          regime,
+          generation: generation?.id,
+        })
+        .then((payload) => payload.evidence);
+    },
+    [generation?.id]
+  );
 
   return (
     <DashboardShell>
@@ -172,6 +198,7 @@ export default function RegimePage() {
         {pool !== null && (
           <PoolTable
             pool={pool}
+            loadEvidence={loadCellEvidence}
             renderStrategyAction={
               isStaff
                 ? (strategy) => (

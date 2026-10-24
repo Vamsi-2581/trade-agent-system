@@ -70,6 +70,7 @@ RANGE = BaseRegime.RANGE
 
 OVERVIEW = "/api/regime/overview/"
 POOL = "/api/regime/pool/"
+POOL_CELL = "/api/regime/pool/cell/"
 GENERATIONS = "/api/regime/pool/generations/"
 
 #: 与 `test_deactivation_run` 同一条理由：就绪代的指纹有部分唯一约束，同一类里每次造代
@@ -132,6 +133,16 @@ class _Fixture(_GateRunFixture):
             base_regime=regime,
             effective_regime=regime,
         )
+
+    def shared_evidence(self) -> dict:
+        """一份「整份 dict 会被引用两次」的证据：`test_views` 的按需拉那组用它。"""
+        return {
+            "pool_version": 3,
+            "results": [{"result_id": "r-1", "symbol": "BTC/USDT"}],
+            "symbols": ["BTC/USDT"],
+            "trades": 40,
+            "months": 6,
+        }
 
     def switch_row(self, kind: MechanismKind, mode: MechanismMode, *, at=None):
         return RegimeMechanismSwitch.objects.create(
@@ -341,18 +352,21 @@ class TestGenerationRead(_Fixture):
 
         这条断言的字面内容与 2026-10-23 之前完全一样（`{"trades": 3, "results": ["r1"],
         "symbols": ["BTC/USDT"]}` 一个键都不少），变的是**从哪里取**：格子上给的是
-        `evidence_key`，原文在响应顶层的 `evidence` 表里。把这条改成「断言一个子集」
-        就会让「证据被悄悄裁剪」这件事再也测不出来。
+        `evidence_key` + `results_key`，其余键在 `evidence` 表、`results` 在 `results` 表。
+        把这条改成「断言一个子集」就会让「证据被悄悄裁剪」这件事再也测不出来。
         """
         body = self.pool().json()
         cells = {cell["strategy"]["name"]: cell for cell in body["cells"]}
         table = {item["key"]: item for item in body["evidence"]}
+        results = {item["key"]: item["results"] for item in body["results"]}
 
         beta = cells["BetaStem"]
         self.assertTrue(beta["needs_review"])
-        evidence = table[beta["evidence_key"]]
+        evidence = {k: v for k, v in table[beta["evidence_key"]].items() if k != "key"}
+        evidence.pop("results_key", None)
+        evidence["results"] = results[beta["results_key"]]
         self.assertEqual(
-            {k: v for k, v in evidence.items() if k != "key"},
+            evidence,
             {"trades": 3, "results": ["r1"], "symbols": ["BTC/USDT"]},
         )
         self.assertEqual(beta["source"]["value"], POOL_SOURCE_ARCHETYPE)
@@ -488,21 +502,45 @@ class TestPoolDoesNotRepeatEvidence(_Fixture):
 
     ## 形状
 
-    响应顶层多一个 `evidence` 数组，每一格带 `evidence_key` 指向它：
+    两级去重，两个顶层表，格子上各带一个键：
 
-        {"evidence": [{"key": "<sha256>", ...}, ...],
-         "cells": [{"key": "7|range", "evidence_key": "<sha256>", ...}, ...]}
+        {"evidence": [{"key": "<ek>", "results_key": "<rk>", ...其余键}, ...],
+         "results":  [{"key": "<rk>", "results": [...]}, ...],
+         "cells":    [{"key": "7|range", "evidence_key": "<ek>", "results_key": "<rk>"}, ...]}
 
     `evidence` 的每一项就是**原来那份 `evidence` 原文**（`pool._evidence` 的产物，一个
     键都不改、一个键都不少）——所以「依据哪几个回测、多少笔、什么区间」这条审计要求
     没有被削弱，只是从「每格一份副本」变成「整份响应一份」。
 
-    去重的键是**内容的 sha256**而不是 `(策略, 阶段)`：证据是按原型分桶生成的，同一份会
-    落在同桶的几十条策略上，而那正是重复的来源。按内容去重不需要知道它是怎么生成的。
+    两级是必需的，不是过度设计：整份 evidence 因 `metrics` / `own_sample` 按阶段算而
+    **各不相同**（实测 248 格去出 243 种），所以只做第一级等于没做；重复全在第二级。
     """
 
-    def _evidence(self, tag: str) -> dict:
-        return {"trades": 3, "results": [f"r-{tag}"], "symbols": ["BTC/USDT"]}
+    def _resolved(self, body: dict, cell: dict) -> dict:
+        """把响应拼回「一格完整的 evidence」，与前端 `evidenceOf` 同一套拼法。
+
+        断言走这个辅助方法而不是直接读表：**拼回来必须与去重前的原文逐字节相同**，
+        而这条只有真的拼一次才测得到。
+        """
+        table = {item["key"]: item for item in body["evidence"]}
+        results = {item["key"]: item["results"] for item in body["results"]}
+        entry = dict(table[cell["evidence_key"]])
+        # 两个键都是**传输层的**，不属于证据原文；拼回来要剔除。
+        entry.pop("key", None)
+        entry.pop("results_key", None)
+        if cell["results_key"]:
+            entry["results"] = results.get(cell["results_key"], [])
+        return entry
+
+    def _evidence(self, tag: str, **extra) -> dict:
+        """一份证据。`extra` 用来让**整体**各不相同（生产里 metrics / own_sample 每格都不同），
+        而 `results` 仍然可以是同一批——重复的正是 `results`。"""
+        return {
+            "trades": 3,
+            "results": [f"r-{tag}"],
+            "symbols": ["BTC/USDT"],
+            **extra,
+        }
 
     def test_the_same_evidence_is_sent_once_and_referenced_by_key(self):
         shared = self._evidence("shared")
@@ -516,27 +554,66 @@ class TestPoolDoesNotRepeatEvidence(_Fixture):
 
         body = self.pool(generation=generation.pk).json()
 
-        # 三格、两种不同的证据 ⇒ 证据表只有两项。
         self.assertEqual(len(body["cells"]), 3)
-        self.assertEqual(len(body["evidence"]), 2)
 
-        # 每一项就是原来那份原文（逐键相等，不是「够用的子集」）。
-        by_key = {item["key"]: item for item in body["evidence"]}
+        # 拼回来就是原来那份原文（逐键相等，不是「够用的子集」）。
         alpha_down, alpha_range, beta_down = body["cells"]
-        self.assertEqual(by_key[alpha_down["evidence_key"]]["results"], ["r-shared"])
-        self.assertEqual(
-            by_key[alpha_down["evidence_key"]],
-            by_key[alpha_range["evidence_key"]],
-        )
-        self.assertNotEqual(
-            by_key[alpha_down["evidence_key"]],
-            by_key[beta_down["evidence_key"]],
+        self.assertEqual(self._resolved(body, alpha_down), shared)
+        self.assertEqual(self._resolved(body, beta_down), self._evidence("beta"))
+
+        # 用了同一份证据的两格，两个键都一样；第三格两个键都不同。
+        self.assertEqual(alpha_down["evidence_key"], alpha_range["evidence_key"])
+        self.assertEqual(alpha_down["results_key"], alpha_range["results_key"])
+        self.assertNotEqual(alpha_down["results_key"], beta_down["results_key"])
+
+        # 重复的部分真的只发了一份：两种 `results` ⇒ results 表两项，
+        # 而「去掉 results 之后的部分」三格完全相同 ⇒ evidence 表只有一项。
+        self.assertEqual(len(body["results"]), 2)
+        self.assertEqual(len(body["evidence"]), 1)
+
+    def test_a_shared_results_list_is_sent_once_even_when_each_evidence_differs(self):
+        """**生产里的真实形状**（2026-10-23 在 txy 上实测）。
+
+        每格的 `metrics` / `full_sample` / `own_sample` 各不相同（它们按阶段算），所以
+        **整份 evidence 去重几乎无效**——实测 248 格去了 243 种，等于没去。真正重复的是
+        里面那份 `results`：它按原型分桶生成、与阶段无关，248 格里只有 **19 种**。
+
+            整份去重后 243 种 ⇒ 59.0 MB（等于没省）
+            仅 results 去重后 19 种 ⇒ 1.6 MB（省 35 倍）
+
+        所以去重必须**下沉到 `results` 这一层**。只对整份 dict 做哈希，是把「99% 的字节是
+        同一批 `results` 的副本」这件事整个漏掉——本用例专门钉住它，因为夹具里只要偷懒写成
+        「整份相同」，那条原来就绿、而线上依然 55 MB。
+        """
+        generation = self.make_gen(
+            cells=tuple(
+                (
+                    self.alpha,
+                    regime,
+                    {
+                        "evidence": self._evidence(
+                            "shared", metrics={"sharpe": i}, own_sample={"i": i}
+                        )
+                    },
+                )
+                for i, regime in enumerate((DOWNTREND, RANGE))
+            )
         )
 
-        # 原来的 `results` / `symbols` / `trades` 一个都没丢。
-        shared_item = by_key[alpha_down["evidence_key"]]
-        self.assertEqual(shared_item["trades"], 3)
-        self.assertEqual(shared_item["symbols"], ["BTC/USDT"])
+        body = self.pool(generation=generation.pk).json()
+
+        # 整份 evidence 不同（metrics 不同）⇒ 证据表两项……
+        self.assertEqual(len(body["evidence"]), 2)
+        # ……但它们引用的 `results` 是同一份，只发一次。
+        self.assertEqual(len(body["results"]), 1, body.get("results"))
+        first, second = body["cells"]
+        self.assertNotEqual(first["evidence_key"], second["evidence_key"])
+        self.assertEqual(first["results_key"], second["results_key"])
+
+        # 前端拼回来仍是逐字节相同的原文。
+        resolved = self._resolved(body, first)
+        self.assertEqual(resolved["results"], ["r-shared"])
+        self.assertEqual(resolved["metrics"], {"sharpe": 0})
 
     def test_the_cell_no_longer_carries_its_own_copy(self):
         """格子上**不再有** `evidence` 内联：留着它，去重就只是「多给一份」。"""
@@ -548,6 +625,7 @@ class TestPoolDoesNotRepeatEvidence(_Fixture):
 
         self.assertNotIn("evidence", cell)
         self.assertIn("evidence_key", cell)
+        self.assertIn("results_key", cell)
 
     def test_cells_without_evidence_share_one_empty_entry(self):
         """没有证据的格子（`evidence={}`）**共用一个空项**，不是各自一个 `{}`。
@@ -565,7 +643,144 @@ class TestPoolDoesNotRepeatEvidence(_Fixture):
         self.assertEqual(
             body["cells"][0]["evidence_key"], body["cells"][1]["evidence_key"]
         )
-        self.assertEqual(body["evidence"][0], {"key": body["evidence"][0]["key"]})
+        # 空证据没有 `results` 可言：那一项只有 key + 一个空的 results_key，
+        # 且**不为它建 results 表项**（建了就是拿空数组占位）。
+        self.assertIsNone(body["evidence"][0].get("results"))
+        self.assertEqual(body["evidence"][0]["results_key"], "")
+        self.assertEqual(body["results"], [])
+        # 拼回来仍是空 dict，与库里那格一致。
+        self.assertEqual(self._resolved(body, body["cells"][0]), {})
+
+
+# --------------------------------------------------------------------------- #
+# 性质 4.6：依据可以按需拉（`?evidence=0` + `pool/cell/`）
+# --------------------------------------------------------------------------- #
+
+
+class TestPoolEvidenceIsLazy(_Fixture):
+    """列表只发矩阵，一格的依据由 `pool/cell/` 按需拉。
+
+    **这是「读不出来」的第二层根因**（2026-10-23，在 txy 上实测后补的）。两级去重把
+    整份响应从 56.7 MB 降到 1.7 MB，但在一条实测约 2 KB/s、20% 丢包的链路上，1.7 MB
+    （gzip 后 278 KB）仍要 **50 秒**——页面上就是一直转圈。而矩阵本身（248 格的元数据）
+    只有几十 KB，人一次也只会展开一两格。
+
+    所以 `pool/?evidence=0` 不发两张依据表，`pool/cell/` 按格给。两者给的**是同一份
+    东西**——这一点由最后一条用例钉住：同一条策略同一阶段，从两条路径取到的 evidence
+    必须逐字节相同，否则「审计看到的」会随「从哪个入口点开的」而变。
+    """
+
+    def _cell(self, **params):
+        return self.client.get(POOL_CELL, params)
+
+    def test_evidence_zero_omits_both_tables_and_keeps_the_matrix(self):
+        generation = self.make_gen(
+            cells=(
+                (self.alpha, DOWNTREND, {"evidence": self.shared_evidence()}),
+                (self.beta, RANGE, {"evidence": self.shared_evidence()}),
+            )
+        )
+
+        body = self.pool(generation=generation.pk, evidence=0).json()
+
+        # 矩阵照旧：两格都在，枚举与策略信息一个不少。
+        self.assertEqual(len(body["cells"]), 2)
+        self.assertEqual(
+            sorted(cell["regime"]["value"] for cell in body["cells"]),
+            sorted([DOWNTREND.value, RANGE.value]),
+        )
+        for cell in body["cells"]:
+            self.assertTrue(cell["strategy"]["name"])
+            self.assertEqual(set(cell["state"]), {"value", "display"})
+        # 两张依据表都不发。
+        self.assertEqual(body["evidence"], [])
+        self.assertEqual(body["results"], [])
+
+    def test_the_default_still_ships_the_evidence(self):
+        """不传 `evidence` 时默认**发**：别的调用方（脚本、导出）不该被界面优化改掉。"""
+        generation = self.make_gen(
+            cells=((self.alpha, DOWNTREND, {"evidence": self.shared_evidence()}),)
+        )
+
+        body = self.pool(generation=generation.pk).json()
+
+        self.assertEqual(len(body["evidence"]), 1)
+        self.assertEqual(len(body["results"]), 1)
+
+    def test_the_cell_endpoint_returns_the_resolved_evidence(self):
+        evidence = self.shared_evidence()
+        generation = self.make_gen(
+            cells=((self.alpha, DOWNTREND, {"evidence": evidence}),)
+        )
+
+        resp = self._cell(
+            generation=generation.pk, strategy=self.alpha.pk, regime=DOWNTREND.value
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["key"], f"{self.alpha.pk}|{DOWNTREND.value}")
+        self.assertEqual(body["evidence"], evidence)
+
+    def test_the_two_paths_agree_byte_for_byte(self):
+        """**这条是这一组的核心**：列表里带的与按格拉的必须是同一份。
+
+        两条路径各写一遍拼装（一条走 `evidence_dedupe` 的键、一条直接从行里取）时，
+        最容易出的错就是某一处「顺手整理了一下」——而审计看到的依据会因此随入口而变。
+        """
+        evidence = self.shared_evidence()
+        generation = self.make_gen(
+            cells=((self.alpha, DOWNTREND, {"evidence": evidence}),)
+        )
+
+        listed = self.pool(generation=generation.pk).json()
+        cell = listed["cells"][0]
+        table = {item["key"]: item for item in listed["evidence"]}
+        results = {item["key"]: item["results"] for item in listed["results"]}
+        from_list = {k: v for k, v in table[cell["evidence_key"]].items() if k != "key"}
+        from_list.pop("results_key", None)
+        from_list["results"] = results[cell["results_key"]]
+
+        from_cell = self._cell(
+            generation=generation.pk, strategy=self.alpha.pk, regime=DOWNTREND.value
+        ).json()["evidence"]
+
+        self.assertEqual(from_list, from_cell)
+
+    def test_an_unknown_regime_is_a_400_and_a_missing_cell_is_a_404(self):
+        generation = self.make_gen(cells=((self.alpha, DOWNTREND, {"evidence": {}}),))
+
+        bad = self._cell(
+            generation=generation.pk, strategy=self.alpha.pk, regime="not_a_regime"
+        )
+        missing = self._cell(
+            generation=generation.pk, strategy=self.beta.pk, regime=RANGE.value
+        )
+
+        # 阶段拼错 → 请求拼错（400）；这一格不存在 → 404。两者不混。
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(missing.status_code, 404)
+
+    def test_the_required_params_are_required(self):
+        generation = self.make_gen(cells=((self.alpha, DOWNTREND, {"evidence": {}}),))
+
+        self.assertEqual(self._cell(generation=generation.pk).status_code, 400)
+        self.assertEqual(
+            self._cell(generation=generation.pk, strategy=self.alpha.pk).status_code,
+            400,
+        )
+
+    def test_authentication_is_required(self):
+        # 用一个**全新的** client，而不是 `force_authenticate(user=None)`：后者会把请求
+        # 交回默认鉴权链，而本仓没有装 `django.contrib.sessions`，于是它炸在 Session 上
+        # 而不是回 401——测的就不是「要不要登录」了。
+        anonymous = APIClient()
+
+        resp = anonymous.get(
+            POOL_CELL, {"strategy": self.alpha.pk, "regime": DOWNTREND.value}
+        )
+
+        self.assertEqual(resp.status_code, 401)
 
 
 # --------------------------------------------------------------------------- #

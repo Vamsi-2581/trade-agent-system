@@ -26,7 +26,7 @@ import {
   evidenceIndex,
   evidenceOf,
   type Labelled,
-  type RegimeEvidenceEntry,
+  type RegimeEvidenceIndex,
   type RegimePool,
   type RegimePoolCell,
   type RegimeStrategyRef,
@@ -154,12 +154,18 @@ export interface PoolTableProps {
    * 给了它就多渲染一列「操作」，不给就与从前逐像素一致（所以读面与写面各自可以单独测）。
    */
   renderStrategyAction?: (strategy: RegimeStrategyRef) => ReactNode;
+  /**
+   * 按需拉一格的依据。**由页面注入**（与 `renderStrategyAction` 同一条分工，本组件不碰
+   * API）。列表用 `?evidence=0` 拉（只发矩阵）时，展开的那一格靠它去取。
+   */
+  loadEvidence?: (cell: RegimePoolCell) => Promise<Record<string, unknown>>;
 }
 
 export default function PoolTable({
   pool,
   initialExpanded,
   renderStrategyAction,
+  loadEvidence,
 }: PoolTableProps) {
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(initialExpanded ?? [])
@@ -245,6 +251,7 @@ export default function PoolTable({
                   onToggle={toggle}
                   renderStrategyAction={renderStrategyAction}
                   evidence={evidence}
+                  loadEvidence={loadEvidence}
                   colSpan={colSpan}
                 />
               );
@@ -266,6 +273,7 @@ function RowGroup({
   onToggle,
   renderStrategyAction,
   evidence,
+  loadEvidence,
   colSpan,
 }: {
   row: StrategyRow;
@@ -274,8 +282,10 @@ function RowGroup({
   expanded: Set<string>;
   onToggle: (key: string) => void;
   renderStrategyAction?: (strategy: RegimeStrategyRef) => ReactNode;
-  /** 证据去重表（`evidenceIndex(pool)`），由页面建一次传下来。 */
-  evidence: Map<string, RegimeEvidenceEntry>;
+  /** 两张去重表的索引（`evidenceIndex(pool)`），由页面建一次传下来。 */
+  evidence: RegimeEvidenceIndex;
+  /** 按需拉一格的依据；直接透传给 `PoolCellDetail`。 */
+  loadEvidence?: (cell: RegimePoolCell) => Promise<Record<string, unknown>>;
   colSpan: number;
 }) {
   return (
@@ -337,7 +347,11 @@ function RowGroup({
           className="border-b border-[rgba(255,255,255,0.04)]"
         >
           <td colSpan={colSpan} className="p-0">
-            <PoolCellDetail cell={cell} evidence={evidenceOf(evidence, cell)} />
+            <PoolCellDetail
+              cell={cell}
+              evidence={evidenceOf(evidence, cell)}
+              loadEvidence={loadEvidence}
+            />
           </td>
         </tr>
       ))}
