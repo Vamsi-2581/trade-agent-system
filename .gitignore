@@ -22,3 +22,38 @@ backend/docs/
 # Production DB backup dumps (large binaries; keep local only)
 backend/backups/*.dump
 
+# ── 本地工具产物（不进版本库）─────────────────────────────────────────────
+# 这些目录是"每台机器各一份"的缓存与草稿，体积从几十 MB 到数 GB：
+# `.pnpm-store/` 1.0G、`.scratch/uv-cache` 2.0G。一条 `git add -A` 就会
+# 把它们塞进仓库，而它们对任何其他机器都没有价值。
+#
+# **注意 `data/` 那条规则是宽匹配**（任何层级的 data 目录），它此前已经在
+# `.pnpm-store/v11/links/**/node_modules/*/data/` 上误伤——所以下面这些必须
+# 写完整路径、不能只写目录名。
+
+# pnpm 的全局内容寻址存储（仓库用 npm 管理依赖：frontend 的 package-lock.json
+# 是跟踪的，pnpm-lock.yaml 不在版本库里）。
+.pnpm-store/
+
+# 临时探测脚本与草稿。
+# **不能整目录忽略**：`.scratch/strategy-factory-p0/` 下 4 个文件是已跟踪的正式
+# issue 文档。所以只忽略那些明确的缓存/产物子目录。
+.scratch/uv-cache/
+.scratch/npm-cache/
+.scratch/redis/
+.scratch/balprobe/
+.scratch/lead/
+.scratch/lead-review/
+.scratch/market_data/
+
+# 代码审查的临时工作区（`.review/` 里是某次策略审核的草稿与 .bak）。
+.review/
+
+# CodeGraph 的本地索引与进程文件（`.codegraph/.gitignore` 已覆盖 *.db / *.log /
+# cache/，但 `daemon.pid` 曾被误提交——它的内容是某一台机器上的 PID）。
+.codegraph/daemon.pid
+
+# Playwright 的截图与报告。
+frontend/tradeclaw-web/test-results/
+frontend/tradeclaw-web/playwright-report/
+
