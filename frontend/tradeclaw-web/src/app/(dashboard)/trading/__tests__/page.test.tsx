@@ -69,8 +69,14 @@ vi.mock("@/hooks/useLiveSessions", () => ({
     pause: () => {},
     resume: () => {},
     stop: () => {},
-    promote: () => {},
     remove: () => {},
+    // promote 不再是 `doAction` 那一族的一个键：它是两拍状态 + 三个回调
+    // （见 `hooks/useLiveSessions.ts` 的 `PromotionState`）。这里照实模拟，
+    // 免得这份夹具在 hook 契约变化后继续「看起来对」。
+    promotion: { preview: null, result: null, error: null, busy: false },
+    requestPromotion: () => {},
+    confirmPromotion: () => {},
+    dismissPromotion: () => {},
   }),
 }));
 

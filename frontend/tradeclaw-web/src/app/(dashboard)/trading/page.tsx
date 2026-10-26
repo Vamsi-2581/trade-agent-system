@@ -323,6 +323,7 @@ function SessionMiniCard({
   onDelete,
   onDetail,
   actionLoading,
+  promoteDisabledReason,
 }: {
   session: LiveSession;
   onStart: () => void;
@@ -333,6 +334,14 @@ function SessionMiniCard({
   onDelete: () => void;
   onDetail: () => void;
   actionLoading: boolean;
+  /**
+   * 非空时「升级为实盘」不可点，并把原因显示成 title。
+   *
+   * 存在的理由：这个按钮点了要人指定**目标实盘账户**，而账户列表为空时它无路可走。
+   * 旧版没有这条路，按钮点了发一次无 body 的 POST、后端回干跑摘要、前端丢掉，
+   * 表现就是「点了没反应」。宁可按钮变灰并说明原因，也不要它静默无效。
+   */
+  promoteDisabledReason?: string | null;
 }) {
   const statusInfo = sessionStatusBadge(session.status);
   const equity = session.current_equity ? formatNumber(session.current_equity) : "—";
@@ -432,7 +441,12 @@ function SessionMiniCard({
               停止
             </button>
             {session.mode === "paper" && (
-              <button onClick={onPromote} disabled={actionLoading} className="px-2 py-1 rounded text-[9px] font-semibold bg-green-dim/50 text-green hover:bg-green-dim disabled:opacity-40 disabled:cursor-not-allowed ml-auto">
+              <button
+                onClick={onPromote}
+                disabled={actionLoading || Boolean(promoteDisabledReason)}
+                title={promoteDisabledReason ?? "把这条模拟会话升成实盘会话（需先选目标实盘账户并确认）"}
+                className="px-2 py-1 rounded text-[9px] font-semibold bg-green-dim/50 text-green hover:bg-green-dim disabled:opacity-40 disabled:cursor-not-allowed ml-auto"
+              >
                 升级为实盘
               </button>
             )}
@@ -483,6 +497,167 @@ function SessionMiniCard({
   );
 }
 
+// ── Promote Confirm Dialog ──
+
+/**
+ * 升级为实盘的确认层（spec #19 D11 的三步卡点：选账户 → 看干跑摘要 → 确认）。
+ *
+ * **三个决定都是「不要第二个口径」**：
+ *
+ * 1. **摘要正文逐字取后端 `dry_run.message`**：后端写好了「将停止哪条会话、用哪个账户
+ *    建 live 会话、继承多少权益」，前端再拼一遍就是第二个版本，而它迟早会说错一半。
+ * 2. **目标账户必须人选**：后端不接受「继承 paper 账户」（那必然是 testnet，必然被
+ *    `mode_account_mismatch` 拒绝）。所以这里只列 `testnet === false` 的账户。
+ * 3. **没摘要就不许确认**：`preview` 为空时按钮发的是干跑请求，拿到摘要后才变成
+ *    「确认升级」。防的是「两次点击之间状态丢了，于是又发一次干跑」——那种失败
+ *    看起来像「确认按钮没用」。
+ */
+function PromoteConfirmDialog({
+  session,
+  liveAccounts,
+  targetId,
+  onTargetChange,
+  preview,
+  result,
+  error,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  session: LiveSession;
+  liveAccounts: ExchangeAccountWithBalance[];
+  targetId: string;
+  onTargetChange: (id: string) => void;
+  preview: { message: string; target_account: { label: string } } | null;
+  result: { id: string; mode: string; status: string; message: string } | null;
+  error: string | null;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div
+        data-testid="promote-confirm"
+        className="bg-bg1 border border-[rgba(255,255,255,0.1)] rounded-xl w-full max-w-lg p-5 space-y-4 max-h-[85vh] overflow-y-auto"
+      >
+        <div>
+          <h3 className="text-sm font-bold text-text">升级为实盘</h3>
+          <p className="text-[11px] text-text3 mt-1">
+            {session.strategy_name} · {session.symbol}
+            <span className="ml-2 font-mono">#{session.id.slice(0, 8)}</span>
+          </p>
+        </div>
+
+        {result === null && (
+          <div className="space-y-1.5">
+            <label
+              htmlFor="promote-target-account"
+              className="text-[11px] font-semibold text-text2 block"
+            >
+              目标实盘账户
+            </label>
+            {liveAccounts.length === 0 ? (
+              <p className="text-[11px] text-amber bg-amber-dim/20 border border-amber/30 rounded-lg px-3 py-2">
+                没有可用的实盘账户（testnet=false）。paper 会话绑的是模拟账户，它不能当实盘账户用
+                ——请先到「配置 → 交易所」添加一个实盘账户。
+              </p>
+            ) : (
+              <select
+                id="promote-target-account"
+                data-testid="promote-target-account"
+                value={targetId}
+                onChange={(e) => onTargetChange(e.target.value)}
+                disabled={busy || preview !== null}
+                className="w-full bg-bg2 border border-[rgba(255,255,255,0.1)] rounded-md px-2 py-1.5 text-xs text-text"
+              >
+                <option value="">请选择实盘账户…</option>
+                {liveAccounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.exchange} · {acc.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+
+        {/* 后端那段「将执行什么」——逐字显示，不加工。 */}
+        {preview !== null && (
+          <pre
+            data-testid="promote-preview"
+            className="text-[11px] leading-relaxed font-mono text-text2 whitespace-pre-wrap break-all bg-bg2 border border-[rgba(255,255,255,0.07)] rounded-lg p-3"
+          >
+            {preview.message}
+          </pre>
+        )}
+
+        {error !== null && (
+          <p
+            data-testid="promote-error"
+            className="bg-red-dim/20 border border-red/30 rounded-lg px-3 py-2 text-[11px] text-red whitespace-pre-wrap break-all"
+          >
+            {error}
+          </p>
+        )}
+
+        {result !== null ? (
+          <div
+            data-testid="promote-result"
+            className="rounded-lg border border-green/40 bg-green-dim px-3 py-2 space-y-1 text-[11px] text-green"
+          >
+            <p>{result.message}</p>
+            <p className="text-text3">
+              新会话 <span className="font-mono text-text2">{result.id.slice(0, 8)}</span>
+              （{result.mode} · {result.status}）
+            </p>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="bg-bg2 text-text px-3 py-1 rounded-md mt-1"
+            >
+              关闭
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-2 justify-end">
+            <button
+              type="button"
+              data-testid="promote-cancel"
+              onClick={onCancel}
+              disabled={busy}
+              className="px-4 py-1.5 rounded-md text-xs font-semibold border border-[rgba(255,255,255,0.1)] text-text3 hover:text-text disabled:opacity-40"
+            >
+              取消
+            </button>
+            {preview === null ? (
+              <button
+                type="button"
+                data-testid="promote-request"
+                onClick={onConfirm}
+                disabled={busy || targetId === ""}
+                className="px-4 py-1.5 rounded-md text-xs font-semibold border border-green/30 bg-green-dim text-green hover:bg-green-dim/80 disabled:opacity-40"
+              >
+                {busy ? "读取中…" : "下一步"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                data-testid="promote-confirm-ok"
+                onClick={onConfirm}
+                disabled={busy}
+                className="px-4 py-1.5 rounded-md text-xs font-semibold border border-green/30 bg-green-dim text-green hover:bg-green-dim/80 disabled:opacity-40"
+              >
+                {busy ? "处理中…" : "确认升级"}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ──
 
 export default function TradingPage() {
@@ -504,8 +679,11 @@ export default function TradingPage() {
     pause: pauseSession,
     resume: resumeSession,
     stop: stopSession,
-    promote: promoteSession,
     remove: removeSession,
+    promotion,
+    requestPromotion,
+    confirmPromotion,
+    dismissPromotion,
   } = useLiveSessions();
 
   const [activeSection, setActiveSection] = useState<"all" | "live" | "paper">("all");
@@ -515,6 +693,11 @@ export default function TradingPage() {
   const detailSession = detailSessionId
     ? sessions.find((s) => s.id === detailSessionId) ?? null
     : null;
+
+  // 升级为实盘的两步确认状态（见 useLiveSessions 的 PromotionState）。
+  // 待升级的会话 id 与选中的目标实盘账户分开存：账户是用户选的，会话是点出来的。
+  const [promoteSessionId, setPromoteSessionId] = useState<string | null>(null);
+  const [promoteTargetId, setPromoteTargetId] = useState<string>("");
 
   const isLoading = accLoading || posLoading || ordersLoading;
   const hasExecutor = frameStatus.order_executor === "running";
@@ -551,6 +734,12 @@ export default function TradingPage() {
 
   const totalPositions = positions.positions.length;
   const totalActiveOrders = activeOrders.length;
+
+  // 待升级的会话从 `sessions` 现取（与详情弹窗同一套理由：列表 10s 一轮，
+  // 弹窗里显示的一直是当前那份；会话在别处被删掉时弹窗自动消失）。
+  const promoteSession = promoteSessionId
+    ? sessions.find((s) => s.id === promoteSessionId) ?? null
+    : null;
 
   return (
     <DashboardShell>
@@ -643,10 +832,21 @@ export default function TradingPage() {
                   onPause={() => pauseSession(session.id)}
                   onResume={() => resumeSession(session.id)}
                   onStop={() => stopSession(session.id)}
-                  onPromote={() => promoteSession(session.id)}
+                  onPromote={() => {
+                    // 打开两步确认层。**不发请求**：目标账户还没选，发出去必然
+                    // 被后端以「必须显式指定目标实盘账户」拒绝，而那句长文案
+                    // 在没有确认层的年代连显示的地方都没有。
+                    setPromoteTargetId("");
+                    setPromoteSessionId(session.id);
+                  }}
                   onDelete={() => removeSession(session.id)}
                   onDetail={() => setDetailSessionId(session.id)}
                   actionLoading={sessionActionLoading}
+                  promoteDisabledReason={
+                    liveAccounts.length === 0
+                      ? "没有可用的实盘账户（testnet=false）：paper 会话绑的模拟账户不能当实盘账户用"
+                      : null
+                  }
                 />
               ))}
           </div>
@@ -748,6 +948,32 @@ export default function TradingPage() {
         <SessionDetailModal
           session={detailSession}
           onClose={() => setDetailSessionId(null)}
+        />
+      )}
+
+      {/* 升级为实盘的两步确认（选账户 → 干跑摘要 → 确认） */}
+      {promoteSession !== null && (
+        <PromoteConfirmDialog
+          session={promoteSession}
+          liveAccounts={liveAccounts}
+          targetId={promoteTargetId}
+          onTargetChange={setPromoteTargetId}
+          preview={promotion.preview}
+          result={promotion.result}
+          error={promotion.error}
+          busy={promotion.busy}
+          onCancel={() => {
+            setPromoteSessionId(null);
+            setPromoteTargetId("");
+            dismissPromotion();
+          }}
+          onConfirm={() => {
+            if (promotion.preview === null) {
+              void requestPromotion(promoteSession.id, promoteTargetId);
+            } else {
+              void confirmPromotion(promoteSession.id, promoteTargetId);
+            }
+          }}
         />
       )}
     </DashboardShell>

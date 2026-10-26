@@ -658,6 +658,45 @@ export interface CreateSessionPayload {
   config?: Record<string, unknown>;
 }
 
+/**
+ * `POST /api/trading/sessions/<id>/promote/` 的请求体（spec #19 D11）。
+ *
+ * **`exchange_account_id` 不是可选项**：后端 `live_session_promote` 明确拒绝「原样继承
+ * paper 账户」（那是 testnet 账户，必然被 `mode_account_mismatch` 挡下，于是这个接口
+ * 曾经**永远 400**）。不传它，后端回的第一句就是「升实盘必须显式指定目标实盘账户」。
+ *
+ * **`confirmed` 是两步确认的第二拍**：不带它时后端只回一段干跑摘要（`dry_run: true`），
+ * 什么都不改。所以一次「升级为实盘」必然是**两次请求**——先看摘要，再带确认。
+ */
+export interface PromoteSessionPayload {
+  exchange_account_id: string;
+  confirmed?: boolean;
+}
+
+/**
+ * `promote` 的两种成功响应。**必须分开建模**：干跑是 200 且**没有 `error` 键**，
+ * 而失败是 400 + `{error}`——把干跑当成「成功升实盘了」来渲染，用户会以为
+ * 一条模拟会话已经变成实盘。
+ */
+export interface PromoteDryRun {
+  dry_run: true;
+  action: "promote";
+  candidate: { id: string; name: string; status: string };
+  paper_session: { id: string; symbol: string; status: string };
+  target_account: { id: string; label: string; testnet: boolean };
+  will_inherit: { initial_capital: string; config: Record<string, unknown> };
+  /** 后端写好的整段「将执行什么」，前端原样显示、不加工。 */
+  message: string;
+}
+
+export interface PromoteResult {
+  dry_run?: false;
+  id: string;
+  mode: string;
+  status: string;
+  message: string;
+}
+
 export const liveSessionApi = {
   list: () => request<LiveSession[]>("/api/trading/sessions/"),
   /** 会话本身的形状。详情弹窗要的统计/参数/熔断层/订单在 `getDetail` 里（同一个 URL，
@@ -690,10 +729,18 @@ export const liveSessionApi = {
       `/api/trading/sessions/${id}/stop/`,
       "POST"
     ),
-  promote: (id: string) =>
-    request<{ id: string; mode: string; status: string; message: string }>(
+  /**
+   * 升级为实盘。**必须带目标实盘账户**（见 `PromoteSessionPayload`）。
+   *
+   * 返回 `PromoteDryRun | PromoteResult`：不带 `confirmed` 时是干跑摘要，带了才是
+   * 真的建 live 会话。调用方必须先分辨这两者再渲染——把它们混成一个「成功」，
+   * 界面上就会出现「已升级」而库里还是 paper 的会话。
+   */
+  promote: (id: string, data: PromoteSessionPayload) =>
+    request<PromoteDryRun | PromoteResult>(
       `/api/trading/sessions/${id}/promote/`,
-      "POST"
+      "POST",
+      data
     ),
   delete: (id: string) =>
     request<{ message: string; id: string }>(
