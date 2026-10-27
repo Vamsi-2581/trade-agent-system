@@ -52,6 +52,10 @@ from . import views
 
 urlpatterns = [
     path("overview/", views.overview, name="regime-overview"),
+    # `halt/` 与 `overview/` 是**两条**读面，不是一条的两个精度：前者答「此刻在拦什么」
+    # （halt 状态机的求值），后者答「机制整体是什么档」。合成一条会让交易页的横幅与
+    # `/regime` 的首屏被迫同频——而停止判定比开关档位变得快得多（解除也要立刻看见）。
+    path("halt/", views.halt_state, name="regime-halt-state"),
     path("pool/generations/", views.pool_generations, name="regime-pool-generations"),
     # `pool/rebuild/<task_id>/` 与 `pool/rebuild/` 是**两条**路由而不是一条带可选段：
     # 前者的 `<task_id>` 是 Celery 的 uuid，后者是「投递」这个动作。写成一个可选段的

@@ -547,6 +547,16 @@ export interface LiveSession {
    * **null 表示「没有这个数」（未注解），不是 0**——卡片对 null 显示「—」，
    * 绝不退回 `current_equity - initial_capital` 自己算一个。 */
   realized_pnl: string | null;
+  /**
+   * 此刻有**几层**停止判定在拦这条会话（列表接口给；`0` = 通）。
+   *
+   * 是一个**计数**，不是层的数组：列表要回答的是「这条会话现在通不通」，「被谁拦」是点开
+   * 详情之后的问题（`LiveSessionDetail.halt_layers`）。两者判据同源（后端 `halt._matches`，
+   * 一次查询算完全部会话），所以这个 N 与点开后列出的层不可能对不上。
+   *
+   * 可选是历史原因：详情接口没有它（详情直接给层），别处构造 `LiveSession` 的代码也不用填。
+   */
+  halt_layer_count?: number;
   /** 会话侧资金效率子载荷（见 `SessionCapitalEfficiency`）。 */
   capital_efficiency?: SessionCapitalEfficiency;
   /**
@@ -640,6 +650,26 @@ export interface SessionHaltLayer {
   expires_at: string | null;
 }
 
+/**
+ * 同一层在机制读面上的名字。**别名，不另抄一份形状**：两个端点用的是后端同一个函数
+ * （`regime.serializers.halt_layer_payload`），所以它们逐字同形。抄一份的话，后端加
+ * 一个键时只会更新其中一个，而两边看上去都正常——直到有人比对。
+ */
+export type HaltLayerPayload = SessionHaltLayer;
+
+/**
+ * 此刻**真的在拦**的停止层（`GET /api/regime/halt/`）。
+ *
+ * **没有「数据截止」字段**，与 `RegimeOverview` 同一条纪律：后端不另造一个「现在」。
+ * 层自己的 `opened_at` 就是它的时刻。
+ *
+ * `halt_layers` 为空数组 = 此刻没有停止判定命中。这个读面**刻意不因空而消失**——
+ * 「当前阶段是否放行」这句话里，「否」也要是一个看得见的答案。
+ */
+export interface HaltState {
+  halt_layers: HaltLayerPayload[];
+}
+
 /** 详情响应 = 会话本身 + 统计 + 生效参数 + 熔断层 + 订单流水。 */
 export interface LiveSessionDetail extends LiveSession {
   stats: LiveSessionStats;
@@ -685,6 +715,19 @@ export interface PromoteDryRun {
   paper_session: { id: string; symbol: string; status: string };
   target_account: { id: string; label: string; testnet: boolean };
   will_inherit: { initial_capital: string; config: Record<string, unknown> };
+  /**
+   * 该会话启动后，下单会被哪些停止判定拦住（此刻算的）。
+   *
+   * **这次升级本身不被它拦**——升级建的是会话，不是订单；真下单时才走 `pre_trade_check`。
+   * 空数组 = 此刻没有层（那句话由 `halt_notice` 说）。形状与详情里的 `halt_layers` 逐字
+   * 同源：后端两端点是同一个函数。
+   */
+  halt_layers: HaltLayerPayload[];
+  /**
+   * 「这次升级受不受停止判定影响」那句话，**由后端渲染**（前端不拼，否则同一件事就有了
+   * 两个说法）。它**不回答「有没有层」**——那是 `halt_layers` 的事。
+   */
+  halt_notice: string;
   /** 后端写好的整段「将执行什么」，前端原样显示、不加工。 */
   message: string;
 }
@@ -1623,6 +1666,19 @@ export interface RegimeRebuildStatus {
 export const regimeApi = {
   /** 首屏。**廉价只读**，60 秒轮询它。 */
   getOverview: () => request<RegimeOverview>("/api/regime/overview/"),
+
+  /**
+   * 此刻真的在拦的停止层（后端 `halt.blocking_declarations` 的转述）。
+   *
+   * 它是「当前阶段是否放行」里**「是否放行」那一半**的读面；`getOverview` 的
+   * `regime_state` 是另一半（「当前是哪个阶段」）。两者刻意**不合并**：停止判定比开关
+   * 档位变得快得多，合成一条会让交易页的横幅与 `/regime` 的首屏被迫同频。
+   *
+   * **不按 symbol 求值**：它回答「库里此刻有几层在拦」，不是「拦得到你手上这一单」——
+   * 作用域写在每层的 `text` 里，读的人自己判断。「这一张票挡不挡得住」是
+   * `getSessionDetail` 的 `halt_layers` 回答的问题。
+   */
+  getHaltState: () => request<HaltState>("/api/regime/halt/"),
 
   /** 当前代（或 `?generation=<id>` 指定的一代）的全部格子。 */
   /**

@@ -82,6 +82,10 @@ const dryRunBody = {
   paper_session: { id: "sess-paper-1", symbol: "DOGE/USDT", status: "running" },
   target_account: { id: "acc-live", label: "实盘主账户", testnet: false },
   will_inherit: { initial_capital: "10000", config: {} },
+  // 干跑摘要里停止判定的那一栏（后端 `live_session_promote` 的干跑分支总是给这两个键）。
+  // 没有层时是**空数组 + 另一句话**，不是缺字段。
+  halt_layers: [],
+  halt_notice: "此刻没有停止判定命中——该会话启动后的下单，在停止判定这一侧是通的。",
   message: "这是干跑：还没有做任何改动。",
 };
 

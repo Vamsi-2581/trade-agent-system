@@ -6,9 +6,17 @@ import { usePositions } from "@/hooks/usePositions";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useFrameControl } from "@/hooks/useFrameControl";
 import { useLiveSessions } from "@/hooks/useLiveSessions";
+import { useHaltState } from "@/hooks/useHaltState";
+import { useRegimeOverview } from "@/hooks/useRegimeOverview";
 import TradeRecords from "@/components/trading/TradeRecords";
 import SessionDetailModal from "@/components/trading/SessionDetailModal";
-import type { Order, ExchangeAccountWithBalance, LiveSession } from "@/lib/api";
+import HaltBanner from "@/components/trading/HaltBanner";
+import type {
+  Order,
+  ExchangeAccountWithBalance,
+  LiveSession,
+  PromoteDryRun,
+} from "@/lib/api";
 import { formatNumber, formatPnl } from "@/lib/format";
 import { useState } from "react";
 
@@ -377,6 +385,22 @@ function SessionMiniCard({
           <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${statusInfo.color}`}>
             {statusInfo.text}
           </span>
+          {/* 「停 · N 层」：N 来自列表接口（后端一次查询算完全部会话，判据与详情模态逐层
+              列出的是同一个 `halt._matches`），所以这个数不可能与点开后看到的东西对不上。
+              `0` 与缺字段都不渲染——「没有徽章」本身就是那个答案，而横幅常显已经把「此刻
+              没有停止判定命中」说过了，这里再标一次只是噪声。
+              卡片上**不展开层本身**：那是详情的事。这也是「只报第一层」那条禁令的护栏——
+              这里根本没有位置去只报一层。 */}
+          {session.halt_layer_count ? (
+            <span
+              data-testid="session-halt-badge"
+              data-halt-layer-count={session.halt_layer_count}
+              title="该会话此刻被停止判定拦住——点「详情」看是哪几层"
+              className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-dim/30 text-red"
+            >
+              停 · {session.halt_layer_count} 层
+            </span>
+          ) : null}
         </div>
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] font-mono text-text3">{session.symbol}</span>
@@ -528,7 +552,7 @@ function PromoteConfirmDialog({
   liveAccounts: ExchangeAccountWithBalance[];
   targetId: string;
   onTargetChange: (id: string) => void;
-  preview: { message: string; target_account: { label: string } } | null;
+  preview: PromoteDryRun | null;
   result: { id: string; mode: string; status: string; message: string } | null;
   error: string | null;
   busy: boolean;
@@ -590,6 +614,39 @@ function PromoteConfirmDialog({
           >
             {preview.message}
           </pre>
+        )}
+
+        {/* 停止判定的预告。**升级本身不被拦**——升级建的是会话，不是订单；真下单时才走
+            `pre_trade_check`。所以这里做的是预告而不是又一道闸门，它也因此**不阻塞**确认
+            按钮（下面那颗照旧可点）。
+            层要**逐条列出**：本仓写过禁令——同时生效时只报一层，会让人按报出来那层去
+            排查，而解除它之后单还是下不出去。
+            那两句话由后端渲染（`halt_notice`），前端不拼、不按 trigger/scope 自己组。 */}
+        {preview !== null && (
+          <div
+            data-testid="promote-halt-notice"
+            data-halt-layer-count={preview.halt_layers.length}
+            className={`rounded-lg border px-3 py-2 text-[11px] leading-relaxed ${
+              preview.halt_layers.length > 0
+                ? "bg-amber-dim/20 border-amber/30 text-amber"
+                : "bg-bg2 border-[rgba(255,255,255,0.07)] text-text3"
+            }`}
+          >
+            <p data-testid="promote-halt-notice-text">{preview.halt_notice}</p>
+            {preview.halt_layers.length > 0 && (
+              <ul data-testid="promote-halt-layers" className="mt-1 space-y-0.5">
+                {preview.halt_layers.map((layer) => (
+                  <li
+                    key={`${layer.text}-${layer.opened_at}`}
+                    data-testid="promote-halt-layer"
+                    className="text-text2"
+                  >
+                    {layer.text}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
 
         {error !== null && (
@@ -686,6 +743,13 @@ export default function TradingPage() {
     dismissPromotion,
   } = useLiveSessions();
 
+  // 「当前阶段是否放行」的两半，各自一个来源：`useRegimeOverview` 给阶段（当前是哪个行情
+  // 阶段），`useHaltState` 给停止判定（此刻有没有层在拦）。**刻意分成两个 hook**——它们的
+  // 后端是两个端点，合成一条会让这条横幅与本页别的轮询被迫同频，而停止判定比开关档位变得
+  // 快得多（解除也要立刻看见）。
+  const { data: regimeOverview } = useRegimeOverview();
+  const { data: haltState, loading: haltLoading, error: haltError } = useHaltState();
+
   const [activeSection, setActiveSection] = useState<"all" | "live" | "paper">("all");
   // 只存 id，会话对象每轮渲染从 `sessions` 里现取——列表 10s 一轮，
   // 弹窗拿到的一直是当前那份；会话从列表消失（别处删了）时弹窗也跟着关。
@@ -741,8 +805,29 @@ export default function TradingPage() {
     ? sessions.find((s) => s.id === promoteSessionId) ?? null
     : null;
 
+  // 数据截止时刻**由前端从载荷里派生**——后端不造「现在」（`apps/regime/views.py` 的
+  // overview 注释立过这条纪律，`useHaltState` 的 docstring 照办）。取最近一个 `opened_at`：
+  // 横幅要说的是「这份判断是什么时候的」。无层时没有时刻可说，给 `null`——横幅据此把
+  // 「还没读到」与「确实没有层」分开，两者都不许冒充放行。
+  const haltLayersForBanner = haltState?.halt_layers ?? [];
+  const haltAsOf: string | null =
+    haltLayersForBanner.length > 0
+      ? haltLayersForBanner
+          .map((layer) => layer.opened_at)
+          .reduce((latest, at) => (Date.parse(at) > Date.parse(latest) ? at : latest))
+      : null;
+
   return (
     <DashboardShell>
+      {/* 「当前阶段是否放行」：**常显**，两半一起说（阶段 + 停止判定）。
+          「否」也必须是看得见的答案，所以它不因没有层而消失。 */}
+      <HaltBanner
+        regimeState={regimeOverview?.regime_state?.regime ?? null}
+        haltLayers={haltLayersForBanner}
+        asOf={haltAsOf}
+        loading={haltLoading}
+        error={haltError}
+      />
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">

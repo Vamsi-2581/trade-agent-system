@@ -3,6 +3,7 @@
 | 路由 | 装什么 | 为什么是这个形状 |
 | --- | --- | --- |
 | `GET api/regime/overview/` | 三个开关的当前档 + 最近一次切换、当前代摘要、当前生效阶段 | 首屏要的**全部**廉价数，一次请求装完 |
+| `GET api/regime/halt/` | 此刻**真的在拦**的停止层（halt 状态机求值的结果） | 交易页横幅要的那个「是否放行」；与 `overview` 分开，轮询周期不该互相绑 |
 | `GET api/regime/pool/` | 当前代（或指定代）的全部格子 | 池化表本体，键是 `(策略, 阶段)` |
 | `GET api/regime/pool/generations/` | 代际历史分页 + 指定代与上一代的逐格差异 | 「这一代谁何时算的、变了什么」 |
 | `GET api/regime/briefing/<kind>/` | 三张确认页之一（正文 + 审计串 + 排版用的数） | **重请求，按需拉**——不在轮询里 |
@@ -521,6 +522,42 @@ def overview(request: Request) -> Response:
             # 判定的 `effective_at`），后端不另造一个「现在」——后端说「现在」的那一刻
             # 它就已经是过去的了，而页面上那个常驻时刻要回答的是「这张表是什么时候的」。
         }
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 1b. halt（此刻真的在拦的停止层）
+# --------------------------------------------------------------------------- #
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def halt_state(request: Request) -> Response:
+    """此刻**真的在拦**的停止层（ADR 0001 的 halt 状态机求值结果）。
+
+    判据一步都不在**这里**：`halt.blocking_declarations()` 的 docstring 写着它是
+    「现在在拦什么」的唯一答案——生效期内 ∧ 未解除 ∧ **开关打开**——`query_halt` 与
+    `pre_trade_check` 都从它出发。本视图只把它转述成 JSON，不另立一套筛选。
+
+    **刻意不按 symbol 求值。** 问「这一张单挡不挡得住」要 `symbol` 与 `strategy_id`，
+    那是 `halt.halt_layers` 的回答，由会话详情给。本读面回答的是「库里此刻有几层在拦」：
+    作用域原样写在每层的 `text` 里（`HaltLayer.text`），读的人自己判断管不管他。换一个
+    默认品种来求值的话，横幅会把「BTC 被拦」说成「全场被拦」——比不说更坏。
+
+    `no-store`：与 `pool` 的 `building` 行同一条理由，而且更硬——缓存一次就是缓存一个
+    可能已经解除的停止判定。
+    """
+    from apps.regime import halt
+
+    return _no_store(
+        Response(
+            {
+                "halt_layers": [
+                    ser.halt_layer_payload(halt.layer_of(row))
+                    for row in halt.blocking_declarations()
+                ]
+            }
+        )
     )
 
 

@@ -38,6 +38,9 @@ from apps.strategy_factory.live_gate import (
 )
 from apps.strategy_factory.models import StrategyCandidate
 from apps.strategy_factory.status import StrategyCandidateOrigin
+from apps.regime.models import HaltTrigger
+from apps.regime.tests.test_halt import _declare
+from apps.trading import views
 from apps.trading.models import LiveSession, Strategy
 
 User = get_user_model()
@@ -525,6 +528,67 @@ class TestPromoteTwoStepConfirmation:
         paper.refresh_from_db()
         assert paper.status == "stopped"
         assert not LiveSession.objects.filter(mode="live").exists()
+
+    @staticmethod
+    def _open_blanket_halt(label: str = "高波动"):
+        """开一层保命档：`HALT_TRIGGER_SWITCH[BLANKET] = None`，不需要任何档位就作数。
+
+        时刻**相对真实现在**造：视图不注入时钟（它走 `halt.blocking_declarations()` 的
+        默认路径），钉死一个日期的话，将来真实时间越过它，「有层在拦」那几条会静默变成
+        「没有层」而照样绿。
+        """
+        return _declare(
+            trigger=HaltTrigger.BLANKET,
+            label=label,
+            opened_at=datetime.datetime.now(datetime.timezone.utc)
+            - datetime.timedelta(hours=3),
+        )
+
+    def test_dry_run_carries_the_stop_layers_that_will_hold_the_new_session(self):
+        """干跑摘要要预告**升级之后**那条会话的下单通路（D11 的「先看摘要」）。
+
+        判据必须与新会话逐字一致：新会话用的就是源 paper 会话的 `(strategy, symbol)`，
+        而 `_strategy_of_session` 从会话取的是同一个 `strategy_id`。
+        """
+        user, paper, target = self._setup("promote-halt")
+        self._open_blanket_halt()
+
+        resp = _promote(user, paper, body={"exchange_account_id": str(target.id)})
+
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert body["dry_run"] is True
+        assert len(body["halt_layers"]) == 1
+        assert "高波动" in body["halt_layers"][0]["text"]
+        assert body["halt_notice"] == views.PROMOTE_HALT_NOTICE_BLOCKED
+
+    def test_dry_run_says_so_when_nothing_is_holding(self):
+        user, paper, target = self._setup("promote-no-halt")
+
+        resp = _promote(user, paper, body={"exchange_account_id": str(target.id)})
+
+        body = resp.json()
+        assert body["halt_layers"] == [], "没有声明时那一栏是空数组，不是缺字段"
+        assert body["halt_notice"] == views.PROMOTE_HALT_NOTICE_CLEAR
+
+    def test_a_stop_layer_does_not_block_the_promotion_itself(self):
+        """**预告，不是又一道闸门**：有层在拦时升级照常进行（真下单时才拦）。
+
+        这条是刻意钉的：升级建的是会话，不是订单。把它也变成 fail-closed 会把停止判定
+        管的面扩大一倍，而那是另一个决定。
+        """
+        user, paper, target = self._setup("promote-halt-proceeds")
+        self._open_blanket_halt()
+
+        resp = _promote(
+            user,
+            paper,
+            body={"exchange_account_id": str(target.id), "confirmed": True},
+        )
+
+        assert resp.status_code == 201, resp.content
+        assert "dry_run" not in resp.json()
+        assert LiveSession.objects.filter(mode="live").exists()
 
     @pytest.mark.parametrize(
         "raw",

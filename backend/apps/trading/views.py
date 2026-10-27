@@ -272,19 +272,53 @@ def account_list(request):
 SESSION_DETAIL_ORDERS = 50
 
 
+#: 升实盘干跑摘要里那句「停止判定与这次升级的关系」。**两句话，不是一个布尔**：升级不是
+#: 下单，所以停止判定不拦它；它要说的是升级**之后**那条会话的下单通路。分两句的理由与
+#: `regime.views.EMPTY_POOL_DISPLAY` 同源——同一件事只有一种说法，而「没有层」不是一个
+#: 可以被缺省的答案（那一栏永远要说点什么，否则「没有」与「后端没答上来」长得一样）。
+PROMOTE_HALT_NOTICE_BLOCKED = (
+    "该会话启动后的下单会被上面这些停止判定拦住；这次升级本身不受影响（升级不是下单）。"
+)
+PROMOTE_HALT_NOTICE_CLEAR = (
+    "此刻没有停止判定命中——该会话启动后的下单，在停止判定这一侧是通的。"
+)
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def live_session_list(request):
+    from apps.regime import halt
+
     from .session_stats import annotate_efficiency_input
 
     # `annotate_efficiency_input` 里已经含 `annotate_realized_pnl`（前者是后者的加料版），
     # 一次查询带出 `realized_pnl` 与资金效率段要的那几个标量——**不是**逐行去调
     # `session_stats_for`（那会是 50 次查询，正是 `live_session_detail` 的 docstring
     # 否掉的那条路）。spec 用户故事 18「指标在列表的统计接口里同样可得」就落在这里。
-    sessions = annotate_efficiency_input(
-        LiveSession.objects.filter(user=request.user)
-    ).order_by("-created_at")[:50]
-    return Response(LiveSessionSerializer(sessions, many=True).data)
+    sessions = list(
+        annotate_efficiency_input(
+            LiveSession.objects.filter(user=request.user)
+        ).order_by("-created_at")[:50]
+    )
+    payload = LiveSessionSerializer(sessions, many=True).data
+
+    # 每条会话「此刻有几层在拦」——卡片上那个「停 · N 层」。
+    #
+    # **一次查询算全部会话**（`halt.layer_counts_touching`），不是逐条调 `halt_layers`：
+    # 后者是 N 次查询，而上一条注释刚刚因为同样的理由否掉了「逐行 `session_stats_for`」。
+    # 判据仍然只有一份（`halt._matches`），所以列表上那个 N 与详情模态里逐层列出的东西
+    # 不可能对不上——「同一件事两个说法」最容易发生的正是这种地方。
+    #
+    # 列表**不带层本身**（那是详情的事）：卡片要回答的是「这条会话现在通不通」，
+    # 「被谁拦」是点开之后的问题。
+    pairs = [
+        (s.symbol, str(s.strategy_id) if s.strategy_id else None) for s in sessions
+    ]
+    counts = halt.layer_counts_touching(pairs)
+    for row, pair in zip(payload, pairs):
+        row["halt_layer_count"] = counts[pair]
+
+    return Response(payload)
 
 
 @api_view(["GET"])
@@ -296,6 +330,7 @@ def live_session_detail(request, pk):
     本来只需要一个 `realized_pnl`（`annotate_realized_pnl` 一次聚合算完）。
     """
     from apps.regime import halt
+    from apps.regime import serializers as regime_ser
 
     from .session_params import effective_params
     from .session_stats import session_stats_for
@@ -318,19 +353,11 @@ def live_session_detail(request, pk):
     payload["realized_pnl"] = stats["realized_pnl_total"]
     payload["stats"] = stats
     payload["params"] = effective_params(session.strategy, session.config)
+    # 一层的形状只有一处（`regime_ser.halt_layer_payload`）：机制读面的横幅（交易页顶部）
+    # 与这里的会话详情**共用**它。两处各拼一遍的话，同两层在两张页面上会各有一种说法，
+    # 而 `text` 存在的全部理由就是不让这种事发生（见那个函数的 docstring）。
     payload["halt_layers"] = [
-        {
-            # `text` 是「行 → 层」的唯一换算口（`halt.HaltLayer.text`）。前端原样显示，
-            # 不许自己按 label/trigger/scope 再拼一遍——拼法一旦分叉，同一层在两处就
-            # 有两种说法。
-            "text": layer.text,
-            "reason": layer.reason,
-            "opened_at": layer.opened_at.isoformat(),
-            "expires_at": (
-                layer.expires_at.isoformat() if layer.expires_at is not None else None
-            ),
-        }
-        for layer in verdict.layers
+        regime_ser.halt_layer_payload(layer) for layer in verdict.layers
     ]
     payload["orders_total"] = session_orders.count()
     payload["orders"] = OrderSerializer(
@@ -863,6 +890,8 @@ def live_session_promote(request, pk):
     `mode_account_mismatch` 不变式**不放松**：它仍是最后一道校验（见下方显式调用）。
     """
 
+    from apps.regime import halt
+    from apps.regime import serializers as regime_ser
     from apps.strategy_factory.live_gate import evaluate_live_gate
 
     try:
@@ -926,6 +955,18 @@ def live_session_promote(request, pk):
     if conflict:
         return Response({"error": conflict}, status=status.HTTP_400_BAD_REQUEST)
 
+    # 停止判定先算一次：它是**预告，不是又一道闸门**。升实盘（建一条会话）不是下单，
+    # 所以它不拦这次升级；它要说的是升级**之后**那条会话的下单通路。判据与新会话逐字
+    # 一致——新会话用的就是源 paper 会话的 `(strategy, symbol)`（见下方 `create`），而
+    # `RiskGuard._strategy_of_session` 从会话取的是同一个 `strategy_id`。
+    #
+    # 只算一次、两处用（摘要的 `halt_layers` 与 `halt_notice`）：分两处求值的话，同一份
+    # 摘要里「有几层」与「那句话」会各自回答一次，而它们只能有一个答案。
+    will_halt = halt.halt_layers(
+        session.symbol,
+        str(session.strategy_id) if session.strategy_id else None,
+    )
+
     # 门①：是否已显式确认。fail-closed——认不出的值一律当没确认（干跑）。
     if not _confirmed(request.data.get("confirmed")):
         return Response(
@@ -953,6 +994,19 @@ def live_session_promote(request, pk):
                     ),
                     "config": session.config,
                 },
+                # 层的形状只有一处（`regime_ser.halt_layer_payload`）：它与会话详情、交易页
+                # 横幅共用，免得同一层在三处各有一种说法。
+                "halt_layers": [
+                    regime_ser.halt_layer_payload(layer) for layer in will_halt.layers
+                ],
+                # 「有没有层」**不靠这句话回答**（那是 `halt_layers` 的事，空数组就是空）：
+                # 它回答的是另一个问题——这次升级本身受不受影响、之后会怎样。两句话都要
+                # 存在，「没有层」不是一个缺省值。
+                "halt_notice": (
+                    PROMOTE_HALT_NOTICE_BLOCKED
+                    if will_halt.layers
+                    else PROMOTE_HALT_NOTICE_CLEAR
+                ),
                 "message": (
                     "这是干跑：还没有做任何改动。确认后将停止该 paper 会话，"
                     f"并用账户「{target_account.label}」建一条 live 会话。"

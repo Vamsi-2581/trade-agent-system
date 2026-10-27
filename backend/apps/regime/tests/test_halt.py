@@ -378,3 +378,87 @@ class TestLayersTouching(_HaltTestBase):
         _declare(scope=halt.symbol_scope("BTC/USDT"))
 
         self.assertEqual(halt.layers_touching(((SYMBOL, "s-1"),), now=NOW), ())
+
+
+class TestLayerCountsTouching(_HaltTestBase):
+    """每一对「（品种, 策略）」各自被**几层**拦——会话列表卡片上那个「停 · N 层」。
+
+    它与 `layers_touching` 的差别正是它存在的理由：那个函数回答「这批人还会被**什么**
+    拦住」（层去重后的**集合**），本函数回答「这批人**各自**还剩几层」。会话列表要的是
+    后者——每张卡片上一个数，而那个数必须是真的。
+
+    钉三件事：**判据与 `halt_layers` 同源**（同一个 `_matches`）、**每人一个键**（没被拦
+    是 `0`，不是缺键——缺键会让调用方把「没被拦」与「我没问你」混起来）、以及**一批只查
+    一次库**（层数不该随人数重复算）。
+    """
+
+    def test_no_pairs_asks_nothing(self):
+        """一条会话都没有 ⇒ 不必问库（也只有这一支不该查库）。"""
+        _declare(scope=halt.global_scope())
+
+        self.assertEqual(halt.layer_counts_touching((), now=NOW), {})
+
+    def test_every_pair_gets_a_key_even_when_nothing_blocks_it(self):
+        _declare(scope=halt.symbol_scope("BTC/USDT"))
+
+        counts = halt.layer_counts_touching(((SYMBOL, "s-1"),), now=NOW)
+
+        self.assertEqual(counts, {(SYMBOL, "s-1"): 0})
+
+    def test_the_criteria_are_the_same_as_halt_layers(self):
+        """三档作用域逐档对齐 `halt_layers`——两边各写一遍的话，列表上那个数会与订单通路
+        上真实的拦法分叉，而两处看起来都正常（本仓反复在防的形状）。
+
+        `setUp` 已经把事件熔断打开（`_HaltTestBase`），所以这里三条 EVENT 声明都作数。
+        """
+        _declare(scope=halt.global_scope())
+        _declare(scope=halt.symbol_scope(SYMBOL))
+        _declare(scope=halt.strategy_scope("s-1"))
+
+        counts = halt.layer_counts_touching(
+            ((SYMBOL, "s-1"), (SYMBOL, "s-2"), ("BTC/USDT", None)), now=NOW
+        )
+
+        self.assertEqual(
+            counts,
+            {
+                (SYMBOL, "s-1"): 3,
+                # 全局 + 品种档命中，策略档不命中（那条是针对 s-1 的）。
+                (SYMBOL, "s-2"): 2,
+                # 只有全局档。策略档在调用方没给 id 时**不认它生效**（`_matches` 的 Q3 判据）。
+                ("BTC/USDT", None): 1,
+            },
+        )
+        # 与「这一张单挡不挡得住」的口径对照：同一个 (品种, 策略) 上两者必须同数。
+        self.assertEqual(
+            counts[(SYMBOL, "s-1")],
+            len(halt.halt_layers(SYMBOL, "s-1", now=NOW).layers),
+        )
+
+    def test_a_disabled_trigger_counts_zero(self):
+        """开关与声明是两件事：**作数**才算拦（与 `blocking_declarations` 同源）。
+
+        这里用「策略停用决策」那条线——它挂 `regime_gate` 开关，而 `_HaltTestBase` 只把
+        事件熔断打开过，所以这一层不作数。
+        """
+        _declare(trigger=HaltTrigger.DEACTIVATION, scope=halt.global_scope())
+
+        self.assertEqual(
+            halt.layer_counts_touching(((SYMBOL, None),), now=NOW), {(SYMBOL, None): 0}
+        )
+
+    def test_it_looks_the_declarations_up_once_for_the_whole_batch(self):
+        """**一批只查一次**：层的条数与「每条层命中哪些人」是两件事，前者不该随人数重复
+        算。会话列表一次取 50 条，逐条去查就是 50 次——这正是 `live_session_detail` 的
+        docstring 否掉过的那条路。
+
+        用保命档（`HALT_TRIGGER_SWITCH[BLANKET] = None`）来钉：它没有开关，所以这一次
+        求值里除了声明表**不该再查第二张表**。挂开关的触发源会多问一次
+        `RegimeMechanismSwitch`，那是「开关与声明都必须为真」的代价，不是本条的漏洞。
+        """
+        _declare(trigger=HaltTrigger.BLANKET, scope=halt.global_scope())
+
+        with self.assertNumQueries(1):
+            halt.layer_counts_touching(
+                tuple((SYMBOL, str(i)) for i in range(20)), now=NOW
+            )

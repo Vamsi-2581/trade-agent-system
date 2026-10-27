@@ -43,3 +43,9 @@ html, body {
 
 .animate-pulse-slow { animation: pulse 2s infinite; }
 .animate-blink-dots { animation: blink 1.4s infinite; }
+
+/* 停止状态翻转时的一次性强调（`HaltBanner` 的 `data-halt-transition` / `halt-flash-*`）。
+   `animate-pulse-slow` 是循环脉动，单靠它表达不出「刚刚变了」——这里再加一层静态轮廓，
+   随 `HALT_FLASH_MS` 到点、组件把 class 摘掉而结束。 */
+.halt-flash-engaged { box-shadow: 0 0 0 2px var(--color-amber-dim); }
+.halt-flash-cleared { box-shadow: 0 0 0 2px var(--color-border2); }

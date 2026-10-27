@@ -71,6 +71,31 @@ def iso(moment: Any) -> str | None:
     return moment.isoformat() if isinstance(moment, datetime) else str(moment)
 
 
+def halt_layer_payload(layer: Any) -> dict[str, Any]:
+    """一层在拦的停止声明（`halt.HaltLayer`）的传输形状。
+
+    **这是本模块唯一一个不成对的形状**，而这是刻意的。本模块给别的值都发
+    `{"value", "display"}` 成对，为的是「拿到 slug 就有它的说法」。这里不需要——因为
+    `HaltLayer.text` 已经是「行 → 层」的**唯一换算口**（`halt.layer_of`）：它把触发源、
+    作用域与那句解释一次拼好。再把 `trigger` / `scope` / `label` 的零件发出去，等于给
+    前端留一条自己再拼一遍的路；拼法一旦分叉，「同一层在两处说法不同」就回来了，而那
+    正是 `text` 存在的理由（作用域尤其不能丢——「拦全场」与「只拦某个品种」在排查时是
+    完全不同的两件事）。
+
+    所以读侧只有一件事可做：**原样转述 `text`**。会话详情（`trading.views`）与机制读面
+    （`regime.views.halt_state`）共用本函数，于是「一层长什么样」只有一处说法。
+
+    `opened_at` 一定非空（它是判定的一部分）；`expires_at` 为 `None` 表示「不定何时解除」，
+    不是「缺数据」——两者的区别前端要能看出来，所以空值保持 `null` 而不是空串。
+    """
+    return {
+        "text": layer.text,
+        "reason": layer.reason,
+        "opened_at": iso(layer.opened_at),
+        "expires_at": iso(layer.expires_at),
+    }
+
+
 def _labelled(value: Any, display: str) -> dict[str, str]:
     """枚举的传输形状：**取值与展示名成对**，前端不重拼。
 

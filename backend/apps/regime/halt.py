@@ -332,6 +332,34 @@ def layers_touching(
     )
 
 
+def layer_counts_touching(
+    pairs: Iterable[tuple[str, str | None]], *, now: datetime | None = None
+) -> dict[tuple[str, str | None], int]:
+    """每一对「（品种, 策略）」此刻被**几层**拦——``halt_layers`` 的计数版。
+
+    三个函数回答三个不同的问题：``halt_layers`` 问「这一张单挡不挡得住」，
+    ``layers_touching`` 问「这批人还会被**什么**拦住」（层去重后的集合），本函数问
+    「这批人**各自**还剩几层」。会话列表要的是第三个——每张卡片上一个「停 · N 层」，
+    而 N 必须是真的：写死一个数、或者干脆不写数，卡片就成了一个不说数的警告。
+
+    判据必须是同一个 ``_matches``，理由与 ``layers_touching`` 逐字相同：各自实现一遍的话，
+    列表上说的「还剩几层」与订单通路上真实的拦法会分叉，而两处看起来都很正常。
+
+    只查一次 ``blocking_declarations``：层的条数与「每条层命中哪些人」是两件事，前者不该
+    随人数重复算。返回的字典**对每一对都有键**（没被拦是 ``0``，不是缺键）——缺键会让
+    调用方把「没被拦」与「我没问你」混起来，而那两件事在前端长得一模一样。
+    """
+    wanted = tuple(pairs)
+    if not wanted:
+        return {}
+    at = now or timezone.now()
+    declarations = blocking_declarations(now=at)
+    return {
+        pair: sum(1 for row in declarations if _matches(row.scope, pair[0], pair[1]))
+        for pair in wanted
+    }
+
+
 def block_reason(
     symbol: str, strategy_id: str | None = None, *, now: datetime | None = None
 ) -> str:

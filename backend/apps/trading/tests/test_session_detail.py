@@ -392,3 +392,61 @@ class TestTheListCarriesTheEfficiencySegment(_SessionDetailBase):
         for key in self.EFFICIENCY_KEYS:
             self.assertIsNone(item[key], f"{key} 判不了时必须是 None")
         self.assertTrue(item["capital_efficiency_notes"])
+
+
+class TestTheListCarriesTheStopCount(_SessionDetailBase):
+    """列表项上的 `halt_layer_count`——会话卡片那个「停 · N 层」。
+
+    **不能**让前端自己按 `(symbol, strategy)` 去全局层里挑：那会是 `_matches` 的第二个
+    实现，而它一旦与后端分叉，卡片上的数就会与点开详情看到的东西各说各话（本仓反复在防
+    的形状）。所以这个数由列表接口给、判据与详情**同源**——本类钉的就是这条同源。
+
+    它同时是那条纪律的边界：列表**不带层本身**（50 条会话各带一份，正是
+    `live_session_detail` 的 docstring 否掉过的形状），只带一个计数。
+    """
+
+    def test_a_clear_session_counts_zero(self):
+        """没有层时是 `0`，**不是缺字段**：缺字段会让前端把「没被拦」与「后端没答上来」
+        混起来，而它们在卡片上长得一样。"""
+        item = self._list().json()[0]
+
+        self.assertEqual(item["halt_layer_count"], 0)
+
+    def test_the_count_is_the_number_of_layers_hitting_this_session(self):
+        """三档作用域里只数命中这张会话的（`setUp` 造的会话是 BTC/USDT）。"""
+        _declare(scope=halt.global_scope(), label="全市场那层")
+        _declare(scope=halt.symbol_scope("BTC/USDT"), label="这个品种那层")
+        _declare(scope=halt.symbol_scope("DOGE/USDT"), label="别的品种那层")
+
+        item = self._list().json()[0]
+
+        self.assertEqual(item["halt_layer_count"], 2)
+
+    def test_the_count_agrees_with_the_detail(self):
+        """**两条路必须说同一个数**：列表给 N，详情给层。分叉时两处都「正常」。"""
+        _declare(scope=halt.global_scope(), label="全市场那层")
+        _declare(scope=halt.symbol_scope("DOGE/USDT"), label="别的品种那层")
+
+        item = self._list().json()[0]
+        layers = self._detail().json()["halt_layers"]
+
+        self.assertEqual(item["halt_layer_count"], len(layers))
+
+    def test_a_disabled_event_breaker_does_not_count(self):
+        """**作数**才算拦：开关关着的事件熔断不进这个数（与详情同源，两边都走
+        `blocking_declarations`）。"""
+        HaltDeclaration.objects.create(
+            trigger=HaltTrigger.EVENT.value,
+            scope=halt.global_scope(),
+            label="FOMC 议息",
+            opened_at=timezone.now() - datetime.timedelta(hours=1),
+            expires_at=None,
+            closed_at=None,
+            reason="测试",
+            actor_kind=ActorKind.TASK.value,
+            actor_name="test",
+        )
+
+        item = self._list().json()[0]
+
+        self.assertEqual(item["halt_layer_count"], 0)
