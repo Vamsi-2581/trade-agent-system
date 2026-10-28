@@ -74,9 +74,26 @@ def _strategy_path() -> str | None:
         repo_mirror,
     ]
     for p in candidates:
-        if p.is_file():
-            return str(p)
+        try:
+            if p.is_file():
+                return str(p)
+        except OSError:
+            continue
     return None
+
+
+def test_strategy_path_skips_unreadable_candidates(monkeypatch):
+    """Unreadable deployment paths should not abort the strategy test suite."""
+    monkeypatch.delenv("BOX_STRATEGY_PATH", raising=False)
+
+    def permission_denied(self):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(Path, "is_file", permission_denied)
+
+    assert _strategy_path() is None
+    with pytest.raises(pytest.skip.Exception, match="not found in any known strategy dir"):
+        _load_strategy_cls()
 
 
 def _load_strategy_cls():
