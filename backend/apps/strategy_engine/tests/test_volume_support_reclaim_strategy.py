@@ -24,7 +24,7 @@ from apps.strategy_engine.base import StrategyContext
 STRATEGY_FILENAME = "volume_support_reclaim_strategy.py"
 
 
-def _strategy_path() -> str:
+def _strategy_path() -> str | None:
     """定位被测策略文件。
 
     策略的**部署位**是 `~/.tradelogx/strategies/`（见 `apps/skill/loader.py`
@@ -48,24 +48,39 @@ def _strategy_path() -> str:
         repo_mirror,
     ]
     for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-    return str(candidates[1])
-
-
-STRATEGY_PATH = _strategy_path()
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
 
 
 def _load_strategy():
-    if not os.path.isfile(STRATEGY_PATH):
-        pytest.skip(f"strategy file not present at {STRATEGY_PATH}")
+    strategy_path = _strategy_path()
+    if strategy_path is None or not os.path.isfile(strategy_path):
+        pytest.skip(f"strategy file not present at {strategy_path}")
     spec = importlib.util.spec_from_file_location(
-        "volume_support_reclaim_strategy", STRATEGY_PATH
+        "volume_support_reclaim_strategy", strategy_path
     )
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod.VolumeSupportReclaimStrategy
+
+
+def test_unreadable_strategy_path_candidates_are_skipped(monkeypatch):
+    """Permission errors while probing deployment paths must not abort collection."""
+    monkeypatch.delenv("VOLUME_RECLAIM_STRATEGY_PATH", raising=False)
+
+    def permission_denied(self):
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(Path, "is_file", permission_denied)
+
+    assert _strategy_path() is None
+    with pytest.raises(pytest.skip.Exception, match="strategy file not present"):
+        _load_strategy()
 
 
 def _ctx(balance: Decimal = Decimal("10000")) -> StrategyContext:
@@ -109,7 +124,10 @@ def test_entry_does_not_call_calculate_quantity():
 
 def test_strategy_module_uses_no_missing_context_api():
     """Source-level guard: no `self.ctx.calculate_quantity` reference anywhere."""
-    with open(STRATEGY_PATH, encoding="utf-8") as f:
+    strategy_path = _strategy_path()
+    if strategy_path is None:
+        pytest.skip(f"strategy file not present at {strategy_path}")
+    with open(strategy_path, encoding="utf-8") as f:
         src = f.read()
     assert "self.ctx.calculate_quantity" not in src, (
         "Strategy references missing StrategyContext.calculate_quantity — backtest will fail."
