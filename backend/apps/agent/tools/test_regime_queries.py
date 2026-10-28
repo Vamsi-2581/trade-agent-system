@@ -365,16 +365,20 @@ class TestQueryHalt(TestCase):
             text = QueryHaltTool()._render()
 
         self.assertIn(
-            "当前没有任何层在拦：事件熔断层、高波动档与策略停用决策档都没有生效。", text
+            "当前没有任何层在拦：事件熔断层、高波动档、策略停用决策档与按阶段暂停开仓档"
+            "都没有生效。",
+            text,
         )
         self.assertIn("人工豁免：当前没有在期的人工豁免。", text)
         self.assertIn("机制当前档：Shadow（只记录，不执行）", text)
         # 第②段把停止判定接到了下单拦截上，所以这句话从「尚未接线」改成了「接线到哪一步」；
         # 第③段把第三档（策略停用决策）也接上之后，「差额正是还没接线的那一档」那句不再
-        # 成立，换成了不变量本身。数字取声明表的实数（此处为空表 = 0），与上面两句同源。
+        # 成立，换成了不变量本身；issue #51 又加了第四档（按阶段暂停开仓），这一档同样在
+        # `blocking_declarations` 里，所以数法不变、只是档数从三变四。数字取声明表的实数
+        # （此处为空表 = 0），与上面两句同源。
         self.assertIn("停止声明表此刻 0 条在生效", text)
         self.assertIn("已接到下单拦截", text)
-        self.assertIn("三档都算在内", text)
+        self.assertIn("四档都算在内", text)
         self.assertNotIn("还没接线", text)
         self.assertNotIn("要到第③段才接线", text)
 

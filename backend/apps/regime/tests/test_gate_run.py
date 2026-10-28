@@ -105,6 +105,22 @@ def _slug(regime) -> str:
     return getattr(regime, "value", regime)
 
 
+def deactivation_declarations(summary: dict) -> list[dict]:
+    """摘要里**停用路**那几条声明（`label` 前缀是那一档自己的）。
+
+    issue #51 起一轮会同时产出「按阶段暂停开新仓」那一路（`gate.SUSPENSION_LABEL_PREFIX`），
+    于是 `summary["declarations"]` 不再等价于「停用路声明了几条」——本文件里问「这一轮有没有
+    声明」的那些用例问的都是**停用路**的收场。按整张列表问的话，一条暂停声明就会让它们红，
+    而红的理由与它们钉的那件事无关。摘要里没有 `trigger` 这一格，所以用两路各自的前缀分开；
+    「两个前缀不相等」由 `test_gate_suspension` 与 `test_gate` 钉住，这里不重复钉。
+    """
+    return [
+        row
+        for row in summary["declarations"]
+        if row["label"].startswith(gate.LABEL_PREFIX)
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # 注册表替身与造数据
 # --------------------------------------------------------------------------- #
@@ -430,9 +446,16 @@ class TestTheShadowTier(_Fixture):
         self.assertFalse(summary["gate_open"])
         self.assertIsNone(summary["skipped"])
         self.assertEqual(summary["note"], gate.NOTE_SHADOW)
+        # issue #51：Shadow 档下暂停路同样不声明、但要为**每个**被管策略写一条
+        # `gate_closed` 解除原因，所以名单上多了 beta 那条（它没有活行，表里不会多出行）。
         self.assertEqual(
-            summary["close_reasons"], {str(self.alpha.id): gate.CLOSE_GATE_CLOSED}
+            summary["close_reasons"],
+            {
+                str(self.alpha.id): gate.CLOSE_GATE_CLOSED,
+                str(self.beta.id): gate.CLOSE_GATE_CLOSED,
+            },
         )
+        # 解除原因多一条不等于多解除了一行：beta 名下没有活行，关掉的仍然只有 alpha 那一行。
         self.assertEqual(summary["halt"]["closed"], 1)
 
         row.refresh_from_db()
@@ -482,7 +505,12 @@ class TestTheLiveRound(_Fixture):
 
         summary = self.gate_round()
 
-        row = HaltDeclaration.objects.get()
+        # issue #51：同一轮还会落一条 beta 的 `regime_suspension` 声明（beta 在当前代里
+        # 没有这一格 ⇒ 悬置），所以按「触发源 × 作用域」定位到 alpha 的停用那一条。
+        row = HaltDeclaration.objects.get(
+            trigger=HaltTrigger.DEACTIVATION.value,
+            scope=halt.strategy_scope(self.alpha.id),
+        )
         self.assertEqual(row.trigger, HaltTrigger.DEACTIVATION.value)
         self.assertEqual(row.scope, halt.strategy_scope(self.alpha.id))
         self.assertEqual(row.actor_kind, ActorKind.TASK.value)
@@ -495,7 +523,8 @@ class TestTheLiveRound(_Fixture):
         self.assertIn("AlphaStem", row.label)
         self.assertIn("本阶段样本偏少", row.label)
         self.assertIn("AlphaStem", row.reason)
-        self.assertEqual(summary["halt"]["created"], 1)
+        # issue #51：两路各一条——alpha 的停用声明 + beta 的暂停声明（beta 无格 ⇒ 悬置）。
+        self.assertEqual(summary["halt"]["created"], 2)
         self.assertEqual(summary["targets"], 1)
 
     def test_the_window_starts_at_the_latest_fact_and_never_at_now(self):
@@ -505,11 +534,28 @@ class TestTheLiveRound(_Fixture):
 
         self.gate_round(now=hours(1))
 
-        self.assertEqual(HaltDeclaration.objects.get().opened_at, NOW)
+        # issue #51：同轮还有 beta 的暂停声明，同样按「触发源 × 作用域」定位到停用这一条
+        # 才问得动「起点是不是取自事实」——两路的 `opened_at` 都是同一套 `attitude_since`。
+        self.assertEqual(
+            HaltDeclaration.objects.get(
+                trigger=HaltTrigger.DEACTIVATION.value,
+                scope=halt.strategy_scope(self.alpha.id),
+            ).opened_at,
+            NOW,
+        )
 
     def test_the_row_actually_blocks_that_strategy_down_the_order_path(self):
         """声明行不是给报表看的：它要真的在下单通路上拦住那个策略。"""
         self.decision(self.alpha)
+        # issue #51：暂停路为**每个**被管策略判「此刻有没有资格开仓」，没有格就是悬置。
+        # 所以要钉「别人的单照放」，另一条被管策略就得在这一代里判着 `fit`——判着 fit 的
+        # 那条两路都放行（它落在当前阶段上没有格时会被暂停路拦住，那是另一条用例的事）。
+        add_cell(
+            pool_rebuild.current_generation(),
+            self.beta,
+            DOWNTREND,
+            state=sl.STATE_FIT,
+        )
 
         self.gate_round()
 
@@ -524,17 +570,19 @@ class TestTheLiveRound(_Fixture):
     def test_a_second_identical_round_changes_nothing(self):
         self.decision(self.alpha)
         first = self.gate_round()
-        self.assertEqual(first["halt"]["created"], 1)
+        # issue #51：这一轮两条声明——alpha 的停用声明 + beta 的暂停声明（beta 无格 ⇒ 悬置）。
+        self.assertEqual(first["halt"]["created"], 2)
 
         second = self.gate_round()
 
+        # 幂等对**两路**都成立：两路各自的 `opened_at` 都取自事实，所以第二轮没有一行动过。
         self.assertEqual(
             second["halt"],
-            {"created": 0, "updated": 0, "unchanged": 1, "closed": 0},
+            {"created": 0, "updated": 0, "unchanged": 2, "closed": 0},
         )
         self.assertEqual(second["statuses"], [])
-        self.assertEqual(len(second["declarations"]), 1)
-        self.assertEqual(HaltDeclaration.objects.count(), 1)
+        self.assertEqual(len(second["declarations"]), 2)
+        self.assertEqual(HaltDeclaration.objects.count(), 2)
 
     def test_an_unchanged_window_does_not_clear_the_notification_stamp(self):
         """`_rewrite` 只在 `opened_at` 真的动过的时候清 `opened_notified_at`。这条钉的是
@@ -545,7 +593,14 @@ class TestTheLiveRound(_Fixture):
 
         self.gate_round()
 
-        self.assertEqual(HaltDeclaration.objects.get().opened_notified_at, NOW)
+        # issue #51：同一轮还有 beta 的暂停声明，按作用域定位到 alpha 那条（Q4 说的是它：
+        # 每个作用域的态度都取自事实，所以这一行的戳记不该被第二轮清掉）。
+        self.assertEqual(
+            HaltDeclaration.objects.get(
+                scope=halt.strategy_scope(self.alpha.id)
+            ).opened_notified_at,
+            NOW,
+        )
 
     def test_a_declaration_lands_even_when_the_status_write_explodes(self):
         """性质 3：声明是机制对市场的动作，status 是对「机制做过什么」的记录。反过来的
@@ -556,7 +611,16 @@ class TestTheLiveRound(_Fixture):
             with self.assertRaises(RuntimeError):
                 self.gate_round()
 
-        self.assertEqual(HaltDeclaration.objects.count(), 1)
+        # issue #51：beta 那条暂停声明没有决策行，所以它照样落地；两路各一条。
+        self.assertEqual(HaltDeclaration.objects.count(), 2)
+        # 而这一条钉的是原意：**alpha 的停用声明**在 status 回写炸掉之前就已经落了地。
+        self.assertEqual(
+            HaltDeclaration.objects.filter(
+                trigger=HaltTrigger.DEACTIVATION.value,
+                scope=halt.strategy_scope(self.alpha.id),
+            ).count(),
+            1,
+        )
         self.assertEqual(
             DeactivationDecision.objects.get().status, DecisionStatus.SUGGESTED.value
         )
@@ -571,9 +635,17 @@ class TestTheLiveRound(_Fixture):
             summary = self.gate_round()
 
         self.assertEqual(fake.call_args.kwargs["actor_name"], halt_sync.GATE_ACTOR_NAME)
+        # issue #51：递过去的这一个 plan 现在合成两路——alpha 的停用声明与 beta 的暂停声明
+        # （beta 无格 ⇒ 悬置）。两路的触发源都要落在这同一个 plan 里，否则另一路就没人写。
         self.assertEqual(
-            [d.strategy_id for d in fake.call_args.kwargs["gate_plan"].declarations],
-            [self.alpha.id],
+            [
+                (d.strategy_id, d.trigger)
+                for d in fake.call_args.kwargs["gate_plan"].declarations
+            ],
+            [
+                (self.alpha.id, gate.TRIGGER_DEACTIVATION),
+                (self.beta.id, gate.TRIGGER_REGIME_SUSPENSION),
+            ],
         )
         self.assertEqual(HaltDeclaration.objects.count(), 0)
         self.assertEqual(summary["halt"], planted)
@@ -630,7 +702,11 @@ class TestWhatTheWarrantSays(_Fixture):
         self.assertEqual(self._warrant(decision, managed=frozenset()), gate.GONE)
 
     def test_a_conflicting_cell_never_earns_a_declaration(self):
-        """`needs_review` 的冲突格子归 `lapsed`：没有任何一条路径能把它们判成该停。"""
+        """`needs_review` 的冲突格子归 `lapsed`：停用路上没有任何一条分支能把它们判成该停。
+
+        issue #51 之后暂停路**确实**会把这类格子判成「暂停开新仓」（证据冲突 ⇒ 先别开），
+        那是另一条更弱的动作，所以这句话要按路说：本用例钉的是**停用路**一条都不产出。
+        """
         make_generation(
             cells=(
                 (
@@ -647,7 +723,8 @@ class TestWhatTheWarrantSays(_Fixture):
         row = self.live_row(self.alpha)
         summary = self.gate_round()
 
-        self.assertEqual(summary["declarations"], [])
+        # 暂停路会为 alpha（冲突格）与 beta（无格）各落一条，所以这里按停用路问。
+        self.assertEqual(deactivation_declarations(summary), [])
         self.assertEqual(
             summary["close_reasons"], {str(self.alpha.id): gate.CLOSE_BECAME_FIT}
         )
@@ -663,7 +740,8 @@ class TestWhatTheWarrantSays(_Fixture):
 
         summary = self.gate_round()
 
-        self.assertEqual(summary["declarations"], [])
+        # issue #51：暂停路为 alpha（无格）与 beta（无格）各落一条，这里只问停用路。
+        self.assertEqual(deactivation_declarations(summary), [])
         self.assertEqual(
             summary["close_reasons"], {str(self.alpha.id): gate.CLOSE_BECAME_FIT}
         )
@@ -685,7 +763,8 @@ class TestWhatTheWarrantSays(_Fixture):
 
         summary = self.gate_round()
 
-        self.assertEqual(summary["declarations"], [])
+        # issue #51：暂停路为 alpha（无格）与 beta（无格）各落一条，这里只问停用路。
+        self.assertEqual(deactivation_declarations(summary), [])
         self.assertEqual(
             summary["close_reasons"], {str(self.alpha.id): gate.CLOSE_STRATEGY_GONE}
         )
@@ -701,7 +780,8 @@ class TestWhatTheWarrantSays(_Fixture):
 
         summary = self.gate_round()
 
-        self.assertEqual(summary["declarations"], [])
+        # issue #51：暂停路为全部被管策略判，alpha 与 beta 都会各落一条；这里只问停用路。
+        self.assertEqual(deactivation_declarations(summary), [])
         self.assertEqual(summary["unresolved"], [str(self.gamma.id)])
         self.assertEqual(
             summary["close_reasons"], {str(self.gamma.id): gate.CLOSE_STRATEGY_GONE}
@@ -722,7 +802,7 @@ class TestWhatTheWarrantSays(_Fixture):
         self.assertEqual(
             summary["close_reasons"], {str(self.alpha.id): gate.CLOSE_REGIME_LEFT}
         )
-        self.assertEqual(summary["declarations"], [])
+        self.assertEqual(deactivation_declarations(summary), [])
         row.refresh_from_db()
         self.assertEqual(row.closed_reason, gate.CLOSE_REGIME_LEFT)
 
@@ -733,7 +813,8 @@ class TestWhatTheWarrantSays(_Fixture):
         decision = self.decision(self.alpha, status=DecisionStatus.APPLIED.value)
         make_generation(cells=((self.alpha, DOWNTREND, {"state": sl.STATE_UNFIT}),))
         first = self.gate_round()
-        self.assertEqual(first["halt"]["created"], 1)
+        # issue #51：第一轮两路各一条（alpha 停用 + beta 暂停，beta 无格 ⇒ 悬置）。
+        self.assertEqual(first["halt"]["created"], 2)
 
         make_generation(
             finished_at=days(1),
@@ -775,7 +856,11 @@ class TestTheWindowStart(_Fixture):
         self.switch()  # 开启于 days(-2)
 
     def _declare(self, *, exemption=None):
-        """造一个「该声明」的世界，返回台账那一行。"""
+        """造一个「该声明」的世界，返回台账里**停用路**那一行。
+
+        issue #51：同一轮还会落一条 beta 的暂停声明（beta 无格 ⇒ 悬置），所以不能再用
+        `objects.get()`——本类的四个用例问的起点都是**这一行**（停用路）的 `opened_at`。
+        """
         if exemption is not None:
             self.exemption(self.alpha, **exemption)
         self.judged(effective_at=days(-3))
@@ -785,7 +870,10 @@ class TestTheWindowStart(_Fixture):
             cells=((self.alpha, DOWNTREND, {"state": sl.STATE_UNFIT}),),
         )
         self.gate_round()
-        return HaltDeclaration.objects.get()
+        return HaltDeclaration.objects.get(
+            trigger=HaltTrigger.DEACTIVATION.value,
+            scope=halt.strategy_scope(self.alpha.id),
+        )
 
     def test_the_open_moment_is_the_floor(self):
         """四条事实里开关最晚开启 ⇒ 起点就是它。机制在那之前没有能力拦。"""
@@ -835,7 +923,9 @@ class TestTheWindowStart(_Fixture):
 
         summary = self.gate_round()
 
-        self.assertEqual(summary["declarations"], [])
+        # issue #51：暂停路为 alpha 记一条 `exempted` 解除原因（豁免两路都挡），同时为 beta
+        # （无格）落一条暂停声明——所以这里按停用路问「一条都不产出」。
+        self.assertEqual(deactivation_declarations(summary), [])
         self.assertEqual(
             summary["close_reasons"], {str(self.alpha.id): gate.CLOSE_EXEMPTED}
         )
@@ -857,8 +947,15 @@ class TestTheWindowStart(_Fixture):
         重新通知一次。"""
         self._declare()
         second = self.gate_round()
-        self.assertEqual(second["halt"]["unchanged"], 1)
-        self.assertEqual(HaltDeclaration.objects.get().opened_at, days(-2))
+        # issue #51：两条声明（alpha 停用 + beta 暂停）都取自事实，所以两条都不动。
+        self.assertEqual(second["halt"]["unchanged"], 2)
+        self.assertEqual(
+            HaltDeclaration.objects.get(
+                trigger=HaltTrigger.DEACTIVATION.value,
+                scope=halt.strategy_scope(self.alpha.id),
+            ).opened_at,
+            days(-2),
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -972,7 +1069,8 @@ class TestTheStatusWrite(_Fixture):
 
         summary = self.gate_round()
 
-        self.assertEqual(summary["halt"]["created"], 1)
+        # issue #51：翻面回 `applied` 的那一条 + beta 的暂停声明（beta 无格 ⇒ 悬置）。
+        self.assertEqual(summary["halt"]["created"], 2)
         self.assertEqual(
             summary["statuses"],
             [
@@ -1012,7 +1110,16 @@ class TestTheStatusWrite(_Fixture):
 
         written = {row["decision_id"] for row in summary["statuses"]}
         self.assertEqual(written, {str(first.pk), str(second.pk)})
-        self.assertEqual(summary["halt"]["created"], 1)  # 只有当前阶段那一条声明
+        # issue #51：那两条声明是 alpha 的停用声明（当前阶段那一条）与 beta 的暂停声明
+        # （beta 无格 ⇒ 悬置）——对 alpha 而言仍然「只有当前阶段那一条」。
+        self.assertEqual(summary["halt"]["created"], 2)
+        self.assertEqual(
+            HaltDeclaration.objects.filter(
+                trigger=HaltTrigger.DEACTIVATION.value,
+                scope=halt.strategy_scope(self.alpha.id),
+            ).count(),
+            1,
+        )
         self.assertEqual(
             DeactivationDecision.objects.get(pk=first.pk).status,
             DecisionStatus.APPLIED.value,
@@ -1051,7 +1158,16 @@ class TestTheScopeOfATurn(_Fixture):
         self.gate_round()
 
         others = HaltDeclaration.objects.exclude(trigger=HaltTrigger.DEACTIVATION.value)
-        self.assertEqual(others.count(), 2)
+        # issue #51：排除停用路之后是三条——事件、保命档各一条，外加这一轮为 beta 落的
+        # 那条暂停声明（beta 无格 ⇒ 悬置）。
+        self.assertEqual(others.count(), 3)
+        # 「多出来的那一条是暂停路自己的」也要钉住：光看 3 这个数说不清多的是谁。
+        self.assertEqual(
+            HaltDeclaration.objects.filter(
+                trigger__in=[HaltTrigger.EVENT.value, HaltTrigger.BLANKET.value]
+            ).count(),
+            2,
+        )
         for row in others:
             self.assertIsNone(row.closed_at)
 
@@ -1166,8 +1282,14 @@ class TestTheSummaryShape(_Fixture):
         self.assertFalse(summaries["shadow"]["gate_open"])
         self.assertTrue(summaries["live"]["gate_open"])
         self.assertEqual(summaries["shadow"]["declarations"], [])
-        self.assertEqual(len(summaries["live"]["declarations"]), 1)
+        # issue #51：正常一轮的产出来自两路——alpha 的停用声明 + beta 的暂停声明
+        # （beta 无格 ⇒ 悬置），所以是两条而不是一条。
+        self.assertEqual(len(summaries["live"]["declarations"]), 2)
+        # Shadow 档的解除名单同理：暂停路也为每个被管策略写一条 `gate_closed`。
         self.assertEqual(
             summaries["shadow"]["close_reasons"],
-            {str(self.alpha.id): gate.CLOSE_GATE_CLOSED},
+            {
+                str(self.alpha.id): gate.CLOSE_GATE_CLOSED,
+                str(self.beta.id): gate.CLOSE_GATE_CLOSED,
+            },
         )

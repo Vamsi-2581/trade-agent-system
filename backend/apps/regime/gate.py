@@ -40,6 +40,26 @@
 可做。取向与 `deactivation_run.close_left_regime_exemptions` 的第三条停手完全同构：两个
 方向不对称（误解除不可逆、晚一轮可逆），就往不会造成不可逆损失的那边倒。
 
+## 两路判定：停用决策 与 按阶段暂停（issue #51）
+
+本模块产**两路**期望声明，由 `merge` 合成一轮交给同一个写方：
+
+- `derive()` —— **停用决策**那一路（第③段）：由 `DeactivationDecision` 行派生，回答「机制
+  是否决定停用这条策略」。它写决策行的 `status`（`applied` / `released`）、进日报的
+  「该停 N」、解除要人工确认。
+- `derive_suspensions()` —— **按当前生效阶段暂停开新仓**那一路：由全部被管策略 × 当前代
+  那一格派生，回答「此刻它有没有资格开新仓」。它**不产生决策行、不写 status、不进那个
+  计数**，并且随阶段自己翻回去。
+
+这一路为什么是**另一条触发源**而不是复用停用那条：两者的唯一键都是「触发源 × 作用域」，
+复用同一条会在「停用须人工恢复」这条地基上开一个洞——一条下个阶段自己就失效的暂停，会被
+记成一次机制做过的停用决定。两路的判据**同源**（都出自 `admission.py` 那一个纯函数，这是
+本票的另一条纪律：判据只有一处）。
+
+**`neutral` 在两路里的含义必须分开读**：暂停路拦住它，说的是「证据不足 ⇒ 先别开新仓」；
+deactivation 维度那句「中性不构成停用理由」讲的是「不该把证据不足当成一条停用决策」。同一
+格、两个问题、两个答案，各自都对。
+
 ## 五个解除原因码
 
 词表本体在这里（本层是唯一的产出方），展示名在 `gate_switch.py`（Q7）：
@@ -55,7 +75,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Iterable, Mapping
 
-from apps.regime import deactivation
+from apps.regime import admission, deactivation
 from apps.regime.quant import BaseRegime
 
 # --------------------------------------------------------------------------- #
@@ -86,6 +106,18 @@ CLOSE_BECAME_FIT = "became_fit"
 CLOSE_EXEMPTED = "exempted"
 CLOSE_GATE_CLOSED = "gate_closed"
 CLOSE_STRATEGY_GONE = "strategy_gone"
+
+#: 本层的两路声明各自的触发源字面量。**必须与 `models.HaltTrigger` 的取值一致**，
+#: 而本层不能 import 它（那边连着 ORM 模型）——所以按 `STATUS_*` 的同一套做法在这里
+#: 立一份字面量，并由一条测试钉住「两边不飘」。
+#:
+#: 为什么是**两个**触发源而不是一个（本票的裁决）：`deactivation` 记的是「机制决定
+#: 停用这条策略」——它进日报的「该停 N」，而且解除要人工确认，是那条地基的产物；
+#: `regime_suspension` 记的是「按当前生效阶段暂停开新仓」——它随阶段自动翻转，不进
+#: 停用口径。两件事的唯一键（触发源 × 作用域）因此各占一行，同一个策略可以同时被
+#: 两者拦（那时拒绝理由里两条理由都在，`HaltVerdict.reason` 本来就逐层都写）。
+TRIGGER_DEACTIVATION = "deactivation"
+TRIGGER_REGIME_SUSPENSION = "regime_suspension"
 
 #: 声明行的 `label` 前缀。与 `HaltTrigger.DEACTIVATION.display`（「策略停用决策」）同一套话，
 #: 而 `label` 进的是 `HaltLayer.text`，也就是**下单拒绝理由**与 `query_halt`：在那里
@@ -195,6 +227,38 @@ class Declaration:
     #: 这句话只对**事件熔断**那一档说「窗口：」，这一档说的是「生效：」——
     #: `halt_notify._period_line` 按触发源分岔。
     expires_at: datetime | None = None
+    #: 这一行是哪一路产出的（`TRIGGER_DEACTIVATION` / `TRIGGER_REGIME_SUSPENSION`）。
+    #: 默认值是停用决策那一档：`derive` 那条老路逐字未变，它不需要知道还有第二路。
+    trigger: str = TRIGGER_DEACTIVATION
+
+
+@dataclass(frozen=True)
+class SuspensionRef:
+    """一个**被管策略**在这一轮里的只读快照，供「按阶段暂停」那一路判适用性。
+
+    与 `DecisionRef` 的区别是**它不由任何决策行派生**：停用路只为「有人建议过停用」的
+    策略判，而暂停路要覆盖**全部被管策略**——「只放行 fit」问的正是「每一个在跑的策略
+    在这片行情里有没有资格开新仓」，与它有没有被建议停用无关。
+
+    `cell_state` 取**当前代 × 当前生效阶段**那一格；`None` = 这一代里没有这一格
+    （新策略 / 新阶段 / 窗口未覆盖）。豁免是算好的纯值（在期与否）——与
+    `exemption` 的既有纪律一致：在期由取数侧判完，判定层只看见结论。
+    """
+
+    strategy_id: Any
+    strategy_name: str
+    #: `slice.STATE_*` 之一；`None` = 当前代没有这一格。
+    cell_state: str | None
+    #: 当前代这一格「为什么是这个结论」的原文（`Outcome.reason`），只进给人看的句子。
+    cell_reason: str = ""
+    #: 在期人工豁免（键为「策略 × 当前阶段」）。豁免是**人按住了它**。
+    exempt: bool = False
+    #: 人工退役（`Strategy.is_active=False`）。**退役即不再参与求值**（CONTEXT.md：记录保留、
+    #: 求值不再算它）——与停用路同一条纪律（那边 `_warrant` 判 `GONE`）。它不是「这一格判成
+    #: 什么」的问题，所以走在判据之前：一条跑不起来的策略在这片行情里有没有资格开仓，问不出
+    #: 答案（没有会话、没有单），而给它写一条声明会让声明表与「按阶段暂停 N 条」那个数多出
+    #: 一批空动作。
+    retired: bool = False
 
 
 @dataclass(frozen=True)
@@ -409,4 +473,165 @@ def derive(situation: Situation, decisions: Iterable[DecisionRef]) -> GatePlan:
         declarations=tuple(declarations),
         statuses=tuple(statuses),
         close_reasons=close_reasons,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 第二路：按当前生效阶段暂停开新仓（issue #51）
+# --------------------------------------------------------------------------- #
+
+#: 暂停路声明行的 `label` 前缀。与 `LABEL_PREFIX`（「策略停用决策：」）**必须能一眼分开**：
+#: `label` 进的是 `HaltLayer.text`，也就是下单拒绝理由与 `query_halt`——「机制决定停用
+#: 这条策略」与「这片行情里它没有资格开新仓」是两句不同的话，混成一句会让「为什么拦我」
+#: 答成另一个问题（前者要人工恢复，后者随阶段自己翻回去）。
+SUSPENSION_LABEL_PREFIX = "按阶段暂停开仓："
+
+
+def _suspension_label(ref: SuspensionRef) -> str:
+    head = f"{SUSPENSION_LABEL_PREFIX}{ref.strategy_name}"
+    return f"{head}（{ref.cell_reason}）" if ref.cell_reason else head
+
+
+def _suspension_reason(
+    situation: Situation, ref: SuspensionRef, verdict: admission.Verdict
+) -> str:
+    """暂停路声明行的 `reason`。**「判不了」与「判为不适合」要说成两句不同的话**：
+
+    前者是证据不足（会被下一轮重算翻回去，也可能永远翻不回去——那正是要让人看见的
+    那个事实），后者是池化结论明确说不行。合成一句会让用户按「策略不行」去处置一个
+    只是没证据的策略，而两者的正确处置完全不同。
+    """
+    regime = _regime_display(situation.regime)
+    detail = f"：{ref.cell_reason}" if ref.cell_reason else ""
+    if verdict.code == admission.CODE_UNFIT:
+        judged = "判为不适用"
+    elif ref.cell_state is None:
+        judged = "在池化表里没有这一格（策略或阶段新、或窗口未覆盖）"
+    else:
+        judged = "没有适用性结论（证据不足 / 样本噪声 / 该阶段样本过少）"
+    return (
+        f"{ref.strategy_name} 在当前「{regime}」阶段{judged}{detail}。"
+        f"机制暂停它的开仓（减仓放行）——「判不了」不等于「放它过去」。"
+    )
+
+
+def _suspension_close_reason(verdict: admission.Verdict) -> str:
+    """暂停行此刻不该有时，该记的解除原因。
+
+    只可能是三种收场：**重新适配**（格子回 `fit`）、**有人豁免了它**、**保命档那一层
+    接手了**。第三种归到 `became_fit` 这个统称上，与 `STILL_TARGET` / `LAPSED` 的既有
+    口径同构——`LAPSED` 是「当前代不再产出这条建议」的统称，对它说的那句话取其代表。
+    不新增一个解除原因码：那张词表是 `gate_switch.py` 的展示面，多一个只为解释一个
+    角落情形的词，会让「今天和昨天有什么不同」多出一行没人看得懂的话。
+    """
+    if verdict.code == admission.CODE_EXEMPT:
+        return CLOSE_EXEMPTED
+    return CLOSE_BECAME_FIT
+
+
+def derive_suspensions(situation: Situation, refs: Iterable[SuspensionRef]) -> GatePlan:
+    """暂停路的一轮判定。**纯函数**，与 `derive` 同一套形状与早退纪律。
+
+    回答的是「此刻哪些被管策略没有资格开新仓」：全部被管策略逐个问
+    `admission.admission`（当前生效阶段 × 它在这一代里那一格），suspend 的产出一条
+    期望声明，放行的记一条解除原因。
+
+    四条早退分支与 `derive` **逐条对齐**（理由那边写得比这里细，这里只说差异）：
+
+    1. `blocked` / 冷启动——说不清现在是什么阶段，什么都不动。取向是 fail-closed：
+       活行继续拦着。**注意「什么都不动」在这里不等于 fail-open**：暂停路要产出的正是
+       拦人的行，不动它等于保持上一轮的拦。
+    2. 开关关着（Shadow）——不声明，但要解除：回到 Shadow 的意义就是不再拦。
+    3. 保命档（高波动）——声明与解除都不做。它自己那一层有全场声明，而且这一段里
+       「按阶段比较」这件事本身没有意义（阶段没离开，只是被叠了一层）。
+    4. 其余：逐个被管策略判。
+
+    **与停用路的关系不是替代**：停用路记「机制决定停用这条策略」（人工恢复的地基，
+    进日报「该停 N」），本路记「按当前阶段没有资格开新仓」（随阶段自动翻转，不进那个
+    计数）。两路在 `merge` 里合成一轮的期望集，同一个策略同时被两者拦住时，**留停用
+    那条**——理由更强的那个先说，免得拒单理由里出现两条说同一件事的话。
+    """
+    rows = tuple(refs)
+
+    if situation.blocked or situation.regime is None:
+        code = situation.blocked or deactivation.BLOCKED_COLD_START
+        return GatePlan(
+            blocked=code,
+            note=f"本轮什么都不动：{deactivation.BLOCKED_DISPLAY.get(code, code)}",
+        )
+
+    if not situation.gate_open:
+        return GatePlan(
+            close_reasons={ref.strategy_id: CLOSE_GATE_CLOSED for ref in rows},
+            note=NOTE_SHADOW,
+        )
+
+    if deactivation.is_blanket(situation.regime):
+        return GatePlan(blocked=BLOCKED_BLANKET, note=NOTE_BLANKET)
+
+    declarations: list[Declaration] = []
+    close_reasons: dict[Any, str] = {}
+    for ref in rows:
+        if ref.retired:
+            # 退役的策略**不参与求值**，但必须**主动**写一条解除原因：只「不产出」的话，
+            # 它名下可能活着的旧声明既不在期望集里、又不在解除名单里——`halt_sync._reconcile`
+            # 会按 fail-closed 把它原样留着，于是那条行继续拦一张根本跑不起来的策略的单
+            # （看起来完全正常，且永远不会自己好）。取向与停用路的 `GONE` 逐字一致。
+            close_reasons[ref.strategy_id] = CLOSE_STRATEGY_GONE
+            continue
+        verdict = admission.admission(
+            situation.regime, ref.cell_state, exempt=ref.exempt
+        )
+        if verdict.suspend:
+            declarations.append(
+                Declaration(
+                    strategy_id=ref.strategy_id,
+                    label=_suspension_label(ref),
+                    reason=_suspension_reason(situation, ref, verdict),
+                    opened_at=attitude_since(situation, ref.strategy_id),
+                    trigger=TRIGGER_REGIME_SUSPENSION,
+                )
+            )
+        else:
+            close_reasons[ref.strategy_id] = _suspension_close_reason(verdict)
+
+    return GatePlan(declarations=tuple(declarations), close_reasons=close_reasons)
+
+
+def merge(base: GatePlan, suspension: GatePlan) -> GatePlan:
+    """把停用路与本路合成**一轮**的期望集，交给同一个写方（`halt_sync._reconcile`）。
+
+    三条合成规则，每条都有它挡着的事故：
+
+    1. **任一 plan `blocked` ⇒ 整轮什么都不动**，产出丢弃。`blocked` 的语义就是「这一轮
+       算不出来」或「这一层不该动手」，而它的两个来源（冷启动 / 状态过期 / 没有当前代 /
+       保命档）都是**同时覆盖两路**的——合成时把一方的产出留下而另一方说 blocked，
+       就成了「半个轮次」，那是比不跑更坏的状态。
+    2. **同一个策略两路都声明时留停用那条**（`deactivation` 在前）。两条都留的代价在
+       用户侧：拒单理由会出现两句说同一件事的话，而它们的处置方式不同（一个要人工恢复、
+       一个随阶段自动翻），读的人得先猜是哪一种。留强的那个说清楚了这件事。
+    3. **解除原因以停用路优先**（`base.close_reasons` 覆盖 `suspension` 的）。两路对同一
+       策略给出不同原因的情形只有一种：停用路说「策略离场 / 阶段离开」（那条决策行自己
+       的收场），而暂停路说「本阶段不再拦」——前者更贴那条决策行的事实，而活行要的是
+       「它为什么被解除」，取更贴切的。两路都不会为**同一策略**给出矛盾的事实级原因
+       （暂停路的期望行永远只针对当前阶段，它没有「阶段离开」这一路）。
+
+    `statuses` 只来自停用路：`applied` / `released` 是**停用决策行**的账，本路没有决策行
+    可记（它连 `DeactivationDecision` 都不产生）——这正是它不进「该停 N」的原因。
+    """
+    if base.blocked or suspension.blocked:
+        return GatePlan(
+            blocked=base.blocked or suspension.blocked,
+            note=base.note or suspension.note,
+        )
+
+    declared = {row.strategy_id for row in base.declarations}
+    declarations = tuple(base.declarations) + tuple(
+        row for row in suspension.declarations if row.strategy_id not in declared
+    )
+    return GatePlan(
+        declarations=declarations,
+        statuses=tuple(base.statuses),
+        close_reasons={**suspension.close_reasons, **base.close_reasons},
+        note=base.note or suspension.note,
     )

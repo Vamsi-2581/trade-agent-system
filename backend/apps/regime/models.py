@@ -1083,11 +1083,24 @@ class HaltTrigger(str, Enum):
     条线，而保命档**没有开关**（映射到 `None`）——「高波动算生效」，它不由任何人确认。
     映射写在 `apps/regime/halt.py::HALT_TRIGGER_SWITCH`，因为「哪个开关管哪条线」是状态机
     的判据，不是这张表的形状。
+
+    这一列里有**两条只差一个词、却不是一回事**的源：`DEACTIVATION` 记「机制决定停用这条
+    策略」（人工恢复的地基，进日报的「该停 N」），`REGIME_SUSPENSION` 记「按当前阶段没有
+    资格开新仓」（随阶段自动翻转，不进那个计数）。两路的判决都在 `gate.py`，却在
+    `HALT_TRIGGER_SWITCH` 里挂**同一个** `REGIME_GATE` 开关：档位是「机制整体的自动动作」
+    那一个数，两路都是这个档位下的动作——各自再领一个开关的话，用户关一次 gate 只停了
+    半个机制，而页面上写的是「机制已回 Shadow」。
+
+    通知口径按同一条分岔走：`REGIME_SUSPENSION` 的声明**不发即时消息**（一次阶段切换会
+    同时产出多条同因声明，逐条发是洪水；理由与替代的可见面写在
+    `apps/regime/halt_notify.py`），所以这一类行上的 `opened_notified_at` /
+    `closed_notified_at` 是**永远空着的「不用发」**，而不是「还没发」。
     """
 
     BLANKET = "blanket"  # 保命档（高波动）
     EVENT = "event_breaker"  # 事件熔断
     DEACTIVATION = "deactivation"  # 策略停用决策（第③段）
+    REGIME_SUSPENSION = "regime_suspension"  # 按阶段暂停开仓（issue #51）
     MANUAL = "manual"  # 手动熔断（ADR 0001 承诺的手动触发入口，2026-10-12 兑现）
 
     @property
@@ -1103,6 +1116,7 @@ _HALT_TRIGGER_DISPLAY = {
     HaltTrigger.BLANKET: "保命档（高波动）",
     HaltTrigger.EVENT: "事件熔断",
     HaltTrigger.DEACTIVATION: "策略停用决策",
+    HaltTrigger.REGIME_SUSPENSION: "按阶段暂停开仓",
     HaltTrigger.MANUAL: "手动熔断",
 }
 

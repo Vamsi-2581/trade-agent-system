@@ -1,9 +1,13 @@
 """候选漏斗的判定纯函数（spec #19 D14 的**单一测试缝**）。
 
 `evaluate_candidate(evidence) -> Verdict` 是整条流水线上唯一做判断的地方：**零 I/O、
-不碰 DB、不读时钟、不发通知、不 import Django**。输入是纯数据（当前状态 + 各层证据 +
+不碰 DB、不读时钟、不发通知、不 import 任何表模型**。输入是纯数据（当前状态 + 各层证据 +
 阈值），输出是「下一步该落在哪个状态 + 原因码 + 依据数字」。所有外部效应都在调用方
 （#22 的 `advance()`）注入，所以这里可以用表驱动穷举把每一条边界钉死。
+
+行情那一条判据（阶段 × 格子）**不在本文件里**：它只有一处实现
+（`apps.regime.admission`，见 `regime_verdict` 一节），本文件只把它的结论接回候选的
+状态机。
 
 为什么值得这么严：漏斗的每一层都在决定「这条策略要不要花真钱」，而判定散进编排之后
 就再也测不全了——一个 `if` 藏在取数据与建会话之间，没人能把它的每个分支都跑一遍。
@@ -47,6 +51,13 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Mapping
 
+from apps.regime.admission import (
+    CODE_BLANKET,
+    CODE_EXEMPT,
+    CODE_FIT,
+    CODE_UNFIT,
+    admission,
+)
 from apps.strategy_factory.config import CONFIG, FactoryConfig
 from apps.strategy_factory.status import (
     StrategyCandidateStatus,
@@ -662,37 +673,23 @@ def _evaluate_paper_running(ev: PaperEvidence | None, cfg: FactoryConfig) -> Ver
 
 
 # --------------------------------------------------------------------------- #
-# 行情闸门（spec #30 D1 / D2 / D4，子票 #37）
+# 行情闸门（spec #30 D1 / D2 / D4，子票 #37；判据下沉见 #51）
 #
 # 单独一节、单独一个纯函数，而不是塞进 `_oos_verdict` 与 `_paper_running_step`
 # 各有半份：这条规则横切两个升档点（样本外通过后、paper 期满后），而「同一个意思
 # 写两遍」的结局一定是两边对不上——某天只改了一处，另一个升档点就悄悄放行了。
 # spec 用户故事 23 要的正是「两个放行点不会漂移」，而唯一的实现方式就是规则只有
 # 一份。
+#
+# **那一份现在在 `apps.regime.admission`**（#51）：halt 侧同样要按这个判据逐单判适用性，
+# 于是顺序与取值下沉成 `admission(regime, cell_state, exempt=...)`，本节只把它的 `code`
+# 接回候选的状态机（哪个码落 `None`、哪个码带留痕放行、哪个码停 `regime_hold`）。
+#
+# 所以这里**不再**留一份格子词表与保命档判据：那正是「两份判据」的开头。代价是本模块
+# 的 import 链上多了 `apps.regime.deactivation`（`admission` 复用它判保命档），随之带进
+# numpy 与 `django.utils` 一类工具模块——但判定本身仍然零 I/O、不碰 DB、不读时钟、不
+# import 任何表模型，`import` 本模块也仍然不需要先配好 Django settings。
 # --------------------------------------------------------------------------- #
-
-#: 唯一「拦人」的格子结论（`apps.regime.slice.STATE_UNFIT`）。
-#: 这里**不 import `apps.regime.slice`**：那个模块会 via `strategy_engine` 拉起
-#: Django 模型图，而本文件的纯度纪律是一行 Django 都不 import。抄一个字符串、
-#: 在注释里钉住出处，比让判定缝依赖 regime 应用轻。
-#: 其余四个取值（`fit` / `neutral` / `unknown` / `blanket`）刻意不在这里形成
-#: 常量：判定只与「不适用」比（见 `regime_verdict` 的顺序），其余全走
-#: fail-closed 那一支，多一份词表就多一处「加了新状态忘了同步」的门。
-_STATE_UNFIT = "unfit"
-
-#: 保命档的格子结论（同上，`slice.STATE_BLANKET`）。它是**不发表意见**的那一个，
-#: 见 `regime_verdict` 第 1 条。
-_STATE_BLANKET = "blanket"
-
-#: 保命档的**阶段** slug（`quant.BaseRegime.HIGH_VOL`，与 `deactivation.is_blanket`
-#: 同一个判据）。见 `regime_verdict` 第 1 条为什么要按阶段而不只按格子判。
-_REGIME_HIGH_VOL = "high_vol"
-
-#: 适用（`slice.STATE_FIT`）。显式列出来而不是落进 fail-closed 那一支：这两件事在
-#: 别处是同义词（都不拦人），但在这里必须分开写——**漏了这个分支的后果是
-#: 「适用」被判成「判不了」**，于是整条漏斗在行情最好的时候集体停摆，而通知写的
-#: 是「切片缺数据」，把排查方向引到完全无关的地方去。
-_STATE_FIT = "fit"
 
 
 def regime_verdict(
@@ -732,6 +729,10 @@ def regime_verdict(
     `REGIME_UNFIT`（明确判为不适用）或 `REGIME_NO_EVIDENCE`（判不了）。
 
     ## 检查顺序（D1 原文的口径，一处不许多、一处不许少）
+
+    下面五步的**实现只有一处**：`apps.regime.admission.admission`（#51 把它从本函数
+    下沉出去，好让 halt 侧按同一个判据逐单判适用性）。本节写的是那个判据，以及它的
+    每个 `code` 落在候选状态机上的哪一格；要改顺序就改那一处，两个消费者同时变。
 
     1. **保命档 → `None`**，判据是**阶段 `high_vol` 或格子 `blanket`，二者其一**。
        高波动档下全场停用由保命档那一层负责，本机制不重复产出建议——这是
@@ -788,26 +789,15 @@ def regime_verdict(
     会忘在最容易看出来的地方——候选停在 `regime_hold` 却不放行，而不是被送去
     `awaiting_live_approval` 那种要人点头的地方。
     """
-    # --- 1. 保命档：不发表意见（它有自己的停机链，不重复产出建议） ---------- #
+    # 判据只有一处：`apps.regime.admission.admission`（#51 下沉）。本节只做两件事——
+    # 把它需要的两个纯值凑齐，再把它的 `code` 接回候选的状态机。**刻意不在这里重写
+    # 那五步顺序**：halt 侧按同一个判据逐单判适用性，两份判据的结局一定是两边对不上
+    # （某天只改了一处的顺序或某个取值，另一个消费者就按旧口径安静地放行）。
     #
-    # **按阶段判，不只按格子判**（2026-10-17 定）。两个依据缺一不可：
+    # 在期豁免是**人的动作**，它的键是「策略 × 阶段」，所以拿候选的 `strategy_id` 去撞
+    # （`trading.Strategy` 是 UUID 主键）；候选没绑上策略行（登记失败，FK 为空）时
+    # **没有任何东西可豁免**——那不是错误，只是轮不到豁免这一支。
     #
-    # 1. 停机链那侧的判据就是阶段（`gate.py` → `deactivation.is_blanket(regime)`）；
-    #    本闸门若只看格子，同一片行情在两个消费者眼里会得出不同结论。
-    # 2. **高波动阶段不一定产出 `blanket` 格子**：`slice._cell` 先判 `regime_days == 0`
-    #    （那个阶段在本窗口内一天都没出现过），再判 `HIGH_VOL`。所以「当前是保命档、
-    #    但池化窗口里一个高波日都没有」时，格子是 `unknown` 而不是 `blanket`——只看格子
-    #    会把它当「判不了」拦下，而保命档**会自己解除**（闸门这侧不会），于是候选在
-    #    保命档期间原地长死，等阶段落回去也没人推它。
-    #
-    # 顺序上排在豁免之前：保命档期间不该有「放行」这回事，豁免也穿透不了它
-    # （`deactivation_run.exemption_standing` 已明写「人工恢复豁免不穿透保命档」）。
-    if regime_state == _REGIME_HIGH_VOL:
-        return None
-    if cell is not None and cell.state == _STATE_BLANKET:
-        return None
-
-    # --- 2. 在期人工豁免：放行 + 留痕（D5） -------------------------------- #
     # 刻意逐个比而不是先 `dict(exemptions)`：入参是一个 `Mapping`，而它的键是元组——
     # 直接 `exemptions.get((candidate_id, regime_state))` 也行，但那样豁免 id 会被
     # 拿来做一次「有没有」的判断后丢掉。这里要留痕（把命中的那一对写进依据栏），
@@ -817,24 +807,31 @@ def regime_verdict(
         for strategy_id, regime in exemptions
         if strategy_id == candidate_id and regime == regime_state
     ]
-    if regime_state is not None and candidate_id is not None and exempted:
-        return _regime_exempt_verdict(resume, regime_state, cell, exempted)
+    verdict = admission(
+        regime_state,
+        None if cell is None else cell.state,
+        exempt=bool(regime_state is not None and candidate_id is not None and exempted),
+    )
 
-    # --- 3. 适用：不发表意见，照原路径前进 --------------------------------- #
-    # 显式的一个分支，不是「掉到后面那支」的反面。见 `_STATE_FIT` 的说明。
-    if cell is not None and cell.state == _STATE_FIT:
+    # 不发表意见：`fit`（适用）与 `blanket`（保命档）都让调用方照**原有**结论前进。
+    # 两者的语义不同（见 docstring），所以 `admission` 用两个 `code` 把它们分开，
+    # 这里再合成同一个 `None`——那是本闸门这一侧的口径，不是判据的一部分。
+    if verdict.code == CODE_FIT or verdict.code == CODE_BLANKET:
         return None
 
-    # --- 4. 行情明确判为不适用 --------------------------------------------- #
-    if cell is not None and cell.state == _STATE_UNFIT:
+    # 豁免放行：它是**有据可查**的放行，得在转移记录与通知里留痕（D5）。
+    if verdict.code == CODE_EXEMPT:
+        return _regime_exempt_verdict(resume, regime_state, cell, exempted)
+
+    # 行情明确判为不适用（唯一一个「行情说了不行」的取值）。
+    if verdict.code == CODE_UNFIT:
         return _regime_hold_verdict(
             ReasonCode.REGIME_UNFIT, regime_state, cell, "cell_state=unfit"
         )
 
-    # --- 4. 判不了（fail-closed） ------------------------------------------- #
-    # neutral / unknown / 没有格子 / 没有当前阶段。原因码必须说清是「判不了」而不是
-    # 「判了不行」——与 `INSUFFICIENT_EVIDENCE` 分居两端却同一条纪律：证据不足永远
-    # 读成「不放行」，绝不能读成「放行」。
+    # 判不了（fail-closed）：neutral / unknown / 没有格子 / 没有当前阶段。原因码必须
+    # 说清是「判不了」而不是「判了不行」——与 `INSUFFICIENT_EVIDENCE` 分居两端却同一条
+    # 纪律：证据不足永远读成「不放行」，绝不能读成「放行」。
     return _regime_hold_verdict(
         ReasonCode.REGIME_NO_EVIDENCE, regime_state, cell, "no_usable_conclusion"
     )

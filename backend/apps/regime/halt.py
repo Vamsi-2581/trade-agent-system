@@ -84,10 +84,16 @@ _STRATEGY_PREFIX = "strategy:"
 #
 # `DEACTIVATION` 指向第③段的开关：让「策略档的声明归哪个源」有唯一答案（Q3 的判据要用到
 # 触发源），也免得第③段为了补一行映射又动一次迁移。
+#
+# `REGIME_SUSPENSION`（按阶段暂停开新仓，issue #51）**与 `DEACTIVATION` 共用 `REGIME_GATE`
+# 这一个开关**：档位记的是「机制整体的自动动作」这一个数，两路都是这个档位下的动作。各自
+# 再领一个开关的话，用户关一次 gate 只停了半个机制，而 `gate_switch` 的页面上写着「机制
+# 已回 Shadow」——那句就成了假话。分开的是**声明行**（谁投的、解除条件不同），不是档位。
 HALT_TRIGGER_SWITCH: dict[HaltTrigger, MechanismKind | None] = {
     HaltTrigger.BLANKET: None,
     HaltTrigger.EVENT: MechanismKind.EVENT_BREAKER,
     HaltTrigger.DEACTIVATION: MechanismKind.REGIME_GATE,
+    HaltTrigger.REGIME_SUSPENSION: MechanismKind.REGIME_GATE,
     HaltTrigger.MANUAL: None,
 }
 

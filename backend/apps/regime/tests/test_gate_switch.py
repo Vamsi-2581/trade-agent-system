@@ -91,19 +91,31 @@ class _Fixture(_GateRunFixture):
         reason: str = "本阶段样本偏少",
         judgement: bool = True,
         switch: bool = False,
+        extra_cells: tuple = (),
     ):
         """造一个**正常一轮**的世界：当前代里那一格判着不适配，于是这一行该停。
 
         `switch=True` 时预先落一条开关流水（档位=执行态）。确认页与 `flip` 的用例都不该
         用它——页面上那些「假设此刻打开」的数只有在档位真是 Shadow 时才是那个意思，而
         `flip` 自己会写那一条。
+
+        `extra_cells` 是给**别的被管策略**补的格子（`make_generation` 的 `cells` 格式）。
+        issue #51 之后「按阶段暂停开新仓」那一路要为**每一个**被管策略判，而判不了（当前代
+        里没有这一格）就是悬置——所以「真的没什么可拦」这种世界必须让另一个被管策略也有一格
+        判着 `fit`，只给主角一格的话，配角会以「判不了」的身份被拦下，而页面上的数看起来
+        完全正常。
         """
         strategy = strategy or self.alpha
         if switch:
             self.switch()
         if judgement:
             self.judged(regime=regime)
-        make_generation(cells=((strategy, regime, {"state": state, "reason": reason}),))
+        make_generation(
+            cells=(
+                (strategy, regime, {"state": state, "reason": reason}),
+                *extra_cells,
+            )
+        )
         return self.decision(strategy, regime=regime)
 
     # --- 两个出口 ---------------------------------------------------------- #
@@ -326,14 +338,35 @@ class TestTheRenderedPage(_Fixture):
         self.assertIn("假设此刻打开", self.preview().body)
 
     def test_the_body_echoes_the_numbers_of_this_very_round(self):
+        """两路的条数**各报各的**（issue #51）：这一轮写的是 alpha 的停用声明 + beta 的暂停
+        声明（beta 无格 ⇒ 悬置），而两个数分属两句话。
+
+        合起来数的那一版（`declared = len(plan.declarations)`）会让同一屏上同时出现「该停
+        1 个」与「写/刷新 2 条」——多出来的那条在这张页面上没有对应的「该停」可对，读的人
+        只会以为取数坏了；而真正丢掉的信息是**两档的解除方式不同**（一个要人工恢复、一个
+        随阶段自己翻回去），那才是这两句话必须分开的理由。
+        """
         data = self.preview().data
         self.assertEqual(data.targets, 1)
+        # 停用路：alpha 这一条。下面那条恒等式是本栏存在的理由，它必须重新成立。
         self.assertEqual(data.declared, 1)
+        self.assertEqual(data.declared, data.targets - data.exempt)
+        # 暂停路：beta 无格 ⇒ 悬置，各一条。它**不**进上面那个数。
+        self.assertEqual(data.suspended, 1)
         self.assertEqual(data.exempt, 0)
         body = self.preview().body
         self.assertIn(f"该停 {data.targets} 个", body)
-        self.assertIn("本轮写/刷新 1 条", body)
+        self.assertIn(f"本轮写/刷新 {data.declared} 条", body)
         self.assertIn(f"此刻活着 {data.live_declarations} 条", body)
+        # 两句必须**各自与自己的数对齐**（都用 f-string 里的同一个 `data` 拼）：这一轮两个数
+        # 恰好都是 1，所以「本轮写/刷新 N 条」那句在正文里出现两次——只断言那一句的话，停用档
+        # 那一行的数写错了也照样绿。带上各自的标签，钉子才落在那句话上。
+        self.assertIn(
+            f"停止声明（策略停用决策档）：此刻活着 {data.live_declarations} 条；"
+            f"本轮写/刷新 {data.declared} 条",
+            body,
+        )
+        self.assertIn(f"按阶段暂停开仓：本轮写/刷新 {data.suspended} 条", body)
 
     def test_a_live_row_of_another_trigger_is_not_counted(self):
         """本档的数只说本档的事：事件熔断那一行既不算「活着的策略档声明」，也不算幽灵行
@@ -406,8 +439,15 @@ class TestWhatThePageSaysWhenItWouldNotBlock(_Fixture):
 
         合成一件事的话，冷启动那几轮会在页面上写着「当前阶段没有被判为不适配的被管策略」
         ——一句听起来完全正常的假话。
+
+        issue #51：暂停路为**每个**被管策略判，判不了就是悬置。所以「真的没什么可拦」这个
+        世界现在要求每一个被管策略都有格判着 `fit`，不能让另一个策略以「无格」的身份顶掉
+        这句话——那样页面报出的「会拦住 N 个」才是这个用例真正要看的那个 0。
         """
-        self.live_world(state=sl.STATE_FIT)
+        self.live_world(
+            state=sl.STATE_FIT,
+            extra_cells=((self.beta, DOWNTREND, {"state": sl.STATE_FIT}),),
+        )
 
         data = self.preview().data
 
@@ -416,10 +456,41 @@ class TestWhatThePageSaysWhenItWouldNotBlock(_Fixture):
         self.assertEqual(data.declared, 0)
         self.assertIn(NOTHING_WILL_BLOCK, self.preview().body)
 
+    def test_a_suspension_declaration_takes_back_the_nothing_will_block_line(self):
+        """`targets == 0` 不再等于「一个都不会拦」（issue #51）：暂停路此刻可能正拦着一批策略。
+
+        与上面那条的差别就是这一条要钉的东西：上面那个世界**每一个**被管策略都有 `fit` 格，
+        所以暂停路也一条都不产出；这里 beta 没有格（判不了 ⇒ 悬置），于是「该停 0 个」与
+        「暂停路拦着 1 个」同时为真——而那句「⚠️ 一个都不会拦」在这种世界里是一句漏掉一半
+        事实的假话：用户读到它就不会再去看那批被暂停的策略，而它们照样拦着开仓。
+
+        所以这一句必须消失，**而暂停路自己那一行必须出现**：它能同时回答「有多少条」与
+        「要不要人来恢复」，那正是看这一页的人此刻要做的判断。
+        """
+        self.live_world(state=sl.STATE_FIT)
+
+        data = self.preview().data
+        body = self.preview().body
+
+        self.assertEqual(data.skipped, "")
+        self.assertEqual(data.targets, 0)
+        self.assertEqual(data.declared, 0)
+        self.assertEqual(data.suspended, 1)
+        self.assertNotIn(NOTHING_WILL_BLOCK, body)
+        self.assertIn(f"按阶段暂停开仓：本轮写/刷新 {data.suspended} 条", body)
+        # 那一行必须当场把两档的差别说出来——报数之外，它要回答的是「要不要人工恢复」，
+        # 而这两档的答案相反（停用要人给豁免或改判据，暂停随阶段自己翻回去）。
+        self.assertIn("随阶段自动翻转，不需要人工恢复", body)
+
     def test_all_targets_exempt_says_the_human_is_holding_them(self):
-        """打开也拦不住，因为人按着——这一句与上一条不能互相借用措辞。"""
+        """打开也拦不住，因为人按着——这一句与上一条不能互相借用措辞。
+
+        issue #51：同一个理由——另一个被管策略在这一代里判着 `fit`，才谈得上「全在人工
+        豁免期」：让它以「无格」的身份站着的话，暂停路会拦住它，而这一页说的「一个都不会拦」
+        就成了一句漏掉了一半事实的话。
+        """
         self.exemption(self.alpha)
-        self.live_world()
+        self.live_world(extra_cells=((self.beta, DOWNTREND, {"state": sl.STATE_FIT}),))
 
         data = self.preview().data
 
@@ -595,7 +666,15 @@ class TestFlipRegimeGate(_Fixture):
         self.live_world()
 
         self.flip()  # 打开：该停，但人在豁免期
-        self.assertEqual(HaltDeclaration.objects.count(), 0)
+        # issue #51：豁免挡住的是停用路；暂停路照样会为 beta 落一条（它无格 ⇒ 悬置），
+        # 所以「一条都不写」这句话现在要按策略来问——alpha 名下仍然一条都没有。
+        self.assertEqual(HaltDeclaration.objects.count(), 1)
+        self.assertEqual(
+            HaltDeclaration.objects.filter(
+                scope=halt.strategy_scope(self.alpha.id)
+            ).count(),
+            0,
+        )
         # `_untouched`：一条机制从没碰过的**建议**不该被记成「机制解除过它」（它同时还在
         # `replay_run` 的重放集合里，那才是它该待的地方）。
         self.assertEqual(
@@ -697,7 +776,16 @@ class TestTheManagementCommand(_CliFixture):
         self.assertIn("已切换", out)
         # 流水行的 `reason` 就是那一页的摘要：事后读流水的人靠它知道当时看到的是什么。
         self.assertIn("人工打开行情阶段 gate", row.reason)
-        self.assertEqual(HaltDeclaration.objects.count(), 1)
+        # issue #51：命令落完流水就同步对了一次账，所以这一轮**两路**的行都在表里
+        # （alpha 的停用声明 + beta 的暂停声明）；下面那一条钉住 alpha 那条确实落了地。
+        self.assertEqual(HaltDeclaration.objects.count(), 2)
+        self.assertEqual(
+            HaltDeclaration.objects.filter(
+                trigger=HaltTrigger.DEACTIVATION.value,
+                scope=halt.strategy_scope(self.alpha.id),
+            ).count(),
+            1,
+        )
 
     def test_the_actor_defaults_to_the_system_user(self):
         self.live_world()

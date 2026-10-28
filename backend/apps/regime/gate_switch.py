@@ -223,8 +223,17 @@ class Confirmation:
     targets: int
     #: 其中在人工豁免期按着的条数——打开也拦不住。
     exempt: int
-    #: 本轮会写/刷新的声明条数（= `targets - exempt`）。
+    #: 本轮会写/刷新的声明条数（= `targets - exempt`）——**只数策略停用决策那一档**
+    #: （`gate.TRIGGER_DEACTIVATION`）。issue #51 之后 `GatePlan.declarations` 是**两路之和**，
+    #: 一锅端地数会让下面那句「停止声明（策略停用决策档）：本轮写/刷新 N 条」把暂停路的行
+    #: 算进停用档，而多出来的那个数在这张页面上没有对应的「该停」可对（`targets - exempt`
+    #: 当场不成立）——一句话里同时出现两个互相矛盾的口径，读的人只会以为取数坏了。
     declared: int
+    #: 本轮会写/刷新的**暂停路**声明条数（`gate.TRIGGER_REGIME_SUSPENSION`，issue #51）：
+    #: 当前生效阶段逐个被管策略判适用性，判为不适配或判不了的各一条。与 `declared` **分开
+    #: 数**：两档的解除方式不同（一个要人工恢复、一个随阶段自动翻转），加起来报就是替用户
+    #: 把「要人管的事」与「自己会翻回去的事」混成一件——而这两句话的处置完全不同。
+    suspended: int
     #: 声明表里此刻活着的、`trigger=DEACTIVATION` 的行数。
     live_declarations: int
     #: 本轮会被解除的**活行**数，按原因码分布，顺序见 `_CODE_ORDER`。**只数活行**：plan 的
@@ -303,6 +312,23 @@ def confirmation(*, now: datetime | None = None) -> Confirmation:
             orphan += 1
 
     gate_open = round_.gate_open and not round_.hypothetical
+
+    # 两路**按触发源分开数**（issue #51）：`plan.declarations` 是停用路与暂停路之和，而本页
+    # 那两句各说自己那一档（一句是「策略停用决策档」、一句是「按阶段暂停开仓」）。判据取
+    # `gate.TRIGGER_DEACTIVATION` 这个常量而不是本地字面量：写入方（`gate.Declaration.trigger`）
+    # 用的就是它，抄一遍等于给「这一行是哪一路产出的」造第二个答案。
+    #
+    # **认不出的第三路不进这一栏**（而不是按 `len(...) - suspended` 把它塞给停用档）：停用档
+    # 那一栏的数与「该停 M 个」成对出现，把一个来路不明的行算进去，页面上就多出一个没人能
+    # 解释的数——而它看起来完全正常。
+    declared = sum(
+        1 for row in plan.declarations if row.trigger == gate.TRIGGER_DEACTIVATION
+    )
+    # 暂停路那一个数**不在这里重算**：`Round.suspensions` 已经是它唯一的换算口（`gate_run.py`，
+    # 同一份 `plan` 上的同一条判据，Celery 摘要与日志用的也是它）。再写一遍求和就是给同一个数
+    # 造第二个答案，而两处将来分叉的表现是「页面上说 3 条、流水的摘要里说 5 条」，两处都正常。
+    suspended = round_.suspensions
+
     return Confirmation(
         at=at,
         mode=MechanismMode.EXECUTING if gate_open else MechanismMode.SHADOW,
@@ -323,7 +349,8 @@ def confirmation(*, now: datetime | None = None) -> Confirmation:
         running=len(round_.managed.running),
         targets=round_.targets,
         exempt=round_.exempt,
-        declared=len(plan.declarations),
+        declared=declared,
+        suspended=suspended,
         live_declarations=len(live_scopes),
         closing_by_code=tuple(sorted(counts.items(), key=_code_sort_key)),
         orphan=orphan,
@@ -405,15 +432,46 @@ def _targets_line(data: Confirmation) -> str:
     )
 
 
+def _suspension_line(data: Confirmation) -> list[str]:
+    """暂停路的条数（issue #51）。**独立一行**——它与上一条「该停」不是一笔账。
+
+    上一条数的是停用路（`targets - exempt`），而暂停路拦的人**不来自任何决策行**（它连
+    `DeactivationDecision` 都不产出）。并进上一条的话，那个「会拦住 N 个策略」会为一批没有
+    「该停」记录可对的策略变大，读的人拿「该停 M 个」一对，就会以为取数坏了。
+
+    所以这一行自己报自己的条数，并**当场把两档的差别说出来**（随阶段自动翻转、不需要人工
+    恢复）：这正是它存在的理由——用户看到又一批策略被拦住时，第一个要问的就是「要不要我
+    去恢复它」，而这两档的答案相反。
+
+    `suspended == 0` 时整行不出现：暂停路一条都不产出是常态（每个被管策略在当前阶段都有
+    `fit` 结论时），每轮都印一句「0 条」会让它变成背景噪声，而这一行是要被读到的。
+    """
+    if data.suspended == 0:
+        return []
+    return [
+        f"按阶段暂停开仓：本轮写/刷新 {data.suspended} 条"
+        "（随阶段自动翻转，不需要人工恢复）"
+    ]
+
+
 def _no_effect_lines(data: Confirmation) -> list[str]:
-    """「一个都拦不住」的四个成因，各说各的后果。见模块 docstring。"""
+    """「一个都拦不住」的四个成因，各说各的后果。见模块 docstring。
+
+    **两条早退都要先看暂停路**（issue #51）：`targets` / `exempt` 只说停用那一档的数，而暂停
+    路的行一个都不从这里来——两路合并之前，「该停 0 个」确实等于「一个都不会拦」，现在不等于
+    了。所以暂停路有声明时这两句**一句都不说**：那一档此刻可能正拦着一批策略，而「⚠️ 一个
+    都不会拦」在这种情况下是一句漏掉一半事实的假话。
+
+    这里**不补兜底句子**（例如「但暂停路还在拦」）：那一件事已经由 `_suspension_line` 自己
+    那一行说完，同一句话写两遍会让人去找它们的差别。这一处只负责把那句假话收回去。
+    """
     if data.blanket:
         return []
-    if data.targets == 0:
+    if data.suspended == 0 and data.targets == 0:
         return [
             "⚠️ 一个都不会拦：当前阶段没有被判为不适配的被管策略（这是真的没什么可拦）"
         ]
-    if data.exempt == data.targets:
+    if data.suspended == 0 and data.exempt == data.targets:
         return [f"⚠️ 一个都不会拦：该停的 {data.targets} 个全在人工豁免期"]
     return []
 
@@ -565,6 +623,7 @@ def _render_body(data: Confirmation, *, closing: bool) -> str:
         lines.append(f"⚠️ 本轮一个字都不会动：{data.skipped_display}")
     else:
         lines.append(_targets_line(data))
+        lines.extend(_suspension_line(data))
         lines.extend(_no_effect_lines(data))
     lines.append(_declaration_line(data))
     lines.extend(_orphan_line(data))
@@ -596,6 +655,13 @@ def _render_summary(data: Confirmation) -> str:
     if data.blanket:
         parts.append(_BLANKET_SUMMARY)
     parts.append(f"写/刷新声明 {data.declared} 条")
+    if data.suspended:
+        # 暂停路的条数也进摘要（issue #51），措辞与页面那一行同源。这一句的理由与 `closing`
+        # 那一句相同：摘要是**这次切换唯一的记录**（它写进 `RegimeMechanismSwitch.reason`），
+        # 只报停用路的话，事后读流水的人会把「这一轮写了两条」读成一条。而漏掉的那一条恰恰是
+        # 「不用人管」的那一档，看起来像机制少做了事。
+        # `suspended == 0` 时不写：那是最常见的一轮，每行流水挂一句「0 条」是噪声。
+        parts.append(f"按阶段暂停开仓 {data.suspended} 条")
     if data.closing:
         parts.append(f"解除活行 {data.closing} 条")
     parts.append(

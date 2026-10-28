@@ -61,19 +61,24 @@
   的 docstring 里；而反过来的表现（Shadow 期不写行、出 Shadow 时表是空的）会让「出了
   Shadow」那一刻**什么都不拦**，一直到下一个窗口才有行，等于把出 Shadow 的时点变成敞口。
 
-## 三档，两个写方，一轮一档
+## 四档，两个写方，一轮一组
 
-这张表上的声明有三个触发源，而它们的期望集来自两处互不相干的计算：
+这张表上的声明有四个触发源，而它们的期望集来自两处互不相干的计算：
 
 | 档 | 期望值谁算 | 谁驱动 |
 |----|-----------|--------|
 | `EVENT` / `BLANKET` | 本模块的 `_plan`（事件表 + 判定表） | `regime-sync-halt-windows`，300 秒 |
-| `DEACTIVATION` | `gate.derive`（池化表 + 豁免 + 开关），要一整条池化推导 | `regime-gate-sync`，300 秒 |
+| `DEACTIVATION` | `gate.derive`（停用决策行 + 池化表 + 豁免 + 开关） | `regime-gate-sync`，300 秒 |
+| `REGIME_SUSPENSION` | `gate.derive_suspensions`（**全部被管策略** × 当前代那一格） | 同上，**同一个** plan |
 
-本模块**算不出**策略停用档的期望值，所以那一档的期望集由 `gate_run` 算好、经 `sync` 的
-`gate_plan` 参数递进来。**一轮只对账一档**，这是刻意的：两个 300 秒任务若都做全表对账，
+本模块**算不出**策略档那两路的期望值（那要一整条池化推导），所以它们的期望集由
+`gate_run` 算好、经 `sync` 的 `gate_plan` 参数递进来。两路在 `gate.merge` 里合成**一个**
+plan，因为它们的唯一键（触发源 × 作用域）虽然不同，期望集却必须由同一轮一起管：拆成两轮
+的话，第二轮会把第一轮不在它期望集里的行当成「计划里没有」而静默解除。
+
+**一轮只对账一组**（策略档两路算一组），这是刻意的：两个 300 秒任务若都做全表对账，
 它们会同时去 `create()` 同一把唯一键上的行——那是一条 `UniqueViolation`，出现与否取决于
-两个任务这一轮隔了多少毫秒。一档一个写方，这个问题就不存在。
+两个任务这一轮隔了多少毫秒。一组一个写方，这个问题就不存在。
 
 于是 `_OWNED_TRIGGERS` 的含义是「本模块**认得**哪些源」（认得的源才会被本模块解除，将来
 新增的不认得的一律跳过），而「这一轮对账哪几档」由那一轮的入参决定。
@@ -167,14 +172,25 @@ def close_reason_display(reason: str) -> str:
 # 本模块**认得**的触发源——认得的源才会被本模块解除，不认得的（将来新增的）直接跳过。
 #
 # **它不是「每一轮都对账这些」**：每一轮对账哪几档由那轮的入参决定（见 `sync` 的
-# `gate_plan`），因为三档的期望集来自两处互不相干的计算、也由两个 300 秒任务分别驱动。
-# 一个任务只碰自己那一档，这张表就不会出现两个写方抢同一把唯一键的局面。
+# `gate_plan`），因为这两组的期望集来自两处互不相干的计算、也由两个 300 秒任务分别驱动
+# （`regime-halt-window-sync` 管事件与保命档；`regime-gate-sync` 管策略档的两路）。
+# 一个任务只碰自己那一组，这张表就不会出现两个写方抢同一把唯一键的局面。
 #
 # **`MANUAL`（手动熔断）刻意不在其中**：它的写方是 `apps/regime/manual_halt.py`（人工入口），
 # 活到人工解除（或自带 `expires_at` 到点失效）为止——「自动解除的存在本身就是给『没人记得
 # 清了』开门」，这条理由写在那边的模块 docstring 里。对账收到这种行时照实跳过：`_reconcile`
 # 第一道 `trigger not in _OWNED_TRIGGERS` 分支会原样留着它们，既不算「计划里没有」也不报解除。
-_OWNED_TRIGGERS = (HaltTrigger.EVENT, HaltTrigger.BLANKET, HaltTrigger.DEACTIVATION)
+_OWNED_TRIGGERS = (
+    HaltTrigger.EVENT,
+    HaltTrigger.BLANKET,
+    HaltTrigger.DEACTIVATION,
+    # 按当前生效阶段暂停开新仓（issue #51）。它与 `DEACTIVATION` 由**同一个** 300 秒任务
+    # 驱动（`regime-gate-sync` 把两路合成一个 `gate.GatePlan`），但**仍是独立的一档**：
+    # 两件事各有自己的唯一键与收场（一个要人工恢复、一个随阶段自动翻转）。不写进这里的
+    # 后果是它写下的行**永远不会被解除**——对账会把这个源当成「不认得」而静默跳过，那正是
+    # 「格子回了 fit、声明还在长死」这个事故的唯一入口。
+    HaltTrigger.REGIME_SUSPENSION,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -429,12 +445,14 @@ def sync(
 
     - **不给**（默认）——本模块自己算：事件表 + 判定表 → 事件与保命档两档。**这是今天的
       路径，逐字未变**。
-    - **给**（``gate.GatePlan``，由 `gate_run` 算好）——本轮只对账**策略停用那一档**：
-      期望行与解除原因都取自这个 plan，本模块一行都不自己算。
+    - **给**（``gate.GatePlan``，由 `gate_run` 算好）——本轮对账**策略档的两路**
+      （停用决策 / 按当前生效阶段暂停开新仓）。两者的期望行与解除原因都取自这个
+      plan，本模块一行都不自己算；plan 里每条声明自带触发源
+      （`gate.Declaration.trigger`，本层据此落到各自的唯一键上）。
 
     「给了 plan 就不算事件与保命档」不是省事，是**必须**：那一档由
     `regime-sync-halt-windows` 那一轮负责，两个写方各管各的档，才不会在同一把唯一键上
-    撞车（见模块 docstring 的「三档，两个写方」）。``extra_open`` 于是只在默认那一支有意义
+    撞车（见模块 docstring 的「四档，两个写方」）。``extra_open`` 于是只在默认那一支有意义
     ——它讲的是「本模块自己算的那些行里，有哪几行是我刚插进去的」。
 
     ``gate_plan`` 是**纯判定层**（`gate.py`）的产出，本模块负责把它的策略 id 翻成
@@ -448,7 +466,10 @@ def sync(
             planned,
             at,
             [],
-            sources=(HaltTrigger.DEACTIVATION,),
+            # 两档一起对账：它们由**同一个** plan 产出（`gate.merge` 合成的），所以也只能
+            # 由同一轮一起管。只写其中一档的话，另一档的活行会在这一轮里被判成「计划里没有」
+            # ——那是静默解除。
+            sources=(HaltTrigger.DEACTIVATION, HaltTrigger.REGIME_SUSPENSION),
             close_reasons=close_reasons,
             actor_name=actor_name,
         )
@@ -482,9 +503,13 @@ def _gate_planned(
     """
     rows: dict[tuple[str, str], PlannedRow] = {}
     for declaration in plan.declarations:
+        # 触发源由**声明自带**（`gate.Declaration.trigger`）：本层据此把同一个 plan 里的
+        # 「停用决策」与「按阶段暂停」两路落到各自的唯一键上。判定层用的是字面量
+        # （它不能 import ORM 模型），两边取值一致由测试钉住。
+        trigger = HaltTrigger(declaration.trigger)
         scope = halt.strategy_scope(declaration.strategy_id)
-        rows[_key(HaltTrigger.DEACTIVATION, scope)] = PlannedRow(
-            trigger=HaltTrigger.DEACTIVATION,
+        rows[_key(trigger, scope)] = PlannedRow(
+            trigger=trigger,
             scope=scope,
             label=declaration.label,
             reason=declaration.reason,
@@ -511,7 +536,7 @@ def _reconcile(
     """期望的一组行 → 状态表，返回 ``{created, updated, unchanged, closed}``。
 
     ``sources`` = **这一轮对账哪几档**。表里另外那些档的行必须原样留着：它们不是「计划里
-    没有」，是「这一轮不归我管」（见模块 docstring 的「三档，两个写方」）。
+    没有」，是「这一轮不归我管」（见模块 docstring 的「四档，两个写方」）。
 
     ## 为什么 ``extra_open`` 是**对的**做法，而不是给测试开的方便门
 
@@ -671,7 +696,13 @@ def _close_reason(
     判据，一个字都猜不出来——而这些码会原样进通知正文与日报，猜错就是给用户一句反话。
     所以 ``None`` 是这一档唯一诚实的答案：调用方跳过这一行，活行继续拦着。
     """
-    if halt.trigger_of(row) is HaltTrigger.DEACTIVATION:
+    if halt.trigger_of(row) in (
+        # 策略档的两路（停用决策 / 按阶段暂停）同源：为什么解除（阶段离开了 / 判据不成立了
+        # / 有人豁免了 / 开关关了 / 策略离场了）都是 `gate` 判定层算出来的，本模块看不见
+        # 阶段、豁免与判据——所以它俩一起在这里取 `gate_close_reasons`。
+        HaltTrigger.DEACTIVATION,
+        HaltTrigger.REGIME_SUSPENSION,
+    ):
         return (gate_close_reasons or {}).get(row.scope)
     if halt.trigger_of(row) is HaltTrigger.BLANKET:
         return CLOSE_REASON_REGIME_LEFT

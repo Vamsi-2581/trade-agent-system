@@ -24,6 +24,26 @@
 人工豁免**，所以「窗口开了」这件事如果没有主动说出来，用户遇到的是一个不声不响就不让
 下单的系统。这条对「窗口结束」同样成立：不说的话，用户会以为熔断还在。
 
+## 有一档不发即时消息：「按阶段暂停开新仓」（issue #51）
+
+`HaltTrigger.REGIME_SUSPENSION` 的声明**不进这两条消息**，而这不是漏了一条接线：
+
+- **一次阶段切换会同时产出多条同因声明**（被管策略里所有此刻不是 `fit` 的格子各一条）。
+  逐条即时消息把这个源变成洪水，而它们说的是同一件事——「阶段变了」。事件熔断或保命档
+  一次只开一条（`global` 一行），所以那一档一条一条发是对的。
+- **不发 ≠ 看不见**。这一档的用处是拦单，而拦单时的拒绝理由逐单可见（`HaltLayer.text`
+  把那句话贴在拒单理由里，那是被拦的那个人当下唯一需要读到的）；日报第④段按触发源计数、
+  `query_halt` 报全部在拦的层、`/regime gate` 的确认页另有条数。缺的是「主动推送」，不是
+  「说得出自己在拦什么」。
+- **`DEACTIVATION` 那一档仍逐条通知**：它是「停用须人工恢复」的地基，一条声明就是一次
+  动作，而且它有豁免那条人工出路要说——那条话没人主动说，用户就以为无路可走。
+
+排除落在**两个取数谓词**（`_NO_NOTICE_TRIGGERS`）里，不在渲染层：这两个谓词就是「待通知」
+的定义，排在那里之后这些行根本进不了队列。**必须两个谓词一起排**——这一类行上的通知账
+永远空着，而「空账 = 待发」正是这一层的口径（`models.HaltDeclaration` 上那两列的注释）；
+`pending_closed` 今天靠「开窗账非空」顺带把它们排掉，那是一个副作用，不是政策，写死它
+才是。
+
 ## 「还剩几层」按受众算，不按全表算（第③段 Q3/Q4）
 
 层可以同时生效（CONTEXT.md:177），所以窗口消息不能只说「本条结束」：单层世界里那句话等于
@@ -205,6 +225,13 @@ def all_active_user_ids() -> list[str]:
 # 待通知的行（普通查询；「送达了才记账」的记账口就是这里的两个谓词）
 # --------------------------------------------------------------------------- #
 
+#: **不发即时消息的触发源**。理由见模块 docstring 的「有一档不发即时消息」那节。
+#:
+#: 过滤写在取数谓词里（而不是 `notify_pending` 的循环里早退）：这两个谓词就是「待通知」
+#: 的定义，排在这里这些行根本进不了队列——写在循环里的话，它们每 300 秒仍会被查出来一次
+#: 再丢掉，而「队列里没有」与「队列里有但我不发」是两件不同的事实。
+_NO_NOTICE_TRIGGERS = (HaltTrigger.REGIME_SUSPENSION.value,)
+
 
 def pending_opened(*, now: datetime | None = None) -> list[HaltDeclaration]:
     """窗口起点已到、但还没通知过的行。
@@ -216,12 +243,17 @@ def pending_opened(*, now: datetime | None = None) -> list[HaltDeclaration]:
     代价是**上线首轮的一次性补发**：②e 之前就已经在表里的行（①/②c/②d 期间写下的）都
     没有账，于是各补一条「已开启」。那几条消息说的都是真事（那些窗口确实开着），且只补
     一次。
+
+    `_NO_NOTICE_TRIGGERS` 那一档排除在外（模块 docstring）：它们的账**永远空着**，那不是
+    待发而是「不用发」。
     """
     at = now or timezone.now()
     return list(
         HaltDeclaration.objects.filter(
             opened_at__lte=at, opened_notified_at__isnull=True
-        ).order_by("opened_at", "id")
+        )
+        .exclude(trigger__in=_NO_NOTICE_TRIGGERS)
+        .order_by("opened_at", "id")
     )
 
 
@@ -231,13 +263,19 @@ def pending_closed(*, now: datetime | None = None) -> list[HaltDeclaration]:
     **要求 `opened_notified_at` 非空**：只有对一个人说过「它开了」，才有资格对他说
     「它结束了」。这条谓词顺带把上线首轮的补发限制在一处——②e 之前解除掉的历史行没有
     开窗账，于是不会被补一条莫名其妙的「已结束」。
+
+    `_NO_NOTICE_TRIGGERS` 那一档排除在外（模块 docstring）。**这一条排除今天是冗余的**
+    ——那一档的开窗账永远空着，上面那条谓词本来就会把它们排掉——但它写出来是政策而不是
+    副作用：靠另一条谓词的副产品维持「不发」，改那条谓词的形状时就会静默把它放回来。
     """
     return list(
         HaltDeclaration.objects.filter(
             closed_at__isnull=False,
             closed_notified_at__isnull=True,
             opened_notified_at__isnull=False,
-        ).order_by("closed_at", "id")
+        )
+        .exclude(trigger__in=_NO_NOTICE_TRIGGERS)
+        .order_by("closed_at", "id")
     )
 
 
@@ -255,18 +293,21 @@ def _period_line(row: HaltDeclaration) -> str:
     日报与这里必须是同一句话（各写一遍就是「同一件事三处说法不同」，而读者是同一批人）。
 
     **按触发源分岔：只有事件熔断是一个「窗口」**（第③段 Q5）。窗口的判据是**两头都在日历
-    上**（`halt_at` / `resume_at`），而另外两档都是机制施加的状态、由状态派生：
+    上**（`halt_at` / `resume_at`），而其余几档都是机制施加的状态、由状态派生：
 
     - 保命档的起止是阶段的性质，写「截止时刻不定」读起来像「不知道什么时候解除」——
       它的截止条件**说得出来**（阶段离开高波动），所以说出来。
     - 策略停用那一档的解除条件有好几个（阶段离开 / 判据翻面 / 豁免 / 开关回 Shadow），
       一句说不完，所以它留着「截止时刻不定」。
+    - 按阶段暂停开仓那一档（issue #51）的解除条件**是一个会自己翻回去的判据**，所以它说得
+      出「随阶段变化自动翻转」，与策略停用那一档的「截止时刻不定」要能分辨：那一档等着人
+      （豁免或改判据），这一档等的是下一次阶段判定。
     - 手动熔断的截止条件只有一个人（操作者），但若带着自带时长就**两头都在日历上**——
       那种情形说两头，与起止都由人定的「截止时刻不定」要能分辨。
 
-    这一分岔与 `_headline` 是**同一个**（三档各自「已生效 / 已解除」还是「窗口已开启 /
-    窗口已结束」）：标题说「已生效」而正文说「窗口：… 起」，读的人会去猜这两句说的是不是
-    一件事——那正是这条分岔要消掉的东西，所以两处必须一起改。
+    这一分岔与 `_headline` 是**同一个**（非窗口那几档说「已生效 / 已解除」，只有事件熔断说
+    「窗口已开启 / 窗口已结束」）：标题说「已生效」而正文说「窗口：… 起」，读的人会去猜
+    这两句说的是不是一件事——那正是这条分岔要消掉的东西，所以两处必须一起改。
     """
     start = events.format_moment(row.opened_at)
     trigger = halt.trigger_of(row)
@@ -278,6 +319,8 @@ def _period_line(row: HaltDeclaration) -> str:
         return f"窗口：{start} → {events.format_moment(row.expires_at)}"
     if trigger is HaltTrigger.BLANKET:
         return f"生效：{start} 起（随阶段离开高波动而结束）"
+    if trigger is HaltTrigger.REGIME_SUSPENSION:
+        return f"生效：{start} 起（随阶段变化自动翻转）"
     if trigger is HaltTrigger.MANUAL:
         if row.expires_at is None:
             return f"生效：{start} 起（到人工解除为止）"
@@ -316,9 +359,15 @@ def _close_reason_display(row: HaltDeclaration) -> str:
     的表现是：两个词表都认得出这个码，谁都不报错，而一条策略档声明上贴着别档的文案。
     认不出的码两条路都原样返回（`close_reason_display` 的口径），所以路由写错只会错在
     同名的那一个码上，正是最难靠肉眼发现的那一个。
+
+    **按阶段暂停开仓那一档（issue #51）也路由到 gate 那张词表**：它的解除码出自 `gate.py`
+    的暂停路（`CLOSE_GATE_CLOSED` / `became_fit` / `exempted`），全是 `gate.CLOSE_*`——
+    `halt_sync` 那张只说窗口的词表认不出它们，会原样回显一个短码。与停用那一档合在一支而
+    不是各写一句：两路用的本来就是同一张 `gate.CLOSE_*` 词表，分开写会让「同源」这件事
+    看起来像巧合。
     """
     trigger = halt.trigger_of(row)
-    if trigger is HaltTrigger.DEACTIVATION:
+    if trigger in (HaltTrigger.DEACTIVATION, HaltTrigger.REGIME_SUSPENSION):
         return gate_switch.gate_close_reason_display(row.closed_reason)
     if trigger is HaltTrigger.MANUAL:
         return manual_halt.close_reason_display(row.closed_reason)

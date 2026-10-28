@@ -381,6 +381,54 @@ class TestPendingQueues(TestCase):
         self.assertEqual(row.opened_notified_at, NOW - timedelta(hours=1))
         self.assertEqual(row.label, "FOMC 议息、CPI 公布")
 
+    def test_the_suspension_trigger_is_not_a_notification_queue_at_all(self):
+        """「按阶段暂停开仓」那一档**不进开窗队列**（issue #51）。
+
+        这条行为只有测试钉得住：**「不发」与「还没发」在库里长得一模一样**（两列账都是
+        NULL），区别只在这个 `.exclude` 上——删掉它，队列照样「有行待发」，没有第二个信号
+        能暴露这件事。同一批里的停用档必须仍在队列里：那一档一条声明 = 一次动作，而且它
+        有豁免那条人工出路要说，没人主动说用户就以为无路可走。
+        """
+        suspension = _declaration(
+            trigger=HaltTrigger.REGIME_SUSPENSION,
+            scope=halt.strategy_scope("s-1"),
+            opened_at=NOW - timedelta(minutes=5),
+        )
+        deactivation = _declaration(
+            trigger=HaltTrigger.DEACTIVATION,
+            scope=halt.strategy_scope("s-2"),
+            opened_at=NOW - timedelta(minutes=5),
+        )
+
+        self.assertNotIn(suspension, halt_notify.pending_opened(now=NOW))
+        self.assertEqual(halt_notify.pending_opened(now=NOW), [deactivation])
+
+    def test_the_suspension_trigger_stays_out_of_the_closed_queue_too(self):
+        """解除那一批**显式**排掉暂停档，而不是靠另一条谓词的副产品。
+
+        这一档的开窗账永远空着，所以「开窗账非空」那条谓词今天本来就会把它排掉——靠那个
+        副作用维持「不发」，下次改那条谓词的形状时它就会静默回到队列里（而回到队列的代价
+        是一次阶段切换给全体用户刷一批「已解除」）。所以这里把两列账都补上，让「按触发源
+        排除」成为它不在队列里的**唯一**原因。
+        """
+        suspension = _declaration(
+            trigger=HaltTrigger.REGIME_SUSPENSION,
+            scope=halt.strategy_scope("s-1"),
+            opened_at=NOW - timedelta(hours=2),
+            opened_notified_at=NOW - timedelta(hours=2),
+            closed_at=NOW - timedelta(hours=1),
+        )
+        deactivation = _declaration(
+            trigger=HaltTrigger.DEACTIVATION,
+            scope=halt.strategy_scope("s-2"),
+            opened_at=NOW - timedelta(hours=2),
+            opened_notified_at=NOW - timedelta(hours=2),
+            closed_at=NOW - timedelta(hours=1),
+        )
+
+        self.assertNotIn(suspension, halt_notify.pending_closed())
+        self.assertEqual(halt_notify.pending_closed(), [deactivation])
+
 
 def halt_sync_rewrite(row: HaltDeclaration, **over) -> None:
     """借 `halt_sync._rewrite` 改一行。参数是 `PlannedRow` 的那几个字段。"""
@@ -683,6 +731,28 @@ class TestNotifyPending(TestCase):
 
         self.assertEqual(
             second, {"opened": 0, "closed": 0, "failed": 0, "no_recipients": 0}
+        )
+        self.assertEqual(mock.await_count, 0)
+
+    def test_a_suspension_row_is_neither_sent_nor_counted(self):
+        """暂停档**一发都不发，也一个数都不占**（issue #51）。
+
+        排除落在取数谓词里，所以这一档连 `no_recipients` 都不计：它不是「发不出去」，而是
+        「不用发」——把两件事混进同一个数，任务摘要会看起来像有东西在失败。
+
+        作用域取 `global` 是刻意的：它保证「万一排除失效，这条会被真的发出去」（下面这条
+        会话是全体活跃实盘会话之一），于是这个全零的 summary 是被钉住的行为，而不是碰巧
+        没有收件人。
+        """
+        _declaration(
+            trigger=HaltTrigger.REGIME_SUSPENSION,
+            opened_at=NOW - timedelta(minutes=5),
+        )
+        with _notify(True) as mock:
+            summary = halt_notify.notify_pending(now=NOW)
+
+        self.assertEqual(
+            summary, {"opened": 0, "closed": 0, "failed": 0, "no_recipients": 0}
         )
         self.assertEqual(mock.await_count, 0)
 

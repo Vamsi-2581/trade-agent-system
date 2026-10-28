@@ -75,6 +75,7 @@ from apps.regime.models import (
     RegimePoolRebuild,
 )
 from apps.regime.slice import STATE_UNFIT
+from apps.trading.models import Strategy
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,57 @@ def _refs(*, managed: frozenset, cells: dict) -> tuple[gate.DecisionRef, ...]:
     )
 
 
+def _suspension_refs(
+    *, managed: deactivation_run.ManagedSet, cells: dict, situation: gate.Situation
+) -> tuple[gate.SuspensionRef, ...]:
+    """**全部被管策略**在本轮的只读快照——暂停路（「只放行 fit」）要的那一份。
+
+    与 `_refs` 的关键差别：那一份由「有人建议过停用」的决策行派生，这一份覆盖**每一个**
+    被管策略。用户那句话（「只放行适应箱体震荡的策略，其它的都拦住」）问的是每个在跑策略
+    在这片行情里的资格，与它有没有被建议过停用无关。
+
+    读法上只有三样东西：当前阶段是哪一列（`situation.regime`）、这一代在那一列上这一格
+    是什么（`cells`）、以及这一格此刻有没有在期人工豁免（`situation.exemptions`——在期
+    判据由取数侧算好，判定层只看见结论，与 `Exemption` 的既有纪律一致）。
+
+    **没有当前生效阶段时给空集**（那一路的早退分支会整轮不动，这里不必先判）：空集与
+    「每个策略都没有格」在下游是两件事，而前者才是事实——说不清阶段时，本层连「谁该被问」
+    都答不出来。
+
+    策略名一次批量查（`managed.ids` 有几十条，逐个查是几十次往返）：`label` 与 `reason`
+    都要它，而那是策略名**唯一**进得了用户眼睛的地方。查不到名字的策略（理论上不会发生，
+    FK 保证存在）退回 id 字面量，而不是抛——一份快照不该因为一句措辞缺失就让整轮停摆。
+    """
+    if situation.regime is None:
+        return ()
+    rows = {
+        strategy_id: (name, is_active)
+        for strategy_id, name, is_active in Strategy.objects.filter(
+            id__in=managed.ids
+        ).values_list("id", "name", "is_active")
+    }
+    out: list[gate.SuspensionRef] = []
+    for strategy_id in managed.ids:
+        cell = cells.get((strategy_id, situation.regime)) or {}
+        exemption = situation.exemptions.get(strategy_id)
+        # `is_active` 在这里读，而不是在 `managed_set()` 里筛：**被管集合的定义不滤它**
+        # （CONTEXT.md 明写「`is_active` 不作为集合依据」），而「退不退役」是**求值**那一层
+        # 的事。读不到行时按「仍在册」处理（`managed.ids` 本来就来自这张表，读到才有它）——
+        # 一份快照不该因为一次缺读把一条在跑的策略**漏判成放行**。
+        name, is_active = rows.get(strategy_id, (str(strategy_id), True))
+        out.append(
+            gate.SuspensionRef(
+                strategy_id=strategy_id,
+                strategy_name=name,
+                cell_state=cell.get("state"),
+                cell_reason=cell.get("reason") or "",
+                exempt=bool(exemption and exemption.in_force),
+                retired=not is_active,
+            )
+        )
+    return tuple(out)
+
+
 # --------------------------------------------------------------------------- #
 # 落库：status 回写
 # --------------------------------------------------------------------------- #
@@ -312,8 +364,25 @@ class Round:
     unmanaged: tuple[Any, ...] = ()
     #: 全部决策行的只读快照——回写 status 时要用它拼「决策行 → 策略」那张表。
     refs: tuple[gate.DecisionRef, ...] = ()
+    #: 全部**被管策略**的只读快照——「按阶段暂停开新仓」那一路的输入
+    #: （`_suspension_refs`）。它与 `refs` 的域不同：那边只有被建议过停用的策略。
+    suspension_refs: tuple[gate.SuspensionRef, ...] = ()
     #: 判定用的世界状态。只读。
     situation: gate.Situation | None = None
+
+    @property
+    def suspensions(self) -> int:
+        """当前阶段上**真的由本路拦住**的策略条数。
+
+        数的是合成后期望声明里 `regime_suspension` 那一档，不是「所有非 fit 的被管策略」：
+        同时被停用决策覆盖的策略只留一条声明（`gate.merge` 的去重规则），把它们再计一遍
+        会让页面上出现「该停 3 个 / 暂停 5 个」而声明表里其实只有 3 行。
+        """
+        return sum(
+            1
+            for declaration in self.plan.declarations
+            if declaration.trigger == gate.TRIGGER_REGIME_SUSPENSION
+        )
 
     @property
     def targets(self) -> int:
@@ -403,6 +472,17 @@ def plan_round(
         blocked=derivation.blocked,
     )
     refs = _refs(managed=frozenset(managed.ids), cells=cells)
+    suspension_refs = _suspension_refs(
+        managed=managed, cells=cells, situation=situation
+    )
+    # 两路合成**一轮**的期望集：停用决策那一路（`_refs` 派生）与「按阶段暂停开新仓」那
+    # 一路（全部被管策略派生）。合成而不是各跑各的，是因为两者交给**同一个**写方
+    # （`halt_sync._reconcile`）落同一张表——分两轮跑的话，第二轮会把第一轮不在它期望集
+    # 里的行当成「计划里没有」，而那是静默解除。
+    plan = gate.merge(
+        gate.derive(situation, refs),
+        gate.derive_suspensions(situation, suspension_refs),
+    )
     return Round(
         now=at,
         symbol=symbol,
@@ -413,10 +493,11 @@ def plan_round(
         gate_open=gate_open,
         switch_at=switch_at,
         hypothetical=hypothetical,
-        plan=gate.derive(situation, refs),
+        plan=plan,
         age_days=derivation.age_days,
         unmanaged=tuple(derivation.unmanaged),
         refs=refs,
+        suspension_refs=suspension_refs,
         situation=situation,
     )
 
@@ -485,6 +566,9 @@ def sync(
         "unmanaged": [str(i) for i in round_.unmanaged],
         "targets": 0,
         "exempt": 0,
+        # 「按阶段暂停开新仓」那一路的条数（issue #51）。键在四条路径上都必须存在：
+        # 它进 Celery 结果，键集随路径漂移会让「今天和昨天有什么不同」多出一堆假差异。
+        "suspensions": 0,
         "declarations": [],
         "statuses": [],
         "close_reasons": {},
@@ -506,6 +590,7 @@ def sync(
     # `gate.NOTE_SHADOW` 那句话要交代的事。
     summary["targets"] = round_.targets
     summary["exempt"] = round_.exempt
+    summary["suspensions"] = round_.suspensions
     summary["close_reasons"] = {
         str(strategy_id): code
         for strategy_id, code in round_.plan.close_reasons.items()
@@ -538,13 +623,14 @@ def sync(
 
     logger.info(
         "[regime] 行情阶段 gate：阶段 %s，开关 %s，被管 %s（在跑 %s），该停 %s"
-        "（已豁免 %s），期望声明 %s，解除 %s，status 回写 %s，声明表 %s",
+        "（已豁免 %s），按阶段暂停 %s，期望声明 %s，解除 %s，status 回写 %s，声明表 %s",
         summary["regime"],
         "开" if summary["gate_open"] else "Shadow",
         summary["managed"],
         summary["running"],
         summary["targets"],
         summary["exempt"],
+        summary["suspensions"],
         len(summary["declarations"]),
         len(summary["close_reasons"]),
         len(summary["statuses"]),
