@@ -77,6 +77,7 @@ from typing import Any, Iterable, Mapping
 
 from apps.regime import admission, deactivation
 from apps.regime.quant import BaseRegime
+from apps.regime.slice import REASON_DISPLAY, STATE_DISPLAY
 
 # --------------------------------------------------------------------------- #
 # 词表
@@ -487,32 +488,61 @@ def derive(situation: Situation, decisions: Iterable[DecisionRef]) -> GatePlan:
 SUSPENSION_LABEL_PREFIX = "按阶段暂停开仓："
 
 
+def _cell_detail(ref: SuspensionRef) -> str:
+    """这一格「为什么是这个结论」——**展示名取自 `slice` 的词表**，不在这里另写一句中文。
+
+    与 `halt_sync._blanket_reason` 同一条纪律：同一层在拒单理由、日报与 `query_halt` 里必须
+    同措辞。而库里存的是**短码**（`RegimePoolCell.reason` 落的是 `slice` 的键），所以这一翻
+    是必需的：少了它，`insufficient_evidence` 会原样贴进用户的拒单理由里——那是一句给机器
+    看的话，而这条 `label` 恰恰是「为什么拦我」的答案。
+
+    两层兜底都不猜：`cell_reason` 取不到就退到**状态词**的展示名（`neutral` → 「中性」）；
+    两者都没有（无格）留空串，由调用方去说那句「池化表里没有这一格」。词表里查不到的码
+    原样回显：一个陌生的码是给人查的线索，凭空编一句中文会把「这里有个我们不认识的结论」
+    掩盖掉。
+    """
+    if ref.cell_reason:
+        return REASON_DISPLAY.get(ref.cell_reason, ref.cell_reason)
+    if ref.cell_state is not None:
+        return STATE_DISPLAY.get(ref.cell_state, ref.cell_state)
+    return ""
+
+
 def _suspension_label(ref: SuspensionRef) -> str:
     head = f"{SUSPENSION_LABEL_PREFIX}{ref.strategy_name}"
-    return f"{head}（{ref.cell_reason}）" if ref.cell_reason else head
+    detail = _cell_detail(ref)
+    return f"{head}（{detail}）" if detail else head
 
 
 def _suspension_reason(
     situation: Situation, ref: SuspensionRef, verdict: admission.Verdict
 ) -> str:
-    """暂停路声明行的 `reason`。**「判不了」与「判为不适合」要说成两句不同的话**：
+    """暂停路声明行的 `reason`。**「判不了」与「判为不适用」要说成两句不同的话**：
 
     前者是证据不足（会被下一轮重算翻回去，也可能永远翻不回去——那正是要让人看见的
     那个事实），后者是池化结论明确说不行。合成一句会让用户按「策略不行」去处置一个
-    只是没证据的策略，而两者的正确处置完全不同。
+    只是没证据的策略，而两者的正确处置完全不同（一个是去补证据或换策略，一个是这片
+    行情它确实不该开仓）。
+
+    尾巴也分两种：`unfit` 是**明确结论**，不欠那句「判不了 ≠ 放它过去」；其余三种
+    （中性 / 未知 / 无格）都是「判不了」，那句话正是它们要防的误读。
+
+    **「没有这一格」单说一句**：它与「格子是中性」不是同一件事——一个是「池化表里压根
+    没有这条策略这一阶段」（新策略 / 新阶段 / 窗口未覆盖），一个是「有结论但证据不足」。
+    两者都 fail-closed，但读的人该知道该去补哪一样。
     """
     regime = _regime_display(situation.regime)
-    detail = f"：{ref.cell_reason}" if ref.cell_reason else ""
-    if verdict.code == admission.CODE_UNFIT:
-        judged = "判为不适用"
-    elif ref.cell_state is None:
-        judged = "在池化表里没有这一格（策略或阶段新、或窗口未覆盖）"
+    detail = _cell_detail(ref)
+    if ref.cell_state is None:
+        judged = "判不了（池化表里没有这一格：策略新、阶段新、或窗口未覆盖）"
+        tail = "机制暂停它的开仓；减仓照常放行——「判不了」不等于「放它过去」。"
+    elif verdict.code == admission.CODE_UNFIT:
+        judged = f"判为不适用（{detail}）" if detail else "判为不适用"
+        tail = "机制暂停它的开仓；减仓照常放行。"
     else:
-        judged = "没有适用性结论（证据不足 / 样本噪声 / 该阶段样本过少）"
-    return (
-        f"{ref.strategy_name} 在当前「{regime}」阶段{judged}{detail}。"
-        f"机制暂停它的开仓（减仓放行）——「判不了」不等于「放它过去」。"
-    )
+        judged = f"判不了（{detail}）" if detail else "判不了"
+        tail = "机制暂停它的开仓；减仓照常放行——「判不了」不等于「放它过去」。"
+    return f"{ref.strategy_name} 在当前「{regime}」阶段{judged}。{tail}"
 
 
 def _suspension_close_reason(verdict: admission.Verdict) -> str:

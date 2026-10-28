@@ -35,6 +35,8 @@ from apps.regime import gate as g
 from apps.regime.models import HaltTrigger
 from apps.regime.quant import BaseRegime
 from apps.regime.slice import (
+    REASON_INSUFFICIENT,
+    REASON_NO_REGIME_DAYS,
     STATE_BLANKET,
     STATE_FIT,
     STATE_NEUTRAL,
@@ -166,7 +168,8 @@ class TestEveryCellStateHasOneLanding(SimpleTestCase):
 
     def test_unfit_and_no_evidence_are_told_apart_in_the_reason(self):
         """「判为不适用」与「判不了」必须是两句不同的话：两者的正确处置不同——一个是去看
-        这个策略该不该换掉，一个是去看它的证据为什么这么薄。"""
+        这个策略该不该换掉，一个是去看它的证据为什么这么薄。
+        """
         unfit = plan([ref(1, cell_state=STATE_UNFIT, cell_reason="下行趋势表现不佳")])
         neutral = plan([ref(1, cell_state=STATE_NEUTRAL)])
         missing = plan([ref(1, cell_state=None)])
@@ -174,10 +177,51 @@ class TestEveryCellStateHasOneLanding(SimpleTestCase):
         self.assertIn("判为不适用", unfit.declarations[0].reason)
         self.assertIn("下行趋势表现不佳", unfit.declarations[0].reason)
 
-        self.assertIn("没有适用性结论", neutral.declarations[0].reason)
+        self.assertIn("判不了", neutral.declarations[0].reason)
         self.assertNotIn("判为不适用", neutral.declarations[0].reason)
 
         self.assertIn("没有这一格", missing.declarations[0].reason)
+
+    def test_the_database_slug_never_reaches_the_users_eye(self):
+        """库里存的是**短码**（`RegimePoolCell.reason` 落的是 `slice` 的键），而 `label` 与
+        `reason` 进的是拒单理由、`query_halt` 与通知——贴一个 `insufficient_evidence` 到那里
+        等于把「为什么拦我」答成一句只有写代码的人读得懂的话。
+
+        展示名取自 `slice.REASON_DISPLAY`（不在这里另写中文：同一层在四处必须同措辞）。
+        """
+        result = plan(
+            [ref(1, cell_state=STATE_NEUTRAL, cell_reason=REASON_INSUFFICIENT)]
+        )
+        declaration = result.declarations[0]
+        self.assertIn("证据不足", declaration.label)
+        self.assertIn("证据不足", declaration.reason)
+        self.assertNotIn(REASON_INSUFFICIENT, declaration.label)
+        self.assertNotIn(REASON_INSUFFICIENT, declaration.reason)
+
+    def test_unknown_and_neutral_are_told_apart_in_the_reason(self):
+        """`unknown`（该阶段在池化窗口里没出现过）与 `neutral`（有结论但证据不足）都要
+        fail-closed，但读的人该知道去补哪一样：一个是「这段历史根本没覆盖到这个阶段」，
+        一个是「覆盖到了但样本不够」。合成一句会让前者看起来像后者。
+        """
+        neutral = plan(
+            [ref(1, cell_state=STATE_NEUTRAL, cell_reason=REASON_INSUFFICIENT)]
+        ).declarations[0]
+        unknown = plan(
+            [ref(1, cell_state=STATE_UNKNOWN, cell_reason=REASON_NO_REGIME_DAYS)]
+        ).declarations[0]
+
+        self.assertIn("证据不足", neutral.reason)
+        self.assertIn("窗口内该阶段未出现", unknown.reason)
+        self.assertNotEqual(neutral.reason, unknown.reason)
+
+    def test_a_missing_cell_says_so_instead_of_blaming_the_evidence(self):
+        """「没有这一格」既不等于「中性」也不等于「未知」：那是池化表里压根没有这条策略
+        这个阶段（新策略 / 新阶段 / 窗口未覆盖）。它同样 fail-closed，但理由必须说得出自己
+        是这一种——否则读的人会去找一批根本不存在的样本。
+        """
+        missing = plan([ref(1, cell_state=None)]).declarations[0]
+        self.assertIn("没有这一格", missing.reason)
+        self.assertNotIn("证据不足", missing.reason)
 
     def test_the_label_says_which_tier_this_is(self):
         """`label` 进的是下单拒绝理由与 `query_halt`——「机制决定停用这条策略」与「这片
